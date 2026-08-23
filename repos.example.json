@@ -1,0 +1,10 @@
+{
+  "owner/pilot-repo": {
+    "path": "C:/Users/Saeed/source/repos/pilot-repo",
+    "base": "main"
+  },
+  "owner/second-repo": {
+    "path": "C:/Users/Saeed/source/repos/second-repo",
+    "base": "develop"
+  }
+}
