@@ -65,4 +65,34 @@ for at, _, _ in [t for t in after if not t[1]]:
     agent.tick(wt, 7, at)
 assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
 
+# the two named roles, and the review verdicts the orchestrator branches on
+roles = __import__("json").loads(agent.AGENTS)
+assert set(roles) == {"planmaker", "reviewer"}
+assert all(r["description"] and r["prompt"] for r in roles.values())
+assert "Edit" not in roles["reviewer"]["tools"], "the reviewer reports, never fixes"
+assert all(r["model"] == "opus" for r in roles.values()), "roles think; tasks grind on sonnet"
+assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
+assert agent.MARKER.search("STATUS: changes-needed\nbug in foo.py").group(1) == "changes-needed"
+
+# planning writes agent-plans/<n>/ and nothing else — the rest is reverted
+import subprocess  # noqa: E402
+
+repo = Path(tempfile.mkdtemp())
+git = lambda *a: subprocess.run(("git",) + a, cwd=repo, capture_output=True, check=True)
+git("init", "-q", "-b", "main")
+git("config", "user.email", "t@t"), git("config", "user.name", "t")
+(repo / "src.py").write_text("original\n", encoding="utf-8")
+git("add", "-A"), git("commit", "-qm", "base")
+
+(repo / agent.pdir(7)).mkdir(parents=True)          # untracked tree — must survive
+(repo / agent.pdir(7) / "plan.md").write_text("the plan\n", encoding="utf-8")
+(repo / "src.py").write_text("planner edited this\n", encoding="utf-8")  # tracked, revert
+(repo / "stray.txt").write_text("junk\n", encoding="utf-8")              # untracked, delete
+
+agent.keep_plans_only(agent.Ctx("o/r", 7, repo, "main"), repo)
+
+assert (repo / agent.pdir(7) / "plan.md").read_text(encoding="utf-8") == "the plan\n"
+assert (repo / "src.py").read_text(encoding="utf-8") == "original\n", "tracked edit not reverted"
+assert not (repo / "stray.txt").exists(), "untracked stray not cleaned"
+
 print("ok")

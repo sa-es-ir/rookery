@@ -41,7 +41,7 @@ log = logging.info
 
 TRIGGER = "claude:trigger"
 PHASES = ["claude:planning", "claude:awaiting-input", "claude:awaiting-approval",
-          "claude:implementing", "claude:done", "claude:error"]
+          "claude:implementing", "claude:reviewing", "claude:done", "claude:error"]
 APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
 MARKER = re.compile(r"^STATUS:[ \t]*(\S+)[ \t]*$", re.M)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
@@ -116,13 +116,21 @@ def worktree(c):
     return wt
 
 
-def claude(c, prompt, key="plan", resume=False):
+def claude(c, prompt, key="plan", resume=False, agent=None):
     """One session per key: planning is one long thread, each task is its own."""
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
     cmd = ["claude", "-p", prompt, "--output-format", "json",
            "--permission-mode", "bypassPermissions",
            # guardrail: the agent never publishes. Deny rules beat bypassPermissions.
            "--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)"]
+    if agent:
+        # an agent's `tools` list is a role hint, not a boundary — the deny
+        # rules above and the checks in plan() are what actually enforce.
+        cmd += ["--agents", AGENTS, "--agent", agent]
+    else:
+        # implementation tasks run as no agent, so the model is set here; the two
+        # roles carry their own `model:` in agents/*.md.
+        cmd += ["--model", "sonnet"]
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
     wt = worktree(c)
     try:
@@ -141,6 +149,34 @@ def claude(c, prompt, key="plan", resume=False):
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
     return m.group(1), (text[:m.start()] + text[m.end():]).strip()
 
+
+# Named roles, loaded from agents/*.md and passed to the CLI as --agents/--agent.
+# They hold the standing rules of a role; the templates below hold the job.
+# Implementation tasks run as no agent at all — the default harness with the
+# deny rules is the point.
+
+def parse_agent(p):
+    """The Claude Code agent file format, minimal subset: a folded `description: >`,
+    an inline `tools: [...]`, and the body as the prompt. Same format `--plugin-dir`
+    would read, so that swap deletes this function and changes nothing else."""
+    fm, body = re.match(r"^---\n(.*?)\n---\n(.*)$",
+                        p.read_text(encoding="utf-8"), re.S).groups()
+    meta, key = {}, None
+    for line in fm.splitlines():
+        m = re.match(r"(\w+):[ \t]*(.*)$", line)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            meta[key] = "" if val == ">" else val   # folded block scalar: value is below
+        elif line.strip() and key:
+            meta[key] = (meta[key] + " " + line.strip()).strip()
+    assert meta.pop("name", p.stem) == p.stem, f"{p}: name must match the filename"
+    if "tools" in meta:
+        meta["tools"] = [t.strip() for t in meta["tools"].strip("[]").split(",") if t.strip()]
+    return {**meta, "prompt": body.strip()}
+
+
+AGENTS = json.dumps({p.stem: parse_agent(p)
+                     for p in sorted((HERE / "agents").glob("*.md"))})
 
 PLAN = """You are planning work for GitHub issue #{n} in {repo}.
 
@@ -191,6 +227,20 @@ Reply with exactly one line `STATUS: task-done` or `STATUS: failed`, plus one
 short paragraph on what changed.
 """
 
+REVIEW = """Review the finished work for GitHub issue #{n} before it goes to a
+human as a draft pull request.
+
+The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
+{d}/decisions.md holds the trade-offs each task recorded. The change itself is
+`git diff origin/{base}...HEAD`.
+
+Read only: do not edit, do not commit, do not use gh.
+
+Reply with exactly one line `STATUS: review-ok` or `STATUS: changes-needed`,
+plus the findings as markdown, worst first. This text is posted verbatim into
+the pull request body, so write it for the person about to read the diff.
+"""
+
 
 # --- tasks -------------------------------------------------------------------
 
@@ -213,12 +263,38 @@ def tick(wt, n, at):
 
 # --- jobs --------------------------------------------------------------------
 
+def keep_plans_only(c, wt):
+    """Planning writes agent-plans/<n>/ and nothing else — revert the rest.
+
+    The PLAN prompt asks for this; here it is enforced, because a prompt is not
+    a guard. Every call to plan() reverts what the previous one left behind, so
+    calling it again — which a long question-and-answer thread does repeatedly —
+    can never accumulate stray edits ahead of the task loop.
+    """
+    keep = pdir(c.n) + "/"
+    # -uall, not the default: plain --porcelain collapses an untracked tree to
+    # its shallowest dir, so a first-ever plan reports as `?? agent-plans/` and
+    # would fail the prefix test below and be deleted.
+    for line in sh("git", "status", "--porcelain", "-uall", cwd=wt).splitlines():
+        # sh() strips its output, so the leading space of a " M path" code is
+        # gone on the first line but not the rest — normalise, never index.
+        code, _, path = line.strip().partition(" ")
+        path = path.strip().split(" -> ")[-1].strip('"')  # a rename reports both sides
+        if path.startswith(keep):
+            continue
+        log(f"#{c.n} planner touched {path} — reverting")
+        # `clean` takes untracked files and whole untracked dirs; `checkout`
+        # restores modified and deleted tracked ones.
+        sh("git", *(["clean", "-fdq"] if code == "??" else ["checkout"]), "--", path, cwd=wt)
+
+
 def plan(c, title, body, resume):
     set_phase(c, "claude:planning")
     prompt = (REPLY.format(n=c.n, body=body, d=pdir(c.n)) if resume
               else PLAN.format(n=c.n, repo=c.repo, title=title, body=body,
                                d=pdir(c.n), max=MAX_TASKS))
-    status, msg = claude(c, prompt, resume=resume)
+    status, msg = claude(c, prompt, resume=resume, agent="planmaker")
+    keep_plans_only(c, worktree(c))
     comment(c, msg)
     set_phase(c, "claude:awaiting-input" if status == "questions" else "claude:awaiting-approval")
 
@@ -251,14 +327,23 @@ def implement(c):
 
     branch = f"feature/issue-{c.n}"
     assert branch != c.base
+
+    set_phase(c, "claude:reviewing")
+    verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
+                             key="review", agent="reviewer")
+
     log(f"#{c.n} pushing {branch} and opening draft PR")
     sh("git", "push", "-u", "origin", branch, cwd=wt)
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     url = sh("gh", "pr", "create", "--repo", c.repo, "--draft", "--base", c.base,
              "--head", branch, "--title", title,
-             "--body", "\n\n".join(done) + f"\n\nCloses #{c.n}", cwd=wt)
-    comment(c, f"Draft PR: {url}")
-    set_phase(c, "claude:done")
+             "--body", "\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}", cwd=wt)
+    # The review is advisory: the PR opens either way, so the work is always on
+    # GitHub rather than stranded in a local worktree. A bad verdict only flags.
+    ok = verdict == "review-ok"
+    comment(c, f"Draft PR: {url}" if ok else
+            f"Draft PR: {url}\n\nThe reviewer wants changes — see **Review** in the PR body.")
+    set_phase(c, "claude:done" if ok else "claude:error")
 
 
 def handle(job):
