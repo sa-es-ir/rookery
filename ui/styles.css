@@ -1,0 +1,58 @@
+/* Rookery — shared tokens and chrome. Values are from DESIGN.md; don't invent new ones here. */
+:root{
+  --void:#0e0918; --surface:#1a1624; --panel:#1b1728; --shell:#2c2834;
+  --smoke:#3e3a46; --ash:#d1cece; --fog:#9d9797; --rail:#e5e7eb; --white:#fff;
+  --ember:linear-gradient(30deg,rgb(253,137,37),rgb(255,12,0));
+  --current:linear-gradient(141deg,rgb(7,122,199),rgb(107,33,239));
+  --scorch:#ff492c;
+  --font:'DM Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Consolas,monospace;
+  --inset:rgba(255,255,255,.1) 0 0 0 1px inset, rgba(255,142,93,.3) 0 1px 0 0 inset;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--void);color:var(--ash);
+  font:400 16px/1.5 var(--font);letter-spacing:-.29px;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{margin:0;color:var(--white);font-weight:300}
+p{margin:0}
+a{color:inherit;text-decoration:none}
+ul,ol{margin:0;padding:0;list-style:none}
+button{font:inherit}
+:focus-visible{outline:2px solid rgb(107,33,239);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+.mono{font-family:var(--mono);font-size:13px;letter-spacing:0}
+.eyebrow{font-size:12px;color:var(--fog);text-transform:uppercase;letter-spacing:.1em}
+
+/* buttons — ember is CTA only, never a surface */
+.cta{display:inline-block;background:var(--ember);color:#fff;border:0;border-radius:8px;
+  padding:12px 24px;font:400 15px var(--font);cursor:pointer;transition:filter .2s;white-space:nowrap}
+.cta:hover{filter:brightness(1.12)}
+.ghost{display:inline-block;background:transparent;border:1px solid var(--rail);color:#fff;
+  border-radius:8px;padding:11px 22px;font:400 15px var(--font);cursor:pointer;transition:background .2s;white-space:nowrap}
+.ghost:hover{background:rgba(255,255,255,.06)}
+.frost{display:inline-flex;align-items:center;gap:8px;background:rgba(13,10,25,.28);
+  border:1px solid rgba(255,255,255,.1);color:var(--ash);border-radius:8px;padding:8px 14px;
+  font:400 14px var(--font);cursor:pointer;box-shadow:rgba(0,0,0,.26) 0 0 8px 0}
+.frost:hover{color:#fff;border-color:var(--smoke)}
+
+/* The mark. rookery.png is dark art on a white plate, which is backwards for this
+   palette — grayscale+invert flips it to ash, and `screen` drops the plate to the
+   backdrop, so no alpha-channel version of the file is needed. The box crops the
+   serif wordmark off the bottom; the DM Sans one beside it does that job. */
+.logo{display:flex;align-items:center;gap:11px;color:var(--white);font-size:18px;font-weight:400}
+.mark{width:36px;height:36px;flex:none;position:relative;overflow:hidden}
+.mark img{position:absolute;width:121%;left:-11.8%;top:-2.9%;   /* crops to the emblem at any .mark size */
+  filter:grayscale(1) invert(1) brightness(.88);mix-blend-mode:screen}
+
+/* GitHub-style label pill — the product's real artifact, used on both pages */
+.lbl{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;
+  letter-spacing:0;padding:3px 10px;border-radius:9999px;background:var(--shell);
+  color:var(--ash);border:1px solid var(--smoke);white-space:nowrap}
+.lbl.live{background:var(--ember);border-color:transparent;color:#fff}
+.lbl.ok{background:#fff;border-color:transparent;color:#48556a}
+.lbl.err{background:rgba(255,73,44,.16);border-color:var(--scorch);color:#ffb3a5}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important}
+}
