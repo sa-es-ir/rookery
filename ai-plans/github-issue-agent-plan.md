@@ -50,9 +50,15 @@ looks the way it does:
    `STATUS: implemented` the same way, rather than asking the orchestrator
    to infer outcome from free text.
 
-One VSDD idea is deliberately **not** carried over yet: the adversarial
-verifier gate between every phase. Human PR review is the gate for now; a
-verifier agent is a candidate for a later phase once the happy path works.
+VSDD's adversarial verifier gate between every phase is carried over only in
+part. A **reviewer agent** now runs once, after the task loop and before the
+push, and is **advisory**: its findings go into the PR body and a
+`changes-needed` verdict sets `claude:error`, but the branch is always pushed
+and the draft PR is always opened. Work is never stranded in a local worktree,
+and the human reading the PR is already where the findings are.
+
+Two stronger gates are deliberately not built — see
+[Reviewer escalation](#reviewer-escalation-future) below.
 
 ---
 
@@ -285,11 +291,40 @@ before.
 
 ---
 
+## Reviewer escalation (future)
+
+The reviewer ships advisory. Both stronger forms were considered and rejected
+for now; the reasons are the trigger for revisiting them.
+
+**Blocking gate.** `STATUS: changes-needed` stops before `git push`: findings
+post as an issue comment, phase goes to `claude:error`, no PR is opened.
+Commenting `approve` again re-runs from the first unticked task.
+
+*Why not yet:* the branch then exists only as a local worktree on the
+orchestrator host. Nothing on GitHub shows the work happened, and if the
+laptop is wiped the commits are gone. Advisory keeps the artifact durable and
+still flags the issue. Revisit if draft PRs from failed reviews turn out to be
+noise a team actually has to triage.
+
+**Advisory plus a fix loop.** On `changes-needed`, append the findings to
+`tasks.md` as new tasks, re-enter the implement loop, then review again.
+
+*Why not yet:* it adds a second convergence loop to a design whose invariants
+are all about bounded, provable termination — `MAX_TASKS` checked every
+iteration, every tick strictly reducing the open count. A reviewer that can
+add tasks breaks "every tick strictly reduces the open count", so it needs its
+own separate bound (a max number of review rounds) and a rule for what happens
+when a fix round makes the review worse. That is a real design, not an
+increment. Revisit once there is data on how often reviews come back
+`changes-needed` at all.
+
 ## Open decisions to revisit
 
 - Webhook receiver / orchestrator stack — Node, Python, or Go. Undecided.
 - Trigger convention — dedicated label, `@claude` mention, or both.
 - Whether the Phase 1 plan artifact stays a plain `PLAN.md` or jumps
   straight to OpenSpec (Phase 4 pulls forward if it turns out to be cheap).
-- Whether to add a VSDD-style adversarial verifier gate before the PR, or
-  leave human PR review as the only gate.
+- ~~Whether to add a VSDD-style adversarial verifier gate before the PR, or
+  leave human PR review as the only gate.~~ Decided: an advisory reviewer
+  agent runs before the push; see [Reviewer escalation](#reviewer-escalation-future)
+  for the two stronger gates that were not built.

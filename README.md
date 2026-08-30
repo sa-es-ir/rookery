@@ -21,12 +21,12 @@ the issue, asks its questions as issue comments, waits for a human `approve`,
 then implements the plan task by task on a branch and opens a draft PR.
 
 ```
-claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → done
+claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
 Everything is one file, `agent.py` — Python stdlib only, plus the `gh` and
 `claude` CLIs on your PATH. The full roadmap lives in
-[github-issue-agent-plan.md](github-issue-agent-plan.md).
+[ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
 
 ## Quick start
 
@@ -86,6 +86,26 @@ issue is. `decisions.md` is the only memory that crosses between them.
   committed. Fix the plan or the code, comment `approve` again, and the loop
   resumes at that same task.
 
+### Two named roles
+
+`agent.py:AGENTS` defines two, passed to the CLI as `--agents`/`--agent`:
+
+| Role | Runs | Can it write? |
+| --- | --- | --- |
+| **planmaker** | the planning phase | `agent-plans/<n>/` only — anything else it touches is reverted before the plan is posted, every time `plan()` is called |
+| **reviewer** | once, after the last task, before the push | no — it reports, it never fixes |
+
+Implementation tasks run as *no* agent: the plain harness with the deny rules
+is already the right shape for them.
+
+The reviewer is **advisory**. Its findings go into the PR body under
+`## Review`, and the draft PR opens whatever the verdict — work is never left
+stranded in a local worktree. A `changes-needed` verdict only lands
+`claude:error` so somebody looks. Blocking and self-fixing variants are specced
+but deliberately unbuilt.
+
+To split models by role, add `"model": "opus"` to a role in `AGENTS`.
+
 ## Setup
 
 1. Fill in `.env` and `repos.json`.
@@ -114,8 +134,9 @@ Add the `claude:trigger` label to an issue, then follow the `claude:*` label:
 | `claude:awaiting-input` | a question is in the comments — answer it |
 | `claude:awaiting-approval` | comment `approve` / `lgtm` / `go ahead` |
 | `claude:implementing` | working through `tasks.md` |
-| `claude:done` | draft PR is open |
-| `claude:error` | the exception is the last comment; fix, unlabel, re-trigger |
+| `claude:reviewing` | the reviewer is reading the finished diff |
+| `claude:done` | draft PR is open, review clean |
+| `claude:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
 
 Only logins in `ALLOWLIST` can move an issue along, and approval is a regex
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
