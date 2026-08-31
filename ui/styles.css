@@ -41,8 +41,8 @@ button{font:inherit}
    serif wordmark off the bottom; the DM Sans one beside it does that job. */
 .logo{display:flex;align-items:center;gap:11px;color:var(--white);font-size:18px;font-weight:400}
 .mark{width:36px;height:36px;flex:none;position:relative;overflow:hidden}
-.mark img{position:absolute;width:121%;left:-11.8%;top:-2.9%;   /* crops to the emblem at any .mark size */
-  filter:grayscale(1) invert(1) brightness(.88);mix-blend-mode:screen}
+.mark img{position:absolute;width:131.6%;left:-14.9%;top:-7.1%;  /* crops to the emblem's bbox (source 103,49 693x693) at any .mark size */
+  filter:grayscale(1) invert(1) contrast(1.3) brightness(.88);mix-blend-mode:screen}
 
 /* GitHub-style label pill — the product's real artifact, used on both pages */
 .lbl{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;

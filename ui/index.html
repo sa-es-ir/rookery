@@ -6,7 +6,7 @@
 <meta name="description" content="Label a GitHub issue. Rookery plans it, waits for your approval, works through the tasks one at a time, and opens a draft pull request.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="icon" href="rookery.png">
 <link rel="stylesheet" href="styles.css">
 <style>
@@ -25,7 +25,19 @@
 .hero::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(126% 234% at 10% 142%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%)}
 .hero .wrap{position:relative;display:grid;gap:56px}
-@media(min-width:980px){.hero .wrap{grid-template-columns:1.02fr .98fr;align-items:center;gap:64px}}
+/* Two rows so the card shares the headline's top edge: the crest owns row 1 of the
+   left column, headline and card sit together in row 2. */
+@media(min-width:980px){
+  .hero .wrap{grid-template-columns:1.02fr .98fr;column-gap:64px;row-gap:0;align-items:start}
+  .hero .crest{grid-area:1/1;margin-bottom:36px}   /* row-gap is 0 here, so the crest owns its own */
+  .hero .copy{grid-area:2/1}
+  /* the card spans both rows: top edge on the crest, bottom edge on the copy block */
+  .hero .issue{grid-area:1/2/3/2;align-self:stretch}
+}
+/* the emblem opens the page, centred over the headline column. No wordmark under
+   it — the nav carries the name, and the H1 is the thing to read here. */
+.crest{display:flex;justify-content:center}
+.crest .mark{width:clamp(140px,17vw,220px);height:clamp(140px,17vw,220px)}
 .hero h1{font-size:clamp(36px,4.4vw,50px);line-height:.92;letter-spacing:-1.08px;font-weight:300}
 .hero h1 em{font-style:normal;color:var(--fog)}
 .hero .lede{margin-top:24px;font-size:18px;line-height:1.6;font-weight:300;color:var(--ash);max-width:46ch}
@@ -33,14 +45,21 @@
 .hero .fine{margin-top:24px;font-size:13px;color:var(--fog);font-family:var(--mono);letter-spacing:0}
 
 /* signature: the live issue card */
-.issue{background:var(--surface);border-radius:16px;padding:24px;box-shadow:var(--inset)}
+.issue{background:var(--surface);border-radius:16px;padding:32px;box-shadow:var(--inset);
+  display:flex;flex-direction:column}
 .issue .top{display:flex;align-items:center;gap:8px;color:var(--fog);font-family:var(--mono);font-size:12px}
 .issue .top .num{margin-left:auto;color:var(--ash)}
 .issue h2{font-size:20px;line-height:1.3;margin:14px 0 16px;font-weight:400}
 .issue .labels{display:flex;gap:8px;flex-wrap:wrap;min-height:26px}
-.tasks{margin:22px 0 0;border-top:1px solid var(--smoke);padding-top:18px;display:grid;gap:11px}
+.issue .body{margin:16px 0 0;font-size:14px;line-height:1.7;font-weight:300;color:var(--ash)}
+.issue .by{margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--fog);
+  display:flex;align-items:center;gap:8px}
+.issue .by b{font-weight:400;color:var(--ash)}
+.issue .by .dot{width:6px;height:6px;border-radius:9999px;background:var(--ember)}
+.tasks{margin:24px 0 0;flex:1;align-content:center;border-top:1px solid var(--smoke);padding-top:18px;display:grid;gap:11px}
 .tasks li{display:flex;gap:12px;align-items:flex-start;font-size:14px;color:var(--fog);
   transition:color .3s}
+.tasks{gap:16px}
 .tasks li.on{color:var(--ash)}
 .tasks li.done{color:var(--fog)}
 .tasks li.done .txt{text-decoration:line-through;text-decoration-color:var(--smoke)}
@@ -122,7 +141,10 @@ footer .links a:hover{color:#fff}
 </div></header>
 
 <section class="hero"><div class="wrap">
-  <div>
+  <div class="crest">
+    <span class="mark"><img src="rookery.png" alt="Rookery"></span>
+  </div>
+  <div class="copy">
     <h1>Label the issue.<br>Approve the plan.<br><em>Review the pull request.</em></h1>
     <p class="lede">Rookery watches your repositories for one label. It reads the issue,
       writes a plan you sign off on, then works the task list one task at a time and opens a
@@ -138,6 +160,10 @@ footer .links a:hover{color:#fff}
     <div class="top"><span>sa-es-ir/rookery</span><span class="num">#3</span></div>
     <h2>Create the frontend portal</h2>
     <div class="labels" id="labels"></div>
+    <p class="body">Operator-facing pages for the orchestrator: the agent roster, the workflow
+      canvas, and a run view that reads its state from the issue labels. Dark theme, no build
+      step, no framework.</p>
+    <div class="by"><span class="dot"></span>opened by <b>sa-es-ir</b> · 4 tasks planned</div>
     <ul class="tasks" id="tasks">
       <li><span class="box">✓</span><span class="txt">Scaffold the portal shell</span></li>
       <li><span class="box">✓</span><span class="txt">Render agents from state</span></li>
