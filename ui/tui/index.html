@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rookery(1) — agents that work your issue queue</title>
+<meta name="description" content="Label a GitHub issue. Rookery plans it, waits for your approval, works through the tasks one at a time, and opens a draft pull request.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="../rookery.png">
+<link rel="stylesheet" href="styles.css">
+
+<header class="nav"><div class="wrap">
+  <a class="logo" href="index.html"><span class="mark"><img src="../rookery.png" alt=""></span>rookery</a>
+  <nav>
+    <a href="#how"><b>1</b>how-it-works</a>
+    <a href="#invariants"><b>2</b>guarantees</a>
+    <a href="#refusals"><b>3</b>refusals</a>
+  </nav>
+  <div class="right">
+    <a class="frost" href="https://github.com/sa-es-ir/rookery">github</a>
+    <a class="cta" href="portal.html">open portal</a>
+  </div>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="copy">
+    <div class="crest">
+      <span class="mark"><img src="../rookery.png" alt="Rookery"></span>
+      <div><b>rookery(1)</b><span class="sub">an orchestrator for coding agents</span></div>
+    </div>
+    <p class="shell-line"><span class="p">~/rookery</span> <span class="dim">on</span> main<br>
+      <span class="p">$</span> <span class="cmd">rookery watch --label claude:trigger</span><span class="cur">_</span></p>
+    <h1>Label the issue.<br>Approve the plan.<br><em>Review the pull request.</em></h1>
+    <p class="lede">Rookery watches your repositories for one label. It reads the issue,
+      writes a plan you sign off on, then works the task list one task at a time and opens a
+      draft pull request. It never merges. That part is still yours.</p>
+    <div class="actions">
+      <a class="cta" href="portal.html">open portal</a>
+      <a class="ghost" href="#how">see the loop</a>
+    </div>
+    <p class="fine">stdlib python · gh + claude on PATH · no database</p>
+  </div>
+
+  <article class="box hot issue" aria-label="Example issue, running">
+    <span class="cap">issue · live</span>
+    <div class="top"><span>sa-es-ir/rookery</span><span class="num">#3</span></div>
+    <h2>Create the frontend portal</h2>
+    <div class="labels" id="labels"></div>
+    <p class="body">Operator-facing pages for the orchestrator: the agent roster, the workflow
+      canvas, and a run view that reads its state from the issue labels. Dark theme, no build
+      step, no framework.</p>
+    <div class="by">opened by <b>sa-es-ir</b> · 4 tasks planned</div>
+    <div class="rule"></div>
+    <ul class="tasks" id="tasks">
+      <li><span class="bx">[ ]</span><span class="txt">Scaffold the portal shell</span></li>
+      <li><span class="bx">[ ]</span><span class="txt">Render agents from state</span></li>
+      <li><span class="bx">[ ]</span><span class="txt">Build the workflow canvas</span></li>
+      <li><span class="bx">[ ]</span><span class="txt">Wire the run sequence</span></li>
+    </ul>
+    <div class="bar"><span class="fill" id="bar"></span><span id="count">0/4</span></div>
+    <div class="rule"></div>
+    <div class="foot"><span id="foot">agent-plans/3/tasks.md</span><span>feature/issue-3</span></div>
+  </article>
+</div></section>
+
+<section class="sec" id="how"><div class="wrap tree-grid">
+  <div class="sec-head">
+    <div class="eyebrow">/the-loop</div>
+    <h2>Six labels, one of them yours</h2>
+    <p>State lives on GitHub, not in a database here. The labels on the issue
+      <em>are</em> the state machine — you can read where a run stands without opening
+      anything else, and you can stop it by removing a label.</p>
+  </div>
+  <ol class="tree">
+    <li class="gate"><span class="pin">◆</span><span class="lbl live">claude:trigger</span>
+      <h3>You start it</h3>
+      <p>Nothing runs until someone puts the label on. There is no polling and no autonomous pickup.</p>
+      <span class="you">└ requires you</span></li>
+    <li><span class="pin">◇</span><span class="lbl">claude:planning</span>
+      <h3>planmaker reads the repo</h3>
+      <p>It writes <code>plan.md</code>, <code>tasks.md</code> and
+        <code>decisions.md</code> into the target repo and touches nothing else.</p></li>
+    <li><span class="pin">◇</span><span class="lbl">claude:awaiting-input</span>
+      <h3>It asks when it has to</h3>
+      <p>An open question comes back as an issue comment. Reply and planning resumes in the
+        same session with your answer folded in.</p></li>
+    <li class="gate"><span class="pin">◆</span><span class="lbl live">claude:awaiting-approval</span>
+      <h3>You approve it</h3>
+      <p>The plan is posted for review. Comment <code>approve</code> to start the
+        work — matched as text, from a login on your allowlist.</p>
+      <span class="you">└ requires you</span></li>
+    <li><span class="pin">◇</span><span class="lbl">claude:implementing</span>
+      <h3>One task, then the next</h3>
+      <p>A fresh session per task. Rookery ticks the checkbox, commits, and moves on. Fifteen
+        tasks is the ceiling; the loop stops rather than wandering.</p></li>
+    <li><span class="pin">◇</span><span class="lbl">claude:reviewing</span>
+      <h3>A second agent reads the diff</h3>
+      <p>Advisory, and it runs once. The branch is pushed and the draft PR opened either way,
+        so work is never stranded on someone's laptop.</p></li>
+  </ol>
+</div></section>
+
+<section class="sec" id="invariants"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">/guarantees</div>
+    <h2>Properties, not settings</h2>
+    <p>These are structural. There is no configuration flag that turns them off, because
+      each one is what keeps a long run predictable.</p>
+  </div>
+  <div class="cards">
+    <div class="box"><span class="cap">cost</span>
+      <h3>Issue 300 costs what issue 3 did</h3>
+      <p>Every task gets its own session, so context never snowballs across a long issue.
+        <code>decisions.md</code> is the only thing that crosses between tasks.</p></div>
+    <div class="box"><span class="cap">authorship</span>
+      <h3>Rookery commits, the agent doesn't</h3>
+      <p>Task sessions run with <code>git push</code> and <code>gh</code> denied outright.
+        The orchestrator ticks the checkbox and writes the commit, so history stays legible.</p></div>
+    <div class="box"><span class="cap">approval</span>
+      <h3>Your approval is read, not judged</h3>
+      <p>The word is matched against a pattern and the author against your allowlist.
+        No model decides whether you meant yes, and the bot is filtered out so it can't approve itself.</p></div>
+    <div class="box"><span class="cap">review</span>
+      <h3>The plan ships inside the PR</h3>
+      <p>Plan, tasks and decisions are committed to the branch. A reviewer sees what was
+        intended next to what was written, in one place.</p></div>
+    <div class="box"><span class="cap">isolation</span>
+      <h3>One worktree per issue</h3>
+      <p>Each issue gets its own branch and its own checkout, so two repositories can share an
+        issue number and never meet.</p></div>
+    <div class="box"><span class="cap">throughput</span>
+      <h3>One job at a time, on purpose</h3>
+      <p>A single worker drains the queue. A long implementation blocks the others — a
+        deliberate trade for a machine you can reason about.</p></div>
+  </div>
+</div></section>
+
+<section class="sec" id="refusals"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">/refusals</div>
+    <h2>The short list</h2>
+  </div>
+  <div class="refuse">
+    <div class="box"><span class="cap">[!] deny</span><b>Push to your base branch</b>
+      <p>Checked before every push. Branch protection is the backstop, not the guard.</p></div>
+    <div class="box"><span class="cap">[!] deny</span><b>Merge anything</b>
+      <p>The output is a draft pull request. A human merges, every time.</p></div>
+    <div class="box"><span class="cap">[!] deny</span><b>Act on an unsigned webhook</b>
+      <p>The signature is verified first, and repositories you haven't configured are dropped.</p></div>
+    <div class="box"><span class="cap">[!] deny</span><b>Guess at a result</b>
+      <p>A task reports its status as a literal marker. A missing one is an error, not an assumption.</p></div>
+  </div>
+</div></section>
+
+<div class="wrap"><section class="box close">
+  <span class="cap">next</span>
+  <h2>Point it at a repository</h2>
+  <p>Configure the repos you want covered, invite the agents you trust, and watch the queue
+    from one place.</p>
+  <a class="cta" href="portal.html">open portal</a>
+</section></div>
+
+<footer><div class="wrap">
+  <div>
+    <a class="logo" href="index.html"><span class="mark"><img src="../rookery.png" alt=""></span>rookery</a>
+    <p>An orchestrator for coding agents. It runs your issues; it never merges them.</p>
+  </div>
+  <div class="links">
+    <a href="portal.html">portal</a>
+    <a href="../index.html">classic view</a>
+    <a href="https://github.com/sa-es-ir/rookery">source</a>
+  </div>
+</div></footer>
+
+<div class="statusbar">
+  <span class="mode">RUN</span>
+  <span class="phase" id="sphase">idle</span>
+  <span class="keys" aria-hidden="true">
+    <span><b class="key">1</b> <b class="key">2</b> <b class="key">3</b> jump</span>
+    <span><b class="key">p</b> portal</span>
+    <span><b class="key">g</b> github</span>
+  </span>
+</div>
+
+<script>
+// Same demo loop as ../index.html, drawn with checkbox glyphs, a spinner and a progress bar.
+// ponytail: a script, not a state machine — it is a demo, not the product.
+const PHASES = [
+  {label:'claude:trigger',           cls:'live', hold:1400, foot:'labelled by @sa-es-ir'},
+  {label:'claude:planning',          cls:'',     hold:2200, foot:'agent-plans/3/plan.md'},
+  {label:'claude:awaiting-approval', cls:'live', hold:2400, foot:'waiting for approve'},
+  {label:'claude:implementing',      cls:'',     hold:0,    foot:'agent-plans/3/tasks.md'},
+  {label:'claude:reviewing',         cls:'',     hold:1800, foot:'reviewer reading the diff'},
+  {label:'claude:done',              cls:'ok',   hold:3000, foot:'draft PR #14 opened'},
+];
+const SPIN = '|/-\\';
+const WIDTH = 16;
+const $ = id => document.getElementById(id);
+const items = [...document.querySelectorAll('#tasks li')];
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+function show(p){
+  $('labels').innerHTML = '<span class="lbl ' + p.cls + '">' + p.label + '</span>';
+  $('foot').textContent = p.foot;
+  $('sphase').textContent = p.label + '  ·  ' + p.foot;
+}
+function paint(li, frame){
+  li.querySelector('.bx').textContent =
+    li.className === 'done' ? '[x]' : li.className === 'on' ? '[' + SPIN[frame % 4] + ']' : '[ ]';
+}
+function progress(){
+  const n = items.filter(li => li.className === 'done').length;
+  const f = Math.round(n / items.length * WIDTH);
+  $('bar').textContent = '#'.repeat(f) + '.'.repeat(WIDTH - f);
+  $('count').textContent = n + '/' + items.length;
+}
+
+async function loop(){
+  let frame = 0;
+  setInterval(() => {
+    const on = items.find(li => li.className === 'on');
+    if (on) paint(on, ++frame);
+  }, 110);
+  for(;;){
+    items.forEach(li => { li.className = ''; paint(li, 0); });
+    progress();
+    for (const p of PHASES){
+      show(p);
+      if (p.label === 'claude:implementing'){
+        for (const li of items){
+          li.className = 'on'; paint(li, frame); await wait(900);
+          li.className = 'done'; paint(li, 0); progress(); await wait(300);
+        }
+      } else await wait(p.hold);
+    }
+    await wait(1200);
+  }
+}
+
+if (still){
+  show(PHASES[5]);
+  items.forEach(li => { li.className = 'done'; paint(li, 0); });
+  progress();
+} else loop();
+
+// Keybindings. A status bar that advertises keys it doesn't bind is worse than no status bar.
+const GO = {'1':'#how','2':'#invariants','3':'#refusals'};
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (GO[e.key]) document.querySelector(GO[e.key]).scrollIntoView({behavior: still ? 'auto' : 'smooth'});
+  else if (e.key === 'p') location.href = 'portal.html';
+  else if (e.key === 'g') location.href = 'https://github.com/sa-es-ir/rookery';
+});
+</script>

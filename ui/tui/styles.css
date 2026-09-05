@@ -1,0 +1,268 @@
+/* Rookery TUI — the DESIGN.md palette rendered as a terminal instead of a landing page.
+   Tokens come from ../styles.css so there is one source for them; everything below is
+   the skin. Two rules are broken on purpose: radius (pills and 8px buttons are not
+   terminal furniture) and type (one monospace family — a TUI with two families is not one). */
+@import url("../styles.css");
+
+body{font-family:var(--mono);letter-spacing:0;font-size:14px;padding-bottom:34px}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:300}
+::selection{background:var(--scorch);color:#fff}
+.cta,.ghost,.frost,.lbl{border-radius:2px;font-family:var(--mono);letter-spacing:0}
+.cta,.ghost,.frost{font-size:13px;padding:9px 16px}
+.lbl{font-size:12px;padding:2px 8px}
+.dim{color:var(--fog)}
+.key{color:var(--scorch);font-weight:400}
+.eyebrow{font-family:var(--mono);font-size:12px;text-transform:none;letter-spacing:0}
+[hidden]{display:none!important}
+
+/* framed panel — the ncurses window: a rule box with its title set into the top edge.
+   --capbg must match whatever the box sits on, or the title floats on a broken line. */
+.box{position:relative;border:1px solid var(--smoke);padding:30px 26px 26px;--capbg:var(--void)}
+.box>.cap{position:absolute;top:-.62em;left:14px;padding:0 8px;background:var(--capbg);
+  font-size:12px;color:var(--fog);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.box.hot{border-color:rgba(255,142,93,.45);box-shadow:var(--inset)}
+
+/* status bar — pinned, and fed by whatever the page is doing. The one thing that makes
+   a page read as a running program rather than a picture of one. */
+.statusbar{position:fixed;left:0;right:0;bottom:0;height:34px;z-index:40;background:var(--panel);
+  border-top:1px solid var(--smoke);display:flex;align-items:center;gap:16px;font-size:12px;
+  padding:0 16px;color:var(--fog);overflow:hidden}
+.statusbar .mode{background:var(--ember);color:#fff;padding:3px 10px;margin-left:-16px;flex:none}
+.statusbar .phase{color:var(--ash);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.statusbar .keys{margin-left:auto;display:none;gap:16px;white-space:nowrap}
+@media(min-width:720px){.statusbar .keys{display:flex}}
+
+/* ── landing ───────────────────────────────────────────────────────────── */
+
+.wrap{max-width:1080px}
+.nav{height:52px;border-bottom:1px solid var(--smoke);position:sticky;top:0;background:var(--void);z-index:30}
+.nav .wrap{height:100%;display:flex;align-items:center;gap:24px}
+.nav .logo{font-family:var(--mono);font-size:15px;gap:9px}
+.nav .mark{width:26px;height:26px}
+.nav nav{display:none;gap:20px;margin-left:12px;font-size:13px}
+.nav nav a{color:var(--fog)}
+.nav nav a:hover{color:#fff}
+.nav nav a b{font-weight:400;color:var(--scorch);margin-right:5px}
+.nav .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+@media(min-width:900px){.nav nav{display:flex}}
+@media(max-width:560px){.nav .frost{display:none}}
+
+.hero{padding:56px 0 72px;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(126% 234% at 10% 142%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%)}
+.hero .wrap{position:relative;display:grid;gap:48px}
+@media(min-width:980px){.hero .wrap{grid-template-columns:1.02fr .98fr;column-gap:56px;align-items:start}}
+.crest{display:flex;align-items:center;gap:16px;margin-bottom:26px}
+.crest .mark{width:64px;height:64px}
+.crest b{display:block;color:#fff;font-weight:400;font-size:15px}
+.crest span.sub{font-size:12px;color:var(--fog)}
+.shell-line{font-size:13px;color:var(--fog);margin-bottom:26px;line-height:2}
+.shell-line .p{color:rgb(253,137,37)}
+.shell-line .cmd{color:var(--ash)}
+.cur{display:inline-block;width:.6em;background:var(--ash);color:transparent;animation:blink 1.06s steps(1) infinite}
+@keyframes blink{50%{background:transparent}}
+/* mono is ~0.6em per glyph, so the headline sizes off its longest line (24 chars),
+   not off the column — at 38px "Review the pull request." wraps. */
+.hero h1{font-size:clamp(22px,2.6vw,32px);line-height:1.28;letter-spacing:-.5px}
+.hero h1 em{font-style:normal;color:var(--fog)}
+.hero .lede{margin-top:22px;font-size:14px;line-height:1.8;color:var(--ash);max-width:62ch;font-weight:300}
+.hero .actions{margin-top:28px;display:flex;flex-wrap:wrap;gap:10px}
+.hero .fine{margin-top:22px;font-size:12px;color:var(--fog)}
+
+.issue{display:flex;flex-direction:column;gap:16px;padding-bottom:22px}
+.issue .top{display:flex;gap:10px;font-size:12px;color:var(--fog)}
+.issue .top .num{margin-left:auto;color:var(--ash)}
+.issue h2{font-size:16px;line-height:1.4;font-weight:400;color:#fff}
+.issue .labels{min-height:22px}
+.issue .body{font-size:13px;line-height:1.75;color:var(--ash);font-weight:300}
+.issue .by{font-size:12px;color:var(--fog)}
+.issue .by b{font-weight:400;color:var(--ash)}
+.issue .foot{font-size:12px;color:var(--fog);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.rule{border-top:1px dashed var(--smoke)}
+.tasks{display:grid;gap:9px;font-size:13px}
+.tasks li{display:flex;gap:10px;color:var(--fog);transition:color .3s}
+.tasks li .bx{flex:none;width:3ch;color:var(--smoke)}
+.tasks li.on{color:var(--ash)}
+.tasks li.on .bx{color:rgb(253,137,37)}
+.tasks li.done .bx{color:var(--scorch)}
+.tasks li.done .txt{text-decoration:line-through;text-decoration-color:var(--smoke)}
+.bar{font-size:13px;color:var(--fog);display:flex;gap:10px}
+.bar .fill{color:var(--scorch);letter-spacing:-.5px}
+
+.sec{padding:80px 0}
+.sec-head{max-width:64ch;margin-bottom:44px}
+.sec-head h2{font-size:clamp(22px,3vw,30px);line-height:1.2;letter-spacing:-.4px;margin-top:10px}
+.sec-head p{margin-top:16px;color:var(--fog);font-size:13px;line-height:1.8;font-weight:300}
+
+/* the loop — drawn as a process tree */
+.tree li{position:relative;padding:0 0 28px 26px;border-left:1px dashed var(--smoke)}
+.tree li::after{content:"";position:absolute;left:0;top:.72em;width:15px;height:1px;background:var(--smoke)}
+.tree li:last-child{padding-bottom:0}
+/* masks the dashed line below the last tick, turning that node's connector into an elbow */
+.tree li:last-child::before{content:"";position:absolute;left:-1px;top:.72em;bottom:-2px;width:1px;background:var(--void)}
+.tree .pin{position:absolute;left:-6px;top:0;background:var(--void);color:rgb(107,33,239);font-size:12px;line-height:1.5}
+.tree li.gate .pin{color:var(--scorch)}
+.tree h3{font-size:15px;font-weight:400;color:#fff;margin:12px 0 7px}
+.tree p{color:var(--ash);font-weight:300;font-size:13px;line-height:1.8;max-width:66ch}
+.tree .you{display:inline-block;margin-top:8px;font-size:12px;color:rgb(253,137,37)}
+.tree code{color:#fff}
+@media(min-width:980px){
+  .tree-grid{display:grid;grid-template-columns:.8fr 1.2fr;gap:56px;align-items:start}
+  .tree-grid .sec-head{margin-bottom:0;position:sticky;top:90px}
+}
+
+.cards{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.cards h3{font-size:15px;font-weight:400;color:#fff;line-height:1.4;margin:0 0 10px}
+.cards p{color:var(--ash);font-weight:300;font-size:13px;line-height:1.8}
+.cards code{color:#fff}
+
+.refuse{display:grid;gap:14px}
+@media(min-width:620px){.refuse{grid-template-columns:1fr 1fr}}
+@media(min-width:1080px){.refuse{grid-template-columns:repeat(4,1fr)}}
+.refuse .box{padding:26px 20px 20px}
+.refuse .cap{color:var(--scorch)}
+.refuse b{display:block;color:#fff;font-weight:400;font-size:14px;margin-bottom:8px}
+.refuse p{font-size:12px;color:var(--fog);font-weight:300;line-height:1.8}
+
+.close{--capbg:var(--panel);background:var(--panel);text-align:center;padding:56px 32px 48px;margin-bottom:80px}
+.close h2{font-size:clamp(20px,3vw,26px);line-height:1.3}
+.close p{margin:16px auto 26px;color:var(--fog);max-width:56ch;font-weight:300;font-size:13px;line-height:1.8}
+
+footer{border-top:1px solid var(--smoke);padding:44px 0 56px;position:relative}
+footer::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(circle farthest-side at 100% -80%,rgba(175,106,140,.46),rgba(98,65,83,.38) 39%,rgba(0,0,0,0) 55%)}
+footer .wrap{position:relative;display:flex;flex-wrap:wrap;gap:28px;justify-content:space-between;align-items:center}
+footer .logo{font-family:var(--mono);font-size:16px;gap:10px}
+footer .mark{width:34px;height:34px}
+footer p{color:var(--fog);font-size:12px;max-width:44ch;font-weight:300;margin-top:12px;line-height:1.8}
+footer .links{display:flex;gap:22px;font-size:13px;color:var(--fog)}
+footer .links a:hover{color:#fff}
+
+/* ── portal ────────────────────────────────────────────────────────────── */
+
+.app{display:grid;min-height:100vh;grid-template-columns:1fr}
+@media(min-width:900px){.app{grid-template-columns:240px 1fr}}
+
+.side{border-right:1px solid var(--smoke);padding:16px 12px 44px;display:flex;flex-direction:column;gap:24px}
+@media(min-width:900px){.side{position:sticky;top:0;height:100vh}}
+.side .logo{font-family:var(--mono);font-size:15px;gap:9px;padding:4px 8px 0}
+.side .mark{width:26px;height:26px}
+.side h4{font-size:11px;color:var(--fog);letter-spacing:.08em;text-transform:uppercase;
+  font-weight:400;padding:0 8px;margin-bottom:6px}
+.side .menu a{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:13px;
+  color:var(--ash);cursor:pointer}
+.side .menu a::before{content:"  ";color:var(--scorch);white-space:pre}
+.side .menu a:hover{background:var(--shell)}
+.side .menu a[aria-current=page]{background:var(--shell);color:#fff}
+.side .menu a[aria-current=page]::before{content:"> "}
+.side .menu .count{margin-left:auto;font-size:11px;color:var(--fog)}
+.repos li{display:flex;gap:8px;padding:5px 8px;font-size:12px;color:var(--fog)}
+.repos li::before{content:"●";color:rgb(253,137,37);font-size:9px;line-height:1.7}
+.side .bottom{margin-top:auto;border-top:1px solid var(--smoke);padding-top:14px}
+.side .bottom a{font-size:12px;color:var(--fog);display:block;padding:3px 8px}
+.side .bottom a:hover{color:#fff}
+/* below the sidebar breakpoint it collapses to a scrolling top strip */
+@media(max-width:899px){
+  .side{flex-direction:row;align-items:center;gap:14px;padding:10px 14px;overflow-x:auto;
+    border-right:0;border-bottom:1px solid var(--smoke);scrollbar-width:none}
+  .side::-webkit-scrollbar{display:none}
+  .side h4,.side .repos,.side .bottom{display:none}
+  .side .menu{display:flex;gap:2px}
+  .side .menu a{white-space:nowrap}
+  main>.top{padding:0 14px}
+  main>.top .frost{display:none}
+  .view{padding:20px 14px}
+}
+
+main{min-width:0}
+/* scoped to main: the landing's issue card has a .top of its own */
+main>.top{height:52px;border-bottom:1px solid var(--smoke);display:flex;align-items:center;gap:14px;
+  padding:0 28px;position:sticky;top:0;background:var(--void);z-index:10}
+main>.top h1{font-size:14px;font-weight:400;color:var(--fog)}
+main>.top h1 b{font-weight:400;color:#fff}
+main>.top .right{margin-left:auto;display:flex;gap:10px;align-items:center}
+.view{padding:34px 28px 28px}
+.intro{color:var(--fog);font-size:13px;line-height:1.8;font-weight:300;max-width:76ch;margin-bottom:30px}
+
+/* agents */
+.grid{display:grid;gap:22px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.card{padding:26px 20px 20px;display:flex;flex-direction:column}
+.card h3{font-size:14px;font-weight:400;color:#fff}
+.card p{color:var(--ash);font-weight:300;font-size:12px;line-height:1.8;margin:10px 0 18px;flex:1}
+.card .meta{display:flex;align-items:center;gap:10px}
+.card .tag{border:1px solid var(--smoke);padding:2px 8px;font-size:11px;color:var(--ash);margin-left:auto}
+.toggle{border:0;background:transparent;color:var(--fog);padding:0;font-size:12px;cursor:pointer;
+  font-family:var(--mono)}
+.toggle b{font-weight:400;color:var(--smoke)}
+.toggle[aria-pressed=true]{color:#fff}
+.toggle[aria-pressed=true] b{color:rgb(253,137,37)}
+
+/* runs — a table, because that is what a list of runs is */
+.runs{display:flex;flex-direction:column}
+.runs .head,.run{display:grid;gap:12px;align-items:center;padding:11px 12px;
+  grid-template-columns:1fr auto}
+/* columns sized off the widest cell in each: "sa-es-ir/rookery #3",
+   "claude:awaiting-approval" (24ch + the pill's padding), "########.. 12/12" */
+@media(min-width:820px){.runs .head,.run{grid-template-columns:21ch 1fr 26ch 17ch}}
+.runs .head{font-size:11px;color:var(--fog);letter-spacing:.08em;text-transform:uppercase;
+  border-bottom:1px solid var(--smoke)}
+.run{border-bottom:1px dashed var(--smoke);font-size:13px}
+.run:hover{background:var(--surface)}
+.run .where{font-size:12px;color:var(--fog)}
+.run .what{color:#fff;font-weight:300;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run .prog{font-size:12px;color:var(--fog);white-space:nowrap}
+.run .prog i{font-style:normal;color:var(--scorch);letter-spacing:-.5px}
+.run .lbl{justify-self:start}
+/* one column below the table breakpoint — a truncated title is the one cell worth keeping */
+@media(max-width:819px){
+  .runs .head{display:none}
+  .run{grid-template-columns:1fr;gap:6px}
+  .run .what{white-space:normal}
+}
+
+/* workflow */
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+.toolbar .info{font-size:12px;color:var(--fog);margin-left:auto}
+.builder{display:grid;gap:20px;grid-template-columns:1fr}
+@media(min-width:900px){.builder{grid-template-columns:230px 1fr;align-items:start}}
+.palette{padding:26px 16px 16px}
+.palette .hint{font-size:11px;color:var(--fog);margin-bottom:12px}
+.drag{border:1px solid var(--smoke);padding:8px 10px;margin-bottom:7px;cursor:grab;
+  font-size:13px;color:var(--ash);user-select:none}
+.drag:hover{border-color:var(--fog)}
+.drag:active{cursor:grabbing}
+.drag small{display:block;color:var(--fog);font-size:11px}
+#canvas{position:relative;background:var(--panel);border:1px solid var(--smoke);height:540px;overflow:hidden;
+  background-image:radial-gradient(circle,rgba(255,255,255,.07) 1px,transparent 1px);background-size:20px 20px}
+#canvas.over{box-shadow:rgba(255,255,255,.14) 0 0 0 1px inset}
+#wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#wires path{pointer-events:stroke;cursor:pointer}
+.node{position:absolute;width:196px;background:var(--surface);border:1px solid var(--smoke);
+  padding:10px 12px;cursor:grab;user-select:none;touch-action:none;font-size:13px}
+.node.running{border-color:rgb(253,137,37);box-shadow:0 0 22px rgba(255,73,44,.28)}
+.node.done{border-color:#077ac7}
+.node b{font-weight:400;color:#fff;display:block}
+.node small{font-size:11px;color:var(--fog)}
+.node .x{position:absolute;top:2px;right:7px;color:var(--fog);cursor:pointer;line-height:1.2}
+.node .x:hover{color:var(--scorch)}
+.port{position:absolute;top:50%;margin-top:-6px;width:12px;height:12px;
+  background:var(--shell);border:1px solid var(--smoke);cursor:crosshair}
+.port.in{left:-7px}.port.out{right:-7px}
+.port:hover,.port.armed{background:rgb(7,122,199);border-color:rgb(107,33,239)}
+.empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
+  color:var(--fog);font-size:13px;pointer-events:none}
+
+/* new agent dialog */
+dialog{background:var(--void);color:var(--ash);border:1px solid var(--smoke);border-radius:0;
+  padding:0;width:min(440px,92vw)}
+dialog::backdrop{background:rgba(14,9,24,.72)}
+dialog .bar-t{border-bottom:1px solid var(--smoke);padding:9px 14px;font-size:12px;color:var(--fog);
+  display:flex;justify-content:space-between}
+dialog .bar-t b{font-weight:400;color:#fff}
+dialog form>div{padding:20px 22px}
+label{display:block;font-size:11px;color:var(--fog);margin-bottom:5px}
+input,textarea,select{width:100%;background:var(--panel);border:1px solid var(--smoke);border-radius:2px;
+  color:var(--ash);font:400 13px var(--mono);padding:8px 10px;margin-bottom:16px;resize:vertical}
+input:focus,textarea:focus,select:focus{outline:none;border-color:rgb(107,33,239)}
+::placeholder{color:#6b6570}
+dialog .actions{display:flex;gap:10px;justify-content:flex-end;padding-top:2px}

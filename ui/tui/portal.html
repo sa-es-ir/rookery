@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rookery — portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="../rookery.png">
+<link rel="stylesheet" href="styles.css">
+
+<div class="app">
+  <aside class="side">
+    <a class="logo" href="index.html"><span class="mark"><img src="../rookery.png" alt=""></span>rookery</a>
+
+    <div>
+      <h4>manage</h4>
+      <nav class="menu">
+        <a data-view="agents" aria-current="page">agents <span class="count" id="cAgents"></span></a>
+        <a data-view="runs">runs <span class="count" id="cRuns"></span></a>
+        <a data-view="flow">workflows <span class="count">1</span></a>
+      </nav>
+    </div>
+
+    <div>
+      <h4>connected repos</h4>
+      <ul class="repos">
+        <li>sa-es-ir/rookery</li>
+        <li>sa-es-ir/Llama</li>
+      </ul>
+    </div>
+
+    <div class="bottom">
+      <a href="index.html">← back to the site</a>
+      <a href="../portal.html">classic portal</a>
+    </div>
+  </aside>
+
+  <main>
+    <div class="top">
+      <h1>~/rookery/<b id="title">agents</b></h1>
+      <div class="right">
+        <span class="frost" title="Webhook listener">listening :8787</span>
+        <button class="cta" id="new">+ new agent</button>
+      </div>
+    </div>
+
+    <section class="view" id="agents">
+      <p class="intro">Agents are named roles the harness runs under. Turn one off and it stops
+        being offered to runs and workflows; the definition stays where it is.</p>
+      <div class="grid" id="agentGrid"></div>
+    </section>
+
+    <section class="view" id="runs" hidden>
+      <p class="intro">One issue, one worktree, one branch. Phase comes from the labels on the
+        issue, so this view and GitHub can't disagree.</p>
+      <div class="runs" id="runList">
+        <div class="head"><span>repo · issue</span><span>title</span><span>phase</span><span>tasks</span></div>
+      </div>
+    </section>
+
+    <section class="view" id="flow" hidden>
+      <p class="intro">Drag an agent onto the canvas, then click an output port and an input port
+        to set the order. Click a wire to cut it.</p>
+      <div class="toolbar">
+        <button class="cta" id="run">run workflow</button>
+        <button class="ghost" id="clear">clear canvas</button>
+        <span class="info" id="flowStatus"></span>
+      </div>
+      <div class="builder">
+        <div class="box palette"><span class="cap">enabled agents</span>
+          <div class="hint">drag onto the canvas</div>
+          <div id="paletteList"></div>
+        </div>
+        <div id="canvas">
+          <svg id="wires"><defs><linearGradient id="cur" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#077ac7"/><stop offset="1" stop-color="#6b21ef"/></linearGradient></defs></svg>
+          <div class="empty" id="empty">empty canvas — drag an agent here</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="dlg">
+  <div class="bar-t"><b>new agent</b><span>esc to close</span></div>
+  <form method="dialog" id="form"><div>
+    <label for="f-id">name</label>
+    <input id="f-id" name="id" required placeholder="doc-writer" pattern="[a-z0-9\-]+"
+           title="lowercase letters, numbers and dashes">
+    <label for="f-model">model</label>
+    <select id="f-model" name="model"><option>opus</option><option>sonnet</option></select>
+    <label for="f-desc">what it does</label>
+    <textarea id="f-desc" name="desc" rows="3" required placeholder="Writes the README section for a new endpoint."></textarea>
+    <div class="actions">
+      <button class="ghost" value="cancel" formnovalidate>cancel</button>
+      <button class="cta" value="save">add agent</button>
+    </div>
+  </div></form>
+</dialog>
+
+<div class="statusbar">
+  <span class="mode">RUN</span>
+  <span class="phase" id="sphase"></span>
+  <span class="keys" aria-hidden="true">
+    <span><b class="key">a</b> agents</span>
+    <span><b class="key">r</b> runs</span>
+    <span><b class="key">w</b> workflows</span>
+    <span><b class="key">n</b> new</span>
+  </span>
+</div>
+
+<script>
+// ponytail: all state in memory, no persistence and no backend. Wire to agent.py when the shapes settle.
+const AGENTS = [
+  {id:'planmaker',   role:'plan',   model:'opus',   on:true,  desc:'Turns a GitHub issue into a plan and an ordered task list. Writes agent-plans/&lt;n&gt;/ and nothing else.'},
+  {id:'implementer', role:'task',   model:'sonnet', on:true,  desc:'Works one task from tasks.md per session. Runs with no persona on purpose — the default harness plus the deny rules is the point.'},
+  {id:'reviewer',    role:'review', model:'opus',   on:true,  desc:'Reads the branch diff once the task loop is done. Advisory: it never blocks the push.'},
+  {id:'security',    role:'review', model:'opus',   on:false, desc:'Looks for leaked secrets and unexpected network calls in the diff.'},
+  {id:'cleaner',     role:'task',   model:'sonnet', on:false, desc:'Dead code, unused dependencies, lint drift.'},
+];
+const RUNS = [
+  {repo:'sa-es-ir/Llama',   n:102, title:'Upload receiver for transfers',        phase:'implementing',      cls:'live', done:7, total:12},
+  {repo:'sa-es-ir/rookery', n:3,   title:'Create the frontend portal',           phase:'awaiting-approval', cls:'',     done:0, total:5},
+  {repo:'sa-es-ir/Llama',   n:98,  title:'Permission handler drops role claims', phase:'error',             cls:'err',  done:2, total:6},
+  {repo:'sa-es-ir/rookery', n:1,   title:'Add default agents',                   phase:'done',              cls:'ok',   done:4, total:4},
+];
+const flow = {nodes:[], edges:[], seq:0};
+
+const $ = s => document.querySelector(s);
+const el = (t,c,h) => {const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+// progress as characters, since a 3px div is not a thing a terminal can draw
+const meter = (done,total,w=10) => {
+  const f = Math.round(done / total * w);
+  return '<i>' + '#'.repeat(f) + '.'.repeat(w - f) + '</i> ' + done + '/' + total;
+};
+
+/* --- shell nav --- */
+function go(view){
+  // toggleAttribute sets the value to "", which [aria-current=page] does not match
+  document.querySelectorAll('.side .menu a').forEach(x =>
+    x.dataset.view === view ? x.setAttribute('aria-current','page') : x.removeAttribute('aria-current'));
+  ['agents','runs','flow'].forEach(v => $('#'+v).hidden = v !== view);
+  $('#title').textContent = view === 'flow' ? 'workflows' : view;
+  $('#new').hidden = view !== 'agents';
+  // wires are measured off the DOM, which reads zero while the view is hidden
+  if (view === 'flow') render();
+  status();
+}
+document.querySelectorAll('.side .menu a').forEach(a => a.onclick = () => go(a.dataset.view));
+
+function status(){
+  const open = RUNS.filter(r => !['done','error'].includes(r.phase)).length;
+  $('#sphase').textContent = AGENTS.filter(a => a.on).length + ' agents enabled  ·  ' +
+    open + ' runs in flight  ·  ' + flow.nodes.length + ' nodes on canvas';
+}
+
+/* --- agents --- */
+function agents(){
+  const g = $('#agentGrid'); g.innerHTML = '';
+  g.append(...AGENTS.map(a => {
+    const c = el('div','box card',
+      '<span class="cap">' + a.role + '</span>' +
+      '<h3>' + a.id + '</h3>' +
+      '<p>' + a.desc + '</p>' +
+      '<div class="meta"><button class="toggle" aria-pressed="' + a.on + '">' +
+        '<b>[' + (a.on ? 'x' : ' ') + ']</b> ' + (a.on ? 'enabled' : 'disabled') + '</button>' +
+      '<span class="tag">' + a.model + '</span></div>');
+    c.querySelector('.toggle').onclick = () => {
+      a.on = !a.on;
+      if (!a.on) {  // an agent that is off can't stay on the canvas
+        flow.nodes.filter(n => n.agent === a.id).forEach(n => remove(n));
+      }
+      agents(); palette(); counts();
+    };
+    return c;
+  }));
+}
+
+/* --- runs --- */
+$('#runList').append(...RUNS.map(r => el('div','run',
+  '<span class="where">' + r.repo + ' #' + r.n + '</span>' +
+  '<span class="what">' + r.title + '</span>' +
+  '<span class="lbl ' + r.cls + '">claude:' + r.phase + '</span>' +
+  '<span class="prog">' + meter(r.done, r.total) + '</span>')));
+
+function counts(){
+  $('#cAgents').textContent = '[' + AGENTS.filter(a => a.on).length + '/' + AGENTS.length + ']';
+  $('#cRuns').textContent = '[' + RUNS.filter(r => !['done','error'].includes(r.phase)).length + ']';
+  status();
+}
+
+/* --- new agent (native dialog, no modal library) --- */
+$('#new').onclick = () => $('#dlg').showModal();
+$('#form').onsubmit = e => {
+  if (e.submitter && e.submitter.value === 'cancel') return;
+  const f = new FormData(e.target);
+  AGENTS.push({id:f.get('id'), role:'task', model:f.get('model'), on:true, desc:f.get('desc')});
+  e.target.reset(); agents(); palette(); counts();
+};
+
+/* --- workflow --- */
+function palette(){
+  const p = $('#paletteList'); p.innerHTML = '';
+  const on = AGENTS.filter(a => a.on);
+  if (!on.length) { p.append(el('div','hint','Every agent is disabled.')); return; }
+  p.append(...on.map(a => {
+    const d = el('div','drag', a.id + '<small>' + a.model + '</small>');
+    d.draggable = true;
+    d.ondragstart = e => e.dataTransfer.setData('text/plain', a.id);
+    return d;
+  }));
+}
+
+const canvas = $('#canvas'), wires = $('#wires');
+canvas.ondragover = e => {e.preventDefault(); canvas.classList.add('over');};
+canvas.ondragleave = () => canvas.classList.remove('over');
+canvas.ondrop = e => {
+  e.preventDefault(); canvas.classList.remove('over');
+  const r = canvas.getBoundingClientRect();
+  add(e.dataTransfer.getData('text/plain'), e.clientX - r.left - 98, e.clientY - r.top - 34);
+};
+
+function add(agent, x, y){
+  const n = {id:'n' + (++flow.seq), agent, x:Math.max(8,x), y:Math.max(8,y), status:'idle'};
+  flow.nodes.push(n); render(); return n;
+}
+
+function remove(n){
+  flow.nodes = flow.nodes.filter(x => x !== n);
+  flow.edges = flow.edges.filter(e => e.from !== n.id && e.to !== n.id);
+  armed = null;
+}
+
+/* Order = follow the wires from the node nobody points at. Forks take the first
+   edge out; a closed cycle has no head and yields nothing to run. */
+function order(){
+  const targets = new Set(flow.edges.map(e => e.to));
+  let cur = flow.nodes.find(n => !targets.has(n.id));
+  const out = [];
+  while (cur && !out.includes(cur)){
+    out.push(cur);
+    const e = flow.edges.find(e => e.from === cur.id);
+    cur = e && flow.nodes.find(n => n.id === e.to);
+  }
+  return out;
+}
+
+let armed = null; // id of the node whose output port is waiting for a target
+
+function render(){
+  [...canvas.querySelectorAll('.node')].forEach(n => n.remove());
+  $('#empty').hidden = flow.nodes.length > 0;
+  const steps = order();
+  $('#flowStatus').textContent = flow.nodes.length + ' node' + (flow.nodes.length === 1 ? '' : 's') +
+    ' · ' + steps.length + '-step sequence';
+
+  for (const n of flow.nodes){
+    const i = steps.indexOf(n) + 1;
+    const d = el('div', 'node ' + n.status,
+      '<span class="x">&times;</span><b>' + (i ? i + '. ' : '') + n.agent + '</b>' +
+      '<small>' + n.status + '</small><div class="port in"></div><div class="port out"></div>');
+    d.style.left = n.x + 'px'; d.style.top = n.y + 'px';
+    d.dataset.id = n.id;
+    d.querySelector('.x').onclick = ev => {ev.stopPropagation(); remove(n); render();};
+    d.querySelector('.out').onpointerdown = ev => {ev.stopPropagation(); armed = n.id; render();};
+    d.querySelector('.in').onpointerdown = ev => {
+      ev.stopPropagation();
+      if (armed && armed !== n.id && !flow.edges.some(e => e.from === armed && e.to === n.id))
+        flow.edges.push({from:armed, to:n.id});
+      armed = null; render();
+    };
+    if (armed === n.id) d.querySelector('.out').classList.add('armed');
+    d.onpointerdown = ev => drag(ev, n, d);
+    canvas.append(d);
+  }
+  wire();
+  status();
+}
+
+function drag(ev, n, d){
+  const ox = ev.clientX - n.x, oy = ev.clientY - n.y;
+  d.setPointerCapture(ev.pointerId);
+  d.onpointermove = e => {
+    n.x = Math.max(0, Math.min(canvas.clientWidth - 196, e.clientX - ox));
+    n.y = Math.max(0, Math.min(canvas.clientHeight - 72, e.clientY - oy));
+    d.style.left = n.x + 'px'; d.style.top = n.y + 'px';
+    wire();
+  };
+  d.onpointerup = () => {d.onpointermove = null;};
+}
+
+function wire(){
+  [...wires.querySelectorAll('path')].forEach(p => p.remove());
+  // ports sit at the node's vertical centre — read it rather than guessing the card height
+  const at = id => {
+    const d = canvas.querySelector('.node[data-id="' + id + '"]');
+    return d && [d.offsetLeft, d.offsetLeft + d.offsetWidth, d.offsetTop + d.offsetHeight / 2];
+  };
+  for (const e of flow.edges){
+    const a = at(e.from), b = at(e.to);
+    if (!a || !b) continue;
+    const x1 = a[1], y1 = a[2], x2 = b[0], y2 = b[2], m = Math.max(40, Math.abs(x2 - x1) / 2);
+    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C' + (x1+m) + ' ' + y1 + ' ' + (x2-m) + ' ' + y2 + ' ' + x2 + ' ' + y2);
+    p.setAttribute('stroke','url(#cur)');
+    p.setAttribute('stroke-width','2');
+    p.setAttribute('fill','none');
+    p.onclick = () => {flow.edges = flow.edges.filter(x => x !== e); render();};
+    wires.append(p);
+  }
+}
+
+$('#clear').onclick = () => {flow.nodes = []; flow.edges = []; armed = null; render();};
+$('#run').onclick = () => {
+  const steps = order();
+  if (!steps.length) return;
+  flow.nodes.forEach(n => n.status = 'idle');
+  steps.forEach((n, i) => {
+    setTimeout(() => {n.status = 'running'; render();}, i * 900);
+    setTimeout(() => {n.status = 'done';    render();}, i * 900 + 800);
+  });
+  render();
+};
+
+agents(); palette(); counts();
+add('planmaker', 24, 50); add('implementer', 215, 175); add('reviewer', 406, 300);
+flow.edges.push({from:'n1', to:'n2'}, {from:'n2', to:'n3'});
+render();
+
+// Keybindings, same contract as the landing page: only what the status bar advertises.
+const VIEWS = {a:'agents', r:'runs', w:'flow'};
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || $('#dlg').open ||
+      /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (VIEWS[e.key]) go(VIEWS[e.key]);
+  // without this the "n" lands in the name field the dialog just focused
+  else if (e.key === 'n' && !$('#new').hidden) { e.preventDefault(); $('#dlg').showModal(); }
+});
+
+// ponytail: sequencing is the only logic worth a check — open portal.html?test
+if (location.search.includes('test')){
+  const saved = flow.edges;
+  console.assert(order().map(n => n.agent).join() === 'planmaker,implementer,reviewer', 'chain order');
+  flow.edges = [];
+  console.assert(order().length === 1, 'no edges -> head only');
+  flow.edges = [{from:'n1',to:'n2'},{from:'n2',to:'n1'}];
+  console.assert(order().map(n => n.id).join() === 'n3', 'starts at the node nobody points at');
+  flow.edges = [{from:'n1',to:'n2'},{from:'n2',to:'n3'},{from:'n3',to:'n1'}];
+  console.assert(order().length === 0, 'closed cycle has no head -> empty sequence, not a hang');
+  console.assert(meter(7, 12) === '<i>######....</i> 7/12', 'meter fills proportionally');
+  flow.edges = saved; render();
+  console.log('self-check done');
+}
+</script>
