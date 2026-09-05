@@ -103,4 +103,4 @@ their wording as code. `sh()` raises on non-zero; pass `check=False` for the cas
 Phases 2–5 (bug shortcut path, GitHub App, OpenSpec, VPS + queue) are unbuilt and specified in
 [ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
 
-For desing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
+For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
