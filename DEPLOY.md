@@ -10,8 +10,10 @@ user it runs as.
 ## 0. Before you start
 
 - A GitHub PAT **belonging to a machine account, not to you** (step 5 explains why) —
-  classic with scope **`repo`** (add **`workflow`** only if a task might
-  edit `.github/workflows/*`, **`read:org`** only if the repo is in an org). Fine-grained
+  classic with scopes **`repo`** and **`read:org`** (add **`workflow`** only if a task
+  might edit `.github/workflows/*`). `read:org` is not optional even for a personal repo —
+  `gh auth login --with-token` validates it and answers
+  `error validating token: missing required scope 'read:org'` without it. Fine-grained
   equivalent: Contents RW, Issues RW, Pull requests RW, Metadata R.
 - The **target** repo the agent will work on. Never this one.
 - **Check the CPU first — see [AVX2](#avx2-the-two-hour-one) below.** A VPS with a generic
@@ -80,11 +82,20 @@ Everything from here runs as `rookery`.
 
 ```bash
 su - rookery
-read -rs TOKEN && echo "$TOKEN" | gh auth login --with-token && unset TOKEN
+read -rs TOKEN          # no prompt, no echo — paste the token at the blank line, press Enter
+echo "$TOKEN" | gh auth login --with-token
+unset TOKEN
 gh auth setup-git          # so raw `git push` from the worktree authenticates
 gh auth status
 gh api user --jq .login    # this is ME — filtered out of approvals so the bot can't approve itself
 ```
+
+`read -rs` is silent by design; a terminal sitting there with no prompt is waiting for the
+paste, not hung. Keep it on its own line and keep the token out of the command — a literal
+`echo "ghp_..." | gh auth login` lands the secret in `~/.bash_history`.
+
+Write on the target repo is required whether it is public or private: the agent pushes
+`feature/issue-<n>` to the repo itself and opens the PR there, never a fork.
 
 **Use a PAT from a separate machine account, not your own login.** `ME` is filtered out of
 `enqueue()` so the bot cannot answer or approve itself — so if `ME` is *you*, every comment
@@ -329,11 +340,49 @@ gh issue view N --repo OWNER/REPO --json labels          # must carry some claud
 Nearly always it is the first: `gh` on the server was authenticated with your own PAT, so
 `ME` is your login and the `user != ME` guard eats your comments. Fix it with a machine
 account (step 5), then **restart the service** — `ME` is read once at startup and stays
-stale otherwise.
+stale otherwise. Switching the token without restarting looks identical to not switching it.
+
+Ruling the webhook in or out needs your *own* account, not the bot's — listing hooks
+requires repo **admin**, so as `rookery` it answers `404` and suggests `gh auth refresh -s
+admin:repo_hook`. Ignore that; the scope would not help (the bot has Write, not admin) and
+the agent never needs it. Run this where you are authenticated as the repo owner:
+
+```bash
+gh api repos/OWNER/REPO/hooks --jq '.[] | {id, url: .config.url, events, active}'
+```
+
+Want `issue_comment` in `events`. A hook subscribed to `issues` only still fires `job:
+start` on a label, which makes the agent look alive while every comment is silently lost.
 
 Do not "fix" this by dropping the `ME` check. The bot comments after every planning round;
 without the filter its own comment re-enters `enqueue()` and loops forever, and it can
 approve itself.
+
+### "I approve it" is not an approval
+
+`APPROVE` is `^\s*(approve|approved|lgtm|go ahead)\b` matched with `.match()`, so the
+comment must **begin** with one of those words. `approve` and `Approve, ship it` work;
+`I approve it` does not, and neither does `approves it` — the `\b` requires the word to
+end there.
+
+It does not fail loudly, which is the confusing part. On `claude:awaiting-approval` a
+non-matching comment falls through to the `elif` and is fed back as developer feedback —
+another planning round, another comment, no implementation. It looks like the agent
+ignored you when it actually re-planned.
+
+### `claude:error` also means "the reviewer wants changes"
+
+A run that ends `claude review -> changes-needed` pushes the branch, opens the draft PR,
+and *then* sets `claude:error`. Nothing crashed — the label is overloaded, because the
+review is advisory and only flags.
+
+Tell the two apart by the comment on the issue, not the label: a real failure posts
+`Agent error:` with a traceback; a `changes-needed` verdict posts a short "the reviewer
+wants changes" line pointing at the **Review** section of the PR body.
+
+Commenting `approve` again on that issue resumes the task loop at the first unticked box —
+with every box already ticked, that is a no-op and it simply re-reviews. Fix the flagged
+code yourself, or reply with feedback to get another planning round.
 
 ### `OAuth access token has been revoked`
 
