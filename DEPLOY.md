@@ -152,13 +152,73 @@ python3 agent.py OWNER/REPO 12 approve   # task loop -> push -> draft PR
 Same `handle()` as the webhook; only the transport differs. If these pass, the agent is
 deployed and only delivery is left.
 
-## 10. Webhook — server, rookery
+## 10. Listen — server, root then rookery
 
-`agent.py` binds loopback, which GitHub cannot reach. One-line change:
+`agent.py` binds loopback by default, which GitHub cannot reach. Set `HOST=` (empty =
+all interfaces) in `/opt/rookery/.env`:
 
 ```bash
-sed -i 's/HTTPServer(("127.0.0.1", PORT)/HTTPServer(("", PORT)/' /opt/rookery/agent.py
+echo 'HOST=' >> /opt/rookery/.env
 ```
+
+If you deployed before `HOST` existed, re-copy `agent.py` too — otherwise the bind stays
+hardcoded and the new `.env` line does nothing:
+
+```bash
+scp agent.py root@SERVER_IP:/opt/rookery/          # your machine
+chown rookery:rookery /opt/rookery/agent.py        # server, root
+```
+
+Run it under systemd from the start — the unit file and `systemctl` need **root**, the
+process itself runs as `rookery` via `User=`:
+
+```bash
+tee /etc/systemd/system/rookery.service >/dev/null <<'EOF'
+[Service]
+User=rookery
+WorkingDirectory=/opt/rookery
+ExecStart=/usr/bin/python3 /opt/rookery/agent.py
+Restart=always
+Environment=PATH=/home/rookery/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now rookery
+journalctl -u rookery -n 20 --no-pager     # want: listening on *:8787 for OWNER/REPO
+```
+
+Kill any foreground `python3 agent.py` or `tmux` session first, or the unit dies on
+`Address already in use`. `systemctl is-active rookery` and a `pid=` in
+`ss -lntp | grep 8787` matching `systemctl show -p MainPID rookery` tell the unit apart
+from a leftover manual run — a port probe cannot, both answer identically.
+
+`User=` makes systemd set `HOME=/home/rookery` itself, so `claude` finds
+`~/.claude/.credentials.json`. The explicit `PATH` is the only environment you must
+supply: systemd does not read `.bashrc`, and without `~/.local/bin` first it would find
+the system `claude`.
+
+### Prove it is reachable before touching GitHub
+
+From your own machine, **not** the server — the point is to cross the provider firewall:
+
+```bash
+curl.exe -sv -m 10 http://SERVER_IP:8787/ -X POST -d '{}'    # PowerShell: curl.exe, not curl
+```
+
+Read the outcome, each one means something different:
+
+| Result | Meaning |
+|---|---|
+| `HTTP/1.0 401 Unauthorized` | **Working.** The HMAC rejected an unsigned body — exactly right. |
+| `Connection refused` | Reached the host, nothing listening. The service is down or still on `127.0.0.1`. |
+| Hangs, then times out | A firewall is dropping. `ufw` is inactive on a fresh 24.04, so look at the provider's cloud firewall panel for an inbound TCP 8787 rule. |
+
+In Windows PowerShell, bare `curl` is an alias for `Invoke-WebRequest` and answers
+`A parameter cannot be found that matches parameter name 'X'`. Use `curl.exe`.
+
+## 11. Deliver — GitHub
 
 GitHub → target repo → **Settings → Webhooks → Add webhook**:
 
@@ -169,41 +229,28 @@ GitHub → target repo → **Settings → Webhooks → Add webhook**:
 | Secret | `WEBHOOK_SECRET` from `.env` |
 | Events | *Let me select* → **Issues** + **Issue comments** |
 
-`ufw` is inactive on a fresh 24.04, so 8787 is already open; a provider-side cloud
-firewall may still need the rule. HTTP is cleartext — the HMAC authenticates the payload,
-it does not encrypt it. Put Caddy in front once this handles a real repo.
+Or in one command, as `rookery`:
 
-Prefer no open port? Leave the bind alone and tunnel instead:
+```bash
+gh api repos/OWNER/REPO/hooks -f name=web -F active=true   -f 'events[]=issues' -f 'events[]=issue_comment'   -f config[url]=http://SERVER_IP:8787/ -f config[content_type]=json   -f config[secret]="$WEBHOOK_SECRET"
+```
+
+GitHub sends a `ping` on save. **Recent Deliveries** should show a green `204`; a red
+`401` there means the secret does not match `.env`.
+
+Now label a **fresh** issue `claude:trigger` — `enqueue()` ignores any issue that already
+carries a `claude:*` phase label, so the issues you exercised by CLI in step 9 will not
+re-fire (see the gotchas). `job: start` in `journalctl -u rookery -f` means the chain is
+live end to end.
+
+HTTP is cleartext — the HMAC authenticates the payload, it does not encrypt it. Put Caddy
+in front once this handles a real repo.
+
+Prefer no open port? Leave `HOST` unset and tunnel instead, as a second unit:
 
 ```bash
 npx smee-client --url https://smee.io/<channel> --target http://127.0.0.1:8787/
 ```
-
-## 11. Run — server, rookery
-
-```bash
-cd /opt/rookery && tmux new -s rookery 'python3 agent.py'
-# detach: ctrl-b d   ·   reattach: tmux attach -t rookery
-```
-
-Label an issue `claude:trigger`; `job: start` in the log means the chain is live.
-
-Surviving reboots — `/etc/systemd/system/rookery.service`:
-
-```ini
-[Service]
-User=rookery
-WorkingDirectory=/opt/rookery
-ExecStart=/usr/bin/python3 /opt/rookery/agent.py
-Restart=always
-Environment=PATH=/home/rookery/.local/bin:/usr/local/bin:/usr/bin:/bin
-
-[Install]
-WantedBy=multi-user.target
-```
-
-The explicit `PATH` matters — systemd does not read `.bashrc`, and without
-`~/.local/bin` first it would find the system `claude`.
 
 ---
 

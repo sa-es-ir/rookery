@@ -35,6 +35,7 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 SECRET = os.environ["WEBHOOK_SECRET"].encode()
 ALLOW = {u.strip().lower() for u in os.environ["ALLOWLIST"].split(",") if u.strip()}
 PORT = int(os.environ.get("PORT", "8787"))
+HOST = os.environ.get("HOST", "127.0.0.1")  # "" = all interfaces, for a public webhook
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 log = logging.info
@@ -427,5 +428,5 @@ if __name__ == "__main__":
         sys.exit()
 
     threading.Thread(target=worker, daemon=True).start()
-    print(f"listening on :{PORT} for {', '.join(REPOS)} (bot user: {ME})")
-    HTTPServer(("127.0.0.1", PORT), Hook).serve_forever()
+    print(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS)} (bot user: {ME})")
+    HTTPServer((HOST, PORT), Hook).serve_forever()
