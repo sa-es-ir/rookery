@@ -428,5 +428,7 @@ if __name__ == "__main__":
         sys.exit()
 
     threading.Thread(target=worker, daemon=True).start()
-    print(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS)} (bot user: {ME})")
+    # log(), not print(): stdout is block-buffered under systemd, stderr is not,
+    # so a print() banner never reaches the journal.
+    log(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS)} (bot user: {ME})")
     HTTPServer((HOST, PORT), Hook).serve_forever()

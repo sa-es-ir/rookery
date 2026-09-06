@@ -9,7 +9,8 @@ user it runs as.
 
 ## 0. Before you start
 
-- A GitHub PAT — classic with scope **`repo`** (add **`workflow`** only if a task might
+- A GitHub PAT **belonging to a machine account, not to you** (step 5 explains why) —
+  classic with scope **`repo`** (add **`workflow`** only if a task might
   edit `.github/workflows/*`, **`read:org`** only if the repo is in an org). Fine-grained
   equivalent: Contents RW, Issues RW, Pull requests RW, Metadata R.
 - The **target** repo the agent will work on. Never this one.
@@ -57,9 +58,10 @@ scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credential
 Skipped on purpose: `repos.json` (paths are machine-specific — written in step 8),
 `work/`, `ui/`, `.git`.
 
-The credentials copy saves you the interactive login. It logs the server in as the same
-account as your laptop, sharing one seat; use a separate account if concurrent sessions
-trip a limit.
+The credentials copy saves you the interactive login for first light only — the token it
+carries rotates, and your laptop refreshing it revokes the server's copy mid-run (see
+[the gotcha](#oauth-access-token-has-been-revoked)). Run `claude` → `/login` on the
+server once it works, ideally on an account of its own rather than sharing your seat.
 
 ## 4. Hand ownership over — server, root
 
@@ -83,6 +85,13 @@ gh auth setup-git          # so raw `git push` from the worktree authenticates
 gh auth status
 gh api user --jq .login    # this is ME — filtered out of approvals so the bot can't approve itself
 ```
+
+**Use a PAT from a separate machine account, not your own login.** `ME` is filtered out of
+`enqueue()` so the bot cannot answer or approve itself — so if `ME` is *you*, every comment
+you write is discarded and the agent cannot hear you at all
+(see [the gotcha](#the-bot-ignores-my-comments)). Create e.g. `you-rookery`, invite it to
+the target repo with **Write**, accept the invite, and use its PAT here. Your own login goes
+in `ALLOWLIST`, never here.
 
 ## 6. Git identity — server, rookery
 
@@ -177,7 +186,7 @@ tee /etc/systemd/system/rookery.service >/dev/null <<'EOF'
 [Service]
 User=rookery
 WorkingDirectory=/opt/rookery
-ExecStart=/usr/bin/python3 /opt/rookery/agent.py
+ExecStart=/usr/bin/python3 -u /opt/rookery/agent.py
 Restart=always
 Environment=PATH=/home/rookery/.local/bin:/usr/local/bin:/usr/bin:/bin
 
@@ -188,6 +197,18 @@ systemctl daemon-reload
 systemctl enable --now rookery
 journalctl -u rookery -n 20 --no-pager     # want: listening on *:8787 for OWNER/REPO
 ```
+
+Every later change to `agent.py` or `.env` needs both halves — copy it up, then restart,
+as **root** (`rookery` is not a sudoer):
+
+```bash
+scp agent.py root@SERVER_IP:/opt/rookery/        # your machine
+chown rookery:rookery /opt/rookery/agent.py      # server, root
+systemctl restart rookery                        # server, root
+```
+
+Editing the file alone changes nothing — the running process keeps the old code, and
+module-level values like `ME` and `REPOS` are read once at startup.
 
 Kill any foreground `python3 agent.py` or `tmux` session first, or the unit dies on
 `Address already in use`. `systemctl is-active rookery` and a `pid=` in
@@ -232,7 +253,10 @@ GitHub → target repo → **Settings → Webhooks → Add webhook**:
 Or in one command, as `rookery`:
 
 ```bash
-gh api repos/OWNER/REPO/hooks -f name=web -F active=true   -f 'events[]=issues' -f 'events[]=issue_comment'   -f config[url]=http://SERVER_IP:8787/ -f config[content_type]=json   -f config[secret]="$WEBHOOK_SECRET"
+gh api repos/OWNER/REPO/hooks -f name=web -F active=true \
+  -f 'events[]=issues' -f 'events[]=issue_comment' \
+  -f config[url]=http://SERVER_IP:8787/ -f config[content_type]=json \
+  -f config[secret]="$WEBHOOK_SECRET"
 ```
 
 GitHub sends a `ping` on save. **Recent Deliveries** should show a green `204`; a red
@@ -283,6 +307,54 @@ Fixes, best first:
 
 With (3), a bare `npm install -g @anthropic-ai/claude-code` silently reinstalls the broken
 build and puts you right back here. Keep the pin.
+
+### The bot ignores my comments
+
+You comment, GitHub's **Recent Deliveries** shows a green `204`, and nothing happens — no
+reply, no phase flicker, and `journalctl -u rookery | grep 'job:'` shows no `job: continue`.
+
+The 204 means nothing: `do_POST` answers *before* calling `enqueue()`, so that a slow job
+never trips GitHub's 10s delivery timeout. Every authenticated payload reports green
+whether it was acted on or dropped.
+
+`enqueue()` drops an `issue_comment` unless all three hold — check them in this order:
+
+```bash
+gh api user --jq .login                                  # server, rookery: this is ME
+journalctl -u rookery --no-pager | grep 'listening on'   # prints "(bot user: ...)" at startup
+grep ALLOWLIST /opt/rookery/.env                         # must contain YOUR login, lowercase
+gh issue view N --repo OWNER/REPO --json labels          # must carry some claude:* phase label
+```
+
+Nearly always it is the first: `gh` on the server was authenticated with your own PAT, so
+`ME` is your login and the `user != ME` guard eats your comments. Fix it with a machine
+account (step 5), then **restart the service** — `ME` is read once at startup and stays
+stale otherwise.
+
+Do not "fix" this by dropping the `ME` check. The bot comments after every planning round;
+without the filter its own comment re-enters `enqueue()` and loops forever, and it can
+approve itself.
+
+### `OAuth access token has been revoked`
+
+Mid-run, `claude failed (1)` with `api_error_status: 401` and
+`"OAuth access token has been revoked."` — the `.credentials.json` copied in step 3 is a
+snapshot of a **rotating** token. Your laptop refreshing it, or any re-login on that
+account, revokes the server's copy. Permanent, not transient, and it recurs.
+
+Log the server in on its own instead:
+
+```bash
+su - rookery
+claude            # /login — prints a URL, authorize it in a browser, paste the code back
+timeout 120 claude -p 'say ok' --output-format json </dev/null    # the step 7 gate again
+```
+
+Then comment `approve` on the issue: it is on `claude:error` with every task before the
+failing one already committed, so the loop resumes at the first unticked box.
+
+The credentials copy is a convenience for first light. If the revocation keeps recurring,
+two machines are contending for one seat — give the bot its own account.
 
 ### Hangs are silent by design
 
