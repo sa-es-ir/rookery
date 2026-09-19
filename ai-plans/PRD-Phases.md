@@ -1,7 +1,10 @@
 # Rookery — PRD Implementation Phases
 
-**Status:** proposed, awaiting review. Nothing here is implemented.
-**Last updated:** 13 September 2026
+**Status:** Phases 1–4 built and live-tested (notes: [phase1-notes.md](phase1-notes.md),
+[phase2-notes.md](phase2-notes.md), [phase3-4-notes.md](phase3-4-notes.md)). Next: §5 step 3,
+an invited trial, after the security items in phase3-4-notes.md "Next steps".
+Phases 5–6 not started.
+**Last updated:** 19 September 2026
 
 Companion docs: [PRD.md](PRD.md) (the requirements this file sequences),
 [github-issue-agent-plan.md](github-issue-agent-plan.md) (the original build

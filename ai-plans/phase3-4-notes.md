@@ -139,3 +139,33 @@ have been logged before 11:49:08.
 - Test leftovers on GitHub: `rookery-throwaway` #1 (awaiting approval), #2 + draft PR #3,
   and `rookery-throwaway-2` #1 (awaiting approval). Delete both repos when you like:
   `gh repo delete sa-es-ir/rookery-throwaway{,-2}` (needs the `delete_repo` scope).
+
+## Next steps
+
+Phases 1–4 are done. Per [PRD-Phases.md](PRD-Phases.md) §5, the next step is **not**
+Phase 5. It is running Rookery with a few invited users, and only then deciding on Phase 5
+(API/UI), the sandbox and Phase 6, based on whether people want it.
+
+**Before anyone else uses the box.** These open security items have carried over since Phase 1:
+
+1. **Log out the server's `gh`** (`gh auth logout` as `rookery`). The code no longer
+   uses it, but the agent can read that token. Takes a minute.
+2. **SSH hardening:** `PasswordAuthentication no`, `PermitRootLogin prohibit-password`.
+   Root is being password-brute-forced. Needs the operator's approval; confirm a second key
+   session works before closing the first.
+3. **Delete Llama's old per-repo webhook.** It only produces 401s now.
+4. **`app.pem` is readable by the agent.** `claude` runs as the user that can read the App
+   key, which can mint a token for any installed repo. The real fix is the sandbox. The
+   smaller fix is running `claude` as a separate user, which should happen before
+   strangers are invited.
+
+**For the invited trial:**
+
+- The App is installable "only on this account". Invited users need either their repos
+  under this account, or the App switched to "any account" plus an allowlist of accounts
+  that may install it (the invite-only gate from §1.2, not built yet).
+- Check `RUN_CAP` against real issues. 10 calls/day stops anything over 8 tasks
+  (plan + tasks + review) mid-run until the next UTC day.
+- Delete the throwaway repos: `gh repo delete sa-es-ir/rookery-throwaway{,-2}`.
+
+Suggested order: 1 and 3 now (trivial), then 2 and 4 once approved and planned.
