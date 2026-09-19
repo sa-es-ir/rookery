@@ -56,8 +56,7 @@ scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
 ```
 
-Skipped on purpose: `repos.json` (paths are machine-specific — written in step 8),
-`work/`, `ui/`, `.git`.
+Skipped on purpose: `work/` (clones are made on the server — step 8), `ui/`, `.git`.
 
 The credentials copy saves you the interactive login for first light only — the token it
 carries rotates, and your laptop refreshing it revokes the server's copy mid-run (see
@@ -138,35 +137,34 @@ JSON with a `"result"` field means the whole chain works — this is the exact c
 `/exit`. That writes `~/.claude.json`, the onboarding flag the credentials file does not
 cover.
 
-## 8. Target repo and config — server, rookery
+## 8. Target repos — GitHub, not the server
 
-With no `gh` login on the box, borrow the App's token for these one-off calls:
+There is no repo list to write. At startup `sync()` asks the App for every repository it
+is installed on, clones each one over https into `$WORKSPACE/repos/<owner>_<repo>`
+(`WORKSPACE` defaults to `/opt/rookery/work`), creates the `claude:*` labels, and takes
+the base branch from the repo's `default_branch`. After that, `installation` and
+`installation_repositories` events keep the list current — no restart:
+
+- **Add a repo** — App settings → *Install App* → the gear on your account →
+  *Repository access*. With *Only select repositories*, pick it there; with
+  *All repositories*, a new repo is added the moment it is created. The journal shows
+  `OWNER/REPO live, base main`.
+- **Remove a repo** — deselect it (or uninstall the App). Rookery stops accepting its
+  events at once, then deletes the clone and every worktree — unless a worktree branch has
+  commits that are not on GitHub, in which case it logs `NOT removed — unpushed commits`
+  and keeps everything. Push or delete that branch by hand, then remove the directories.
+- **A PR closes** (merged or not) — the issue's worktree is removed, with the same
+  unpushed-commits check.
+
+A repo with no commits yet has no base to branch from: give it a first commit (a README)
+before triggering an issue there.
+
+For one-off `gh` calls as the App (there is no `gh` login on the box):
 
 ```bash
 tok() { (cd /opt/rookery && python3 -c "import agent; print(agent.token('$1'))"); }
-T=$(tok OWNER/REPO)
-git -c http.extraHeader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$T" | base64 -w0)" \
-  clone https://github.com/OWNER/REPO /home/rookery/repos/REPO
-
-cat > /opt/rookery/repos.json <<'EOF'
-{
-  "OWNER/REPO": { "path": "/home/rookery/repos/REPO", "base": "main" }
-}
-EOF
-
-GH_TOKEN=$T gh repo view OWNER/REPO --json nameWithOwner --jq .nameWithOwner   # must equal the key, exactly
-git -C /home/rookery/repos/REPO symbolic-ref --short HEAD                      # must equal "base"
-unset T
+GH_TOKEN=$(tok OWNER/REPO) gh issue list --repo OWNER/REPO
 ```
-
-Clone over **https**: `agent.py` authenticates `git fetch origin` with an https header,
-which an ssh origin ignores. The push always goes to the https URL, whatever origin is.
-`git -c` before `clone` is not saved into the clone's `.git/config`; `clone -c` would be.
-
-**The key is case-sensitive.** `enqueue()` tests `repo not in REPOS` against the webhook's
-`full_name`, so a key of `sa-es-ir/llama` silently drops every event for
-`sa-es-ir/Llama`. CLI dry runs still pass, because `gh` is case-insensitive — which is
-exactly why this hides.
 
 Check `/opt/rookery/.env`: `ALLOWLIST` holds the logins allowed to comment `approve`, and
 note `WEBHOOK_SECRET` for step 10.
@@ -230,7 +228,8 @@ systemctl restart rookery                        # server, root
 ```
 
 Editing the file alone changes nothing — the running process keeps the old code, and
-module-level values like `ME` and `REPOS` are read once at startup.
+module-level values like `ME` are read once at startup. (`REPOS` is rebuilt from the
+App at every start and kept current by events after that.)
 
 Kill any foreground `python3 agent.py` or `tmux` session first, or the unit dies on
 `Address already in use`. `systemctl is-active rookery` and a `pid=` in
@@ -420,6 +419,9 @@ look — but a geo-block is a fast 403, never a hang.
 
 - `git fetch` prompting for a username, or `Repository not found` on a private repo, means
   the clone's origin is ssh or the App is not installed on that repo.
+- A repo that left the installation while the service was down keeps its clone: removal
+  is event-driven only. Delete `$WORKSPACE/repos/<owner>_<repo>` and
+  `$WORKSPACE/<owner>_<repo>` by hand.
 - `sign failed` / `Could not open file` from `openssl` at the first job: `APP_KEY` points at
   a missing or unreadable `.pem` — it must be owned by `rookery`.
 - With NodeSource Node, the npm package installs under `/usr/lib/node_modules`, not

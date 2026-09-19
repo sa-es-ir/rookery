@@ -32,7 +32,6 @@ Everything is one file, `agent.py` — Python stdlib only, plus the `gh`, `opens
 
 ```bash
 cp .env.example .env            # WEBHOOK_SECRET, ALLOWLIST, APP_ID, APP_KEY
-cp repos.example.json repos.json
 python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 ```
 
@@ -49,12 +48,11 @@ python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 
 ### This repo is the orchestrator, never the target
 
-Rookery never runs inside the repo it is working on. `repos.json` maps each
-target repo to a local clone:
-
-```json
-{ "owner/pilot-repo": { "path": "C:/src/pilot-repo", "base": "main" } }
-```
+Rookery never runs inside the repo it is working on. It works on every repo
+the GitHub App is installed on: at startup it lists them, clones each into
+`work/repos/<owner>_<repo>` and uses its default branch as the base. Adding a repo
+to the installation makes it live, and removing it deletes the clone, with no
+restart needed. There is no repo list to maintain.
 
 Each issue gets its own `git worktree` under `work/<owner>_<repo>/issue-<n>` on
 branch `feature/issue-<n>`, so two repos can share an issue number without
@@ -108,11 +106,11 @@ To split models by role, add `"model": "opus"` to a role in `AGENTS`.
 
 ## Setup
 
-1. Fill in `.env` and `repos.json`.
-2. Clone each target repo to the `path` you gave it.
-3. In **each** target repo: *Settings → Webhooks →* add
-   `https://smee.io/<your-channel>`, content type `application/json`, the same
-   secret, events **Issues** and **Issue comments**.
+1. Fill in `.env`.
+2. Install the GitHub App on the target repos.
+3. Point the App's webhook (App settings → *Webhook URL*) at
+   `https://smee.io/<your-channel>`, with the same secret. There is no per-repo
+   webhook.
 4. Branch-protect `main`. The code refuses to push there; protection is the
    backstop, not the primary guard.
 5. Run the server and point smee at it:
@@ -122,7 +120,7 @@ To split models by role, add `"model": "opus"` to a role in `AGENTS`.
    npx smee-client --url https://smee.io/<your-channel> --target http://127.0.0.1:8787/
    ```
 
-Labels are created on first start.
+Labels are created when a repo is onboarded.
 
 ## Using it
 
@@ -156,9 +154,8 @@ python test_agent.py                       # the gates, no network
 
 ## Not built yet
 
-Phases 2–5 of the plan: the bug shortcut path, a GitHub App (`repos.json` covers
-routing, but each repo still needs its webhook wired by hand), OpenSpec, and
-VPS + queue + alerting.
+Phases 3–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): per-repo approval
+and caps, parallel repos, a control-plane API and UI, and a second harness.
 
 One worker, one job at a time — deliberately. A long implementation blocks every
 other issue.

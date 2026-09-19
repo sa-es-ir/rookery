@@ -17,7 +17,7 @@ There is no build, no lint, no dependency install — stdlib only, plus the `gh`
 and `openssl` CLIs on PATH. The dry-run forms go through the same `handle()` as the webhook; only the
 transport differs, so use them instead of standing up smee to test a change.
 
-`.env` and `repos.json` are gitignored and required at import time (`agent.py` reads
+`.env` is gitignored and required at import time (`agent.py` reads
 `WEBHOOK_SECRET`/`ALLOWLIST` from the environment at module level). `test_agent.py` sets both
 env vars _before_ `import agent` for that reason — keep that ordering if you add tests.
 
@@ -27,10 +27,21 @@ One file, `agent.py`. Two threads: `Hook` (HTTP, verifies the HMAC, never blocks
 `jobs`; a single daemon `worker()` drains them one at a time. One job at a time is deliberate —
 a long implementation blocks every other issue.
 
-**This repo is the orchestrator, never the target.** `repos.json` maps `owner/name` → local
-clone path + base branch; `Ctx` (repo, issue number, clone path, base branch) is threaded
-through every function. Each issue gets its own `git worktree` at
-`work/<owner>_<repo>/issue-<n>` on `feature/issue-<n>`, so two repos can share an issue number.
+**This repo is the orchestrator, never the target.** `REPOS` maps `owner/name` → base branch
+and is never written to disk: `sync()` rebuilds it at startup from the App's installations
+(`default_branch` is the base), and `installation` / `installation_repositories` events
+keep it current — `enqueue()` adds or drops the repo at once and queues an `onboard` /
+`offboard` job, so a trigger that arrives while the clone is still being made is queued
+behind it. Clones live at `$WORKSPACE/repos/<owner>_<repo>`; `Ctx` (repo, issue number,
+clone path, base branch) is threaded through every function. Each issue gets its own
+`git worktree` at `$WORKSPACE/<owner>_<repo>/issue-<n>` on `feature/issue-<n>`, so two
+repos can share an issue number.
+
+**Retention.** A closed PR from the bot on `feature/issue-<n>` removes that worktree
+(`drop_worktree()`); a repo leaving the installation removes its clone and all its
+worktrees (`offboard()`). Both refuse — log and skip — when `unpushed()` finds a branch
+with commits on no remote-tracking ref. The push goes to a URL, which updates no such
+ref, so `implement()` records `refs/remotes/origin/<branch>` itself right after it.
 
 **State lives on GitHub and in the target repo, not here.** The `claude:*` labels _are_ the
 state machine (`PHASES`), advanced only via `set_phase()`, which removes stale phase labels.
@@ -100,7 +111,10 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **Never push to base**: `assert branch != c.base` before `git push`; branch protection on the
   target repo is the backstop, not the primary guard.
 - Webhook signature is checked with `hmac.compare_digest` before anything else; `enqueue()`
-  ignores repos absent from `repos.json`.
+  ignores repos absent from `REPOS`.
+- **Retention never deletes unpushed commits.** `drop_worktree()`/`offboard()` check
+  `unpushed()` first and keep everything if it finds any. `worker()` catches everything
+  `handle()` lets out, so one bad job cannot kill the loop.
 - Every exception in `handle()` becomes an issue comment plus `claude:error` — the loop never
   dies silently.
 
@@ -111,7 +125,7 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 2–5 (bug shortcut path, GitHub App, OpenSpec, VPS + queue) are unbuilt and specified in
-[ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
+Phases 1–2 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+without a restart) are built; phases 3–6 are not.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.

@@ -28,9 +28,10 @@ good = "sha256=" + hmac.new(b"s3cr3t", raw, hashlib.sha256).hexdigest()
 assert hmac.compare_digest(good, "sha256=" + hmac.new(agent.SECRET, raw, hashlib.sha256).hexdigest())
 assert not hmac.compare_digest(good, "sha256=" + hmac.new(b"wrong", raw, hashlib.sha256).hexdigest())
 
-# per-repo config, base branch defaulting to main
-agent.REPOS = {"o/r": {"path": "/src/r"}, "o/other": {"path": "/src/other", "base": "develop"}}
-assert agent.ctx("o/r", "7") == ("o/r", 7, __import__("pathlib").Path("/src/r"), "main")
+# per-repo context: the clone lives in the workspace, the base comes from GitHub
+agent.WORKSPACE = __import__("pathlib").Path("/ws")
+agent.REPOS = {"o/r": "main", "o/other": "develop"}
+assert agent.ctx("o/r", "7") == ("o/r", 7, agent.WORKSPACE / "repos" / "o_r", "main")
 assert agent.ctx("o/other", 7).base == "develop"
 
 # task list: parsed by the orchestrator, ticked by the orchestrator
@@ -146,5 +147,66 @@ for action, label in [("opened", None), ("labeled", agent.TRIGGER), ("labeled", 
     agent.enqueue("issues", {"action": action, "label": {"name": label},
                              "repository": {"full_name": "o/r"}, "issue": issue})
 assert agent.jobs.qsize() == 1 and agent.jobs.get()["kind"] == "start"
+
+# installation events keep REPOS live: added repos are accepted at once, then onboarded
+drain = lambda: [agent.jobs.get() for _ in range(agent.jobs.qsize())]
+agent.enqueue("installation_repositories", {"action": "added", "repositories_added": [{"full_name": "o/new"}],
+                                            "repositories_removed": []})
+agent.enqueue("installation", {"action": "created", "repositories": [{"full_name": "p/one"}]})
+assert agent.REPOS["o/new"] == "" and agent.REPOS["o/r"] == "main"
+assert drain() == [{"kind": "onboard", "repo": "o/new"}, {"kind": "onboard", "repo": "p/one"}]
+agent.enqueue("installation_repositories", {"action": "removed", "repositories_added": [],
+                                            "repositories_removed": [{"full_name": "o/new"}]})
+agent.enqueue("installation", {"action": "deleted", "repositories": [{"full_name": "p/one"}]})
+assert "o/new" not in agent.REPOS and "p/one" not in agent.REPOS
+assert drain() == [{"kind": "offboard", "repo": "o/new"}, {"kind": "offboard", "repo": "p/one"}]
+agent.enqueue("issues", {"action": "labeled", "label": {"name": agent.TRIGGER},
+                         "repository": {"full_name": "o/new"}, "issue": issue})
+assert agent.jobs.empty(), "a removed repo's events are ignored"
+
+# a closed PR frees its worktree — only the bot's PRs, only feature/issue-<n>
+pr = lambda ref, user: {"action": "closed", "repository": {"full_name": "o/r"},
+                        "pull_request": {"head": {"ref": ref}, "user": {"login": user}}}
+agent.enqueue("pull_request", pr("feature/issue-3", agent.ME))
+agent.enqueue("pull_request", pr("feature/issue-4", "mallory"))
+agent.enqueue("pull_request", pr("feature/issue-5-extra", agent.ME))
+assert drain() == [{"kind": "drop-worktree", "repo": "o/r", "n": 3}]
+
+# retention never deletes unpushed commits
+agent.WORKSPACE = Path(tempfile.mkdtemp())
+origin = agent.WORKSPACE / "origin.git"
+git = lambda cwd, *a: subprocess.run(("git",) + a, cwd=cwd, capture_output=True, check=True, text=True).stdout
+git(agent.WORKSPACE, "init", "-q", "--bare", "-b", "main", str(origin))
+clone = agent.clone_dir("o/r")
+git(agent.WORKSPACE, "clone", "-q", str(origin), str(clone))
+git(clone, "config", "user.email", "t@t"), git(clone, "config", "user.name", "t")
+git(clone, "commit", "-q", "--allow-empty", "-m", "base"), git(clone, "push", "-q", "origin", "main")
+for n in (1, 2):
+    git(clone, "worktree", "add", "-q", "-B", f"feature/issue-{n}", str(agent.wt_root("o/r") / f"issue-{n}"), "origin/main")
+wt1 = agent.wt_root("o/r") / "issue-1"
+git(wt1, "commit", "-q", "--allow-empty", "-m", "work")    # committed, not pushed
+
+agent.offboard("o/r")
+assert clone.exists() and wt1.exists(), "offboard must refuse while a branch is unpushed"
+agent.drop_worktree("o/r", 1)
+assert wt1.exists(), "drop_worktree must keep an unpushed worktree"
+agent.drop_worktree("o/r", 2)
+assert not (agent.wt_root("o/r") / "issue-2").exists()
+
+git(wt1, "push", "-q", str(origin), "feature/issue-1:feature/issue-1")  # as implement() does: a URL...
+git(wt1, "update-ref", "refs/remotes/origin/feature/issue-1", "feature/issue-1")  # ...then the ref
+agent.offboard("o/r")
+assert not clone.exists() and not agent.wt_root("o/r").exists(), "pushed work: the disk is freed"
+
+# startup: every repo of every installation, across pages, with its default branch
+seen = []
+agent.onboard = lambda repo, base=None: seen.append((repo, base))
+agent.api = lambda method, path, bearer: (
+    {"token": "ghs_i"} if method == "POST" else
+    [{"id": 1}] if path.startswith("/app/installations") else
+    {"repositories": [{"full_name": f"o/r{i}", "default_branch": "dev"}
+                      for i in range(100 if path.endswith("page=1") else 3)]})
+agent.sync()
+assert len(seen) == 103 and seen[0] == ("o/r0", "dev"), seen[:2]
 
 print("ok")

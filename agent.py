@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""GitHub issue -> Claude Code agent. Laptop, smee tunnel, one or more repos.
+"""GitHub issue -> Claude Code agent, for every repo the GitHub App is installed on.
 
-State lives on GitHub (labels + comments) and in the target repo
-(agent-plans/<n>/). The only local state is a git worktree per issue; Claude
-session ids are derived from repo#issue/key, so nothing is persisted between
-runs.
+State lives on GitHub (installations, labels, comments) and in the target repo
+(agent-plans/<n>/). The only local state is a clone per repo and a git worktree
+per issue; Claude session ids are derived from repo#issue/key, so nothing is
+persisted between runs.
 """
 import base64
 import calendar
@@ -15,6 +15,8 @@ import logging
 import os
 import queue
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -31,8 +33,9 @@ for line in (HERE / ".env").read_text(encoding="utf-8").splitlines() if (HERE / 
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
-# {"owner/name": {"path": "C:/src/name", "base": "main"}, ...}
-REPOS = json.loads((HERE / "repos.json").read_text(encoding="utf-8")) if (HERE / "repos.json").exists() else {}
+# "owner/name" -> base branch. Rebuilt from the App's installations by sync() at
+# startup, kept current by installation events; "" until onboard() has run.
+REPOS = {}
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE / "work"))
 # the `claude` CLI must use the claude.ai login; a stale key in the env fails it.
 os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -72,8 +75,16 @@ class Ctx(NamedTuple):
 
 
 def ctx(repo, n):
-    cfg = REPOS[repo]
-    return Ctx(repo, int(n), Path(cfg["path"]), cfg.get("base", "main"))
+    return Ctx(repo, int(n), clone_dir(repo), REPOS[repo])
+
+
+def clone_dir(repo):
+    return WORKSPACE / "repos" / repo.replace("/", "_")
+
+
+def wt_root(repo):
+    """Where repo's per-issue worktrees live."""
+    return WORKSPACE / repo.replace("/", "_")
 
 
 def pdir(n):
@@ -126,6 +137,18 @@ def api(method, path, bearer):
         return json.load(r)
 
 
+def api_all(path, bearer, key=None):
+    """Every page of a list endpoint; `key` names the list in a wrapped response."""
+    out, page = [], 1
+    while True:
+        r = api("GET", f"{path}?per_page=100&page={page}", bearer)
+        items = r[key] if key else r
+        out += items
+        if len(items) < 100:
+            return out
+        page += 1
+
+
 _tokens = {}  # repo -> (installation token, expiry as epoch seconds)
 
 
@@ -170,7 +193,7 @@ def set_phase(c, phase):
 
 def worktree(c):
     """Per-issue branch + working dir, namespaced by repo, so nothing collides."""
-    wt = WORKSPACE / c.repo.replace("/", "_") / f"issue-{c.n}"
+    wt = wt_root(c.repo) / f"issue-{c.n}"
     if not wt.exists():
         log(f"#{c.n} creating worktree {wt} from origin/{c.base}")
         wt.parent.mkdir(parents=True, exist_ok=True)
@@ -400,6 +423,9 @@ def implement(c):
     # an explicit https URL, so the push is the App's even when origin is ssh
     sh("git", "push", f"https://github.com/{c.repo}.git", f"{branch}:{branch}",
        cwd=wt, env=auth(c.repo))
+    # a push to a URL updates no remote-tracking ref; record it, so unpushed()
+    # sees this work as safe on GitHub
+    sh("git", "update-ref", f"refs/remotes/origin/{branch}", branch, cwd=wt)
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
              "--title", title, "--body-file", "-",
@@ -412,7 +438,77 @@ def implement(c):
     set_phase(c, "claude:done" if ok else "claude:error")
 
 
+# --- repos: onboarding and retention ----------------------------------------
+
+def sync():
+    """Rebuild REPOS from every installation of the App — GitHub is the source of truth."""
+    for inst in api_all("/app/installations", jwt()):
+        tok = api("POST", f"/app/installations/{inst['id']}/access_tokens", jwt())["token"]
+        for r in api_all("/installation/repositories", tok, "repositories"):
+            onboard(r["full_name"], r["default_branch"])
+
+
+def onboard(repo, base=None):
+    """Make repo live: clone it once, create the labels, record its base branch."""
+    base = base or api("GET", f"/repos/{repo}", token(repo))["default_branch"]
+    path = clone_dir(repo)
+    if not path.exists():
+        log(f"{repo} cloning into {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sh("git", "clone", "-q", f"https://github.com/{repo}.git", str(path), env=auth(repo))
+    for l in PHASES + [TRIGGER]:
+        gh(repo, "label", "create", l, "--color", "5319e7", check=False)
+    REPOS[repo] = base
+    log(f"{repo} live, base {base}")
+
+
+def unpushed(clone, ref):
+    """True when ref has commits on no remote-tracking ref — work that exists only here."""
+    return bool(sh("git", "rev-list", "-1", ref, "--not", "--remotes", cwd=clone))
+
+
+def rmtree(p):
+    # git makes object files read-only, and Windows will not delete those as-is
+    shutil.rmtree(p, onexc=lambda f, x, _: (os.chmod(x, stat.S_IWRITE), f(x)))
+
+
+def drop_worktree(repo, n):
+    """The issue's PR is closed: its worktree has nothing left to do."""
+    wt, clone, branch = wt_root(repo) / f"issue-{n}", clone_dir(repo), f"feature/issue-{n}"
+    if not wt.exists():
+        return
+    if unpushed(clone, branch):
+        log(f"{repo}#{n} {branch} has unpushed commits — keeping {wt}")
+        return
+    sh("git", "worktree", "remove", "--force", str(wt), cwd=clone)
+    log(f"{repo}#{n} removed worktree {wt}")
+
+
+def offboard(repo):
+    """repo left the installation: free its clone and worktrees, unless that loses work."""
+    clone = clone_dir(repo)
+    if not clone.exists():
+        return
+    heads = [l.split()[1] for l in sh("git", "worktree", "list", "--porcelain", cwd=clone).splitlines()
+             if l.startswith("branch ")]
+    if stuck := [h for h in heads if unpushed(clone, h)]:
+        log(f"{repo} NOT removed — unpushed commits on {', '.join(stuck)}")
+        return
+    if wt_root(repo).exists():
+        rmtree(wt_root(repo))
+    rmtree(clone)
+    log(f"{repo} removed {clone} and its worktrees")
+
+
+# --- dispatch ----------------------------------------------------------------
+
 def handle(job):
+    if job["kind"] == "onboard":
+        return onboard(job["repo"])
+    if job["kind"] == "offboard":
+        return offboard(job["repo"])
+    if job["kind"] == "drop-worktree":
+        return drop_worktree(job["repo"], job["n"])
     c = ctx(job["repo"], job["n"])
     log(f"{c.repo}#{c.n} job: {job['kind']}")
     try:
@@ -433,7 +529,11 @@ def handle(job):
 
 def worker():
     while True:
-        handle(jobs.get())
+        job = jobs.get()
+        try:
+            handle(job)
+        except Exception as e:  # e.g. the error comment itself failed: never let the worker die
+            log(f"{job['repo']} {job['kind']} FAILED: {e}")
 
 
 # --- webhook -----------------------------------------------------------------
@@ -458,8 +558,25 @@ class Hook(BaseHTTPRequestHandler):
 
 
 def enqueue(event, p):
+    if event in ("installation", "installation_repositories"):
+        every = p.get("repositories") or []
+        added = p.get("repositories_added", []) + (every if p["action"] == "created" else [])
+        removed = p.get("repositories_removed", []) + (every if p["action"] == "deleted" else [])
+        for r in added:
+            # accept its events now; the queue runs them after the onboarding
+            REPOS.setdefault(r["full_name"], "")
+            jobs.put({"kind": "onboard", "repo": r["full_name"]})
+        for r in removed:
+            REPOS.pop(r["full_name"], None)
+            jobs.put({"kind": "offboard", "repo": r["full_name"]})
+        return
     repo = p.get("repository", {}).get("full_name")
     if repo not in REPOS:
+        return
+    if event == "pull_request" and p["action"] == "closed":
+        m = re.fullmatch(r"feature/issue-(\d+)", p["pull_request"]["head"]["ref"])
+        if m and p["pull_request"]["user"]["login"] == ME:  # our PRs only
+            jobs.put({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
         return
     n = p.get("issue", {}).get("number")
     # `labeled` only: an issue created with the label fires `opened` *and* `labeled`,
@@ -475,13 +592,9 @@ def enqueue(event, p):
 
 
 if __name__ == "__main__":
-    if not REPOS:
-        sys.exit("repos.json is empty or missing — see repos.example.json")
     if not APP_ID or not Path(APP_KEY).exists():
         sys.exit("set APP_ID and APP_KEY (path to the App's private key .pem) in .env")
-    for repo in REPOS:
-        for l in PHASES + [TRIGGER]:
-            gh(repo, "label", "create", l, "--color", "5319e7", check=False)
+    sync()
 
     if len(sys.argv) > 2:
         # dry run, no webhook: `agent.py owner/repo 12 [comment...]`
@@ -497,5 +610,5 @@ if __name__ == "__main__":
     threading.Thread(target=worker, daemon=True).start()
     # log(), not print(): stdout is block-buffered under systemd, stderr is not,
     # so a print() banner never reaches the journal.
-    log(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS)} (bot user: {ME})")
+    log(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS) or 'no repos yet'} (bot user: {ME})")
     HTTPServer((HOST, PORT), Hook).serve_forever()
