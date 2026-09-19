@@ -95,4 +95,48 @@ assert (repo / agent.pdir(7) / "plan.md").read_text(encoding="utf-8") == "the pl
 assert (repo / "src.py").read_text(encoding="utf-8") == "original\n", "tracked edit not reverted"
 assert not (repo / "stray.txt").exists(), "untracked stray not cleaned"
 
+# GitHub App: the JWT is RS256 and verifies against the App's public key
+import base64  # noqa: E402
+import json  # noqa: E402
+import time  # noqa: E402
+
+keys = Path(tempfile.mkdtemp())
+pem, pub = keys / "app.pem", keys / "pub.pem"
+subprocess.run(["openssl", "genrsa", "-traditional", "-out", str(pem), "2048"], capture_output=True, check=True)
+subprocess.run(["openssl", "rsa", "-in", str(pem), "-pubout", "-out", str(pub)], capture_output=True, check=True)
+agent.APP_ID, agent.APP_KEY = "4999655", str(pem)
+
+unb64 = lambda s: base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+h, p, s = agent.jwt().split(".")
+assert json.loads(unb64(h)) == {"alg": "RS256", "typ": "JWT"}
+claims = json.loads(unb64(p))
+assert claims["iss"] == "4999655" and claims["exp"] - claims["iat"] <= 600, claims
+(keys / "sig").write_bytes(unb64(s))
+v = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pub), "-signature", str(keys / "sig")],
+                   input=f"{h}.{p}".encode(), capture_output=True)
+assert v.returncode == 0, v.stdout + v.stderr
+
+# installation token: minted once, reused, re-minted near expiry; never in os.environ
+calls = []
+def fake_api(method, path, bearer):
+    calls.append(path)
+    assert bearer.count(".") == 2
+    if path.endswith("/installation"):
+        return {"id": 162968573}
+    exp = time.time() + (3600 if len(calls) < 3 else 300)
+    return {"token": f"ghs_{len(calls)}",
+            "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))}
+agent.api = fake_api
+assert agent.token("o/r") == "ghs_2" and agent.token("o/r") == "ghs_2"
+assert calls == ["/repos/o/r/installation", "/app/installations/162968573/access_tokens"]
+agent._tokens["o/r"] = ("ghs_old", time.time() + 300)  # 5 min left: re-mint
+assert agent.token("o/r") != "ghs_old"
+
+env = agent.auth("o/r")
+assert env["GH_TOKEN"].startswith("ghs_")
+assert base64.b64decode(env["GIT_CONFIG_VALUE_0"].split()[-1]).decode() == "x-access-token:" + env["GH_TOKEN"]
+assert "GH_TOKEN" not in os.environ and "GIT_CONFIG_VALUE_0" not in os.environ, \
+    "the claude subprocess inherits os.environ — the token must never be there"
+assert agent.ME == "rookery-gha[bot]"
+
 print("ok")

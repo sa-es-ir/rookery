@@ -24,14 +24,14 @@ then implements the plan task by task on a branch and opens a draft PR.
 claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
-Everything is one file, `agent.py` — Python stdlib only, plus the `gh` and
+Everything is one file, `agent.py` — Python stdlib only, plus the `gh`, `openssl` and
 `claude` CLIs on your PATH. The full roadmap lives in
 [ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
 
 ## Quick start
 
 ```bash
-cp .env.example .env            # WEBHOOK_SECRET, ALLOWLIST
+cp .env.example .env            # WEBHOOK_SECRET, ALLOWLIST, APP_ID, APP_KEY
 cp repos.example.json repos.json
 python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 ```

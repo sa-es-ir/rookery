@@ -13,8 +13,8 @@ python agent.py owner/repo 12 approve      # dry run: run the task loop, push, o
 python agent.py owner/repo 12 use sqlite   # dry run: anything else is fed back as a developer reply
 ```
 
-There is no build, no lint, no dependency install — stdlib only, plus the `gh` and `claude`
-CLIs on PATH. The dry-run forms go through the same `handle()` as the webhook; only the
+There is no build, no lint, no dependency install — stdlib only, plus the `gh`, `claude`
+and `openssl` CLIs on PATH. The dry-run forms go through the same `handle()` as the webhook; only the
 transport differs, so use them instead of standing up smee to test a change.
 
 `.env` and `repos.json` are gitignored and required at import time (`agent.py` reads
@@ -62,6 +62,12 @@ session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick 
 `decisions.md` is the only memory that crosses between tasks. A failure raises with everything
 before it already committed, so commenting `approve` again resumes at that same task.
 
+**GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
+(`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
+cached and re-minted with under 10 minutes left, since an implementation outlives the 1h
+token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKEN` plus a
+`GIT_CONFIG_*` https auth header. There is no `gh auth login` on the box.
+
 ## Invariants — do not soften these
 
 - **The orchestrator ticks checkboxes and commits; the agent never does.** `tick()` rewrites one
@@ -69,7 +75,12 @@ before it already committed, so commenting `approve` again resumes at that same 
   `--disallowed-tools Bash(git push:*) Bash(gh:*)` enforces it (deny rules beat
   `bypassPermissions`). The agent never publishes.
 - **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a login in
-  `ALLOWLIST`. `ME` (our own `gh` login) is filtered out so the bot can't approve itself.
+  `ALLOWLIST`. `ME` (the App's bot login) is filtered out so the bot can't approve itself.
+- **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
+  subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
+  `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason.
+- **The push goes to `https://github.com/<repo>.git`**, not `origin`, so it carries the
+  App's token even when the clone's origin is ssh.
 - **Planning writes `agent-plans/<n>/` and nothing else**, enforced by `keep_plans_only()`
   after every `plan()` call, not by the PLAN prompt's wording. It reverts rather than raises,
   so the awaiting-input reply loop can call `plan()` repeatedly without accumulating stray

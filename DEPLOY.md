@@ -9,12 +9,10 @@ user it runs as.
 
 ## 0. Before you start
 
-- A GitHub PAT **belonging to a machine account, not to you** (step 5 explains why) —
-  classic with scopes **`repo`** and **`read:org`** (add **`workflow`** only if a task
-  might edit `.github/workflows/*`). `read:org` is not optional even for a personal repo —
-  `gh auth login --with-token` validates it and answers
-  `error validating token: missing required scope 'read:org'` without it. Fine-grained
-  equivalent: Contents RW, Issues RW, Pull requests RW, Metadata R.
+- A **GitHub App** (step 5): permissions Contents RW, Issues RW, Pull requests RW,
+  Metadata R; events Issues + Issue comment; installed on the target repo. Its App ID,
+  private key `.pem` and webhook secret are all the GitHub credentials the box gets —
+  no PAT, no `gh auth login`.
 - The **target** repo the agent will work on. Never this one.
 - **Check the CPU first — see [AVX2](#avx2-the-two-hour-one) below.** A VPS with a generic
   `qemu64` CPU model cannot run current Claude Code at all.
@@ -54,6 +52,7 @@ under uid 0, which is what `agent.py` uses.
 scp agent.py test_agent.py root@SERVER_IP:/opt/rookery/
 scp -r agents root@SERVER_IP:/opt/rookery/
 scp .env root@SERVER_IP:/opt/rookery/
+scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
 ```
 
@@ -69,7 +68,7 @@ server once it works, ideally on an account of its own rather than sharing your 
 
 ```bash
 chown -R rookery:rookery /opt/rookery /home/rookery
-chmod 600 /home/rookery/.claude/.credentials.json
+chmod 600 /home/rookery/.claude/.credentials.json /opt/rookery/app.pem /opt/rookery/.env
 ```
 
 `chown` all of `/home/rookery`, not just the two directories — anything root creates
@@ -78,31 +77,33 @@ clone.
 
 Everything from here runs as `rookery`.
 
-## 5. GitHub auth — server, rookery
+## 5. GitHub auth — the App, not a login
+
+GitHub → Settings → Developer settings → **GitHub Apps → New**: webhook URL
+`http://SERVER_IP:8787/`, content type JSON, a fresh secret; the permissions and events
+from step 0. Generate a private key, then **Install** it on the target repo.
+
+`/opt/rookery/.env` gets the three values (the secret replaces any old per-repo one):
 
 ```bash
-su - rookery
-read -rs TOKEN          # no prompt, no echo — paste the token at the blank line, press Enter
-echo "$TOKEN" | gh auth login --with-token
-unset TOKEN
-gh auth setup-git          # so raw `git push` from the worktree authenticates
-gh auth status
-gh api user --jq .login    # this is ME — filtered out of approvals so the bot can't approve itself
+APP_ID=1234567
+APP_KEY=/opt/rookery/app.pem
+WEBHOOK_SECRET=<the App's webhook secret>
 ```
 
-`read -rs` is silent by design; a terminal sitting there with no prompt is waiting for the
-paste, not hung. Keep it on its own line and keep the token out of the command — a literal
-`echo "ghp_..." | gh auth login` lands the secret in `~/.bash_history`.
+Per job, `agent.py` signs a JWT with the key (`openssl`), exchanges it for a one-hour
+installation token, and hands that to `gh` and `git` through `env=` — never
+`os.environ`, so the `claude` subprocess cannot read it. Comments, pushes and PRs all
+come from `<slug>[bot]`. `ME` in `agent.py` is that login: if your slug is not
+`rookery-gha`, change it there.
 
-Write on the target repo is required whether it is public or private: the agent pushes
-`feature/issue-<n>` to the repo itself and opens the PR there, never a fork.
+Do **not** run `gh auth login` on the box. Left logged in, `~/.config/gh/hosts.yml` is a
+long-lived personal token the agent could read; `gh auth status` should say
+"not logged in". Your own login goes in `ALLOWLIST`.
 
-**Use a PAT from a separate machine account, not your own login.** `ME` is filtered out of
-`enqueue()` so the bot cannot answer or approve itself — so if `ME` is *you*, every comment
-you write is discarded and the agent cannot hear you at all
-(see [the gotcha](#the-bot-ignores-my-comments)). Create e.g. `you-rookery`, invite it to
-the target repo with **Write**, accept the invite, and use its PAT here. Your own login goes
-in `ALLOWLIST`, never here.
+Known ceiling: the agent runs as the same user that can read `app.pem`, and the key
+outranks any token minted from it. The deny rules stop `gh` and `git push`, not
+`openssl` + `curl`. Closing that needs the sandbox, not this file.
 
 ## 6. Git identity — server, rookery
 
@@ -139,8 +140,13 @@ cover.
 
 ## 8. Target repo and config — server, rookery
 
+With no `gh` login on the box, borrow the App's token for these one-off calls:
+
 ```bash
-gh repo clone OWNER/REPO /home/rookery/repos/REPO
+tok() { (cd /opt/rookery && python3 -c "import agent; print(agent.token('$1'))"); }
+T=$(tok OWNER/REPO)
+git -c http.extraHeader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$T" | base64 -w0)" \
+  clone https://github.com/OWNER/REPO /home/rookery/repos/REPO
 
 cat > /opt/rookery/repos.json <<'EOF'
 {
@@ -148,9 +154,14 @@ cat > /opt/rookery/repos.json <<'EOF'
 }
 EOF
 
-gh repo view OWNER/REPO --json nameWithOwner --jq .nameWithOwner   # must equal the key, exactly
-git -C /home/rookery/repos/REPO symbolic-ref --short HEAD          # must equal "base"
+GH_TOKEN=$T gh repo view OWNER/REPO --json nameWithOwner --jq .nameWithOwner   # must equal the key, exactly
+git -C /home/rookery/repos/REPO symbolic-ref --short HEAD                      # must equal "base"
+unset T
 ```
+
+Clone over **https**: `agent.py` authenticates `git fetch origin` with an https header,
+which an ssh origin ignores. The push always goes to the https URL, whatever origin is.
+`git -c` before `clone` is not saved into the clone's `.git/config`; `clone -c` would be.
 
 **The key is case-sensitive.** `enqueue()` tests `repo not in REPOS` against the webhook's
 `full_name`, so a key of `sa-es-ir/llama` silently drops every event for
@@ -252,26 +263,13 @@ In Windows PowerShell, bare `curl` is an alias for `Invoke-WebRequest` and answe
 
 ## 11. Deliver — GitHub
 
-GitHub → target repo → **Settings → Webhooks → Add webhook**:
+Nothing per repo: the App's own webhook (step 5) delivers every installed repo's events.
+**Delete any old per-repo webhook** pointing at the same URL — its secret no longer
+matches, so it only adds red `401`s.
 
-| Field | Value |
-|---|---|
-| Payload URL | `http://SERVER_IP:8787/` |
-| Content type | `application/json` |
-| Secret | `WEBHOOK_SECRET` from `.env` |
-| Events | *Let me select* → **Issues** + **Issue comments** |
-
-Or in one command, as `rookery`:
-
-```bash
-gh api repos/OWNER/REPO/hooks -f name=web -F active=true \
-  -f 'events[]=issues' -f 'events[]=issue_comment' \
-  -f config[url]=http://SERVER_IP:8787/ -f config[content_type]=json \
-  -f config[secret]="$WEBHOOK_SECRET"
-```
-
-GitHub sends a `ping` on save. **Recent Deliveries** should show a green `204`; a red
-`401` there means the secret does not match `.env`.
+App settings → **Advanced → Recent Deliveries** should show green `204`s (a `ping`
+redelivered after the restart is a quick check); a red `401` means the App's secret does
+not match `WEBHOOK_SECRET` in `.env`.
 
 Now label a **fresh** issue `claude:trigger` — `enqueue()` ignores any issue that already
 carries a `claude:*` phase label, so the issues you exercised by CLI in step 9 will not
@@ -331,28 +329,14 @@ whether it was acted on or dropped.
 `enqueue()` drops an `issue_comment` unless all three hold — check them in this order:
 
 ```bash
-gh api user --jq .login                                  # server, rookery: this is ME
-journalctl -u rookery --no-pager | grep 'listening on'   # prints "(bot user: ...)" at startup
+journalctl -u rookery --no-pager | grep 'listening on'   # "(bot user: ...)" must be the App's, not you
 grep ALLOWLIST /opt/rookery/.env                         # must contain YOUR login, lowercase
-gh issue view N --repo OWNER/REPO --json labels          # must carry some claude:* phase label
+GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # some claude:* phase label
 ```
 
-Nearly always it is the first: `gh` on the server was authenticated with your own PAT, so
-`ME` is your login and the `user != ME` guard eats your comments. Fix it with a machine
-account (step 5), then **restart the service** — `ME` is read once at startup and stays
-stale otherwise. Switching the token without restarting looks identical to not switching it.
-
-Ruling the webhook in or out needs your *own* account, not the bot's — listing hooks
-requires repo **admin**, so as `rookery` it answers `404` and suggests `gh auth refresh -s
-admin:repo_hook`. Ignore that; the scope would not help (the bot has Write, not admin) and
-the agent never needs it. Run this where you are authenticated as the repo owner:
-
-```bash
-gh api repos/OWNER/REPO/hooks --jq '.[] | {id, url: .config.url, events, active}'
-```
-
-Want `issue_comment` in `events`. A hook subscribed to `issues` only still fires `job:
-start` on a label, which makes the agent look alive while every comment is silently lost.
+Then the App itself: its **Issue comment** event must be ticked (App settings →
+Permissions & events). With only **Issues**, a label still fires `job: start`, which
+makes the agent look alive while every comment is silently lost.
 
 Do not "fix" this by dropping the `ME` check. The bot comments after every planning round;
 without the filter its own comment re-enters `enqueue()` and loops forever, and it can
@@ -434,10 +418,10 @@ look — but a geo-block is a fast 403, never a hang.
 
 ### Smaller ones
 
-- `ghp_xxx` in a guide is a placeholder. `gh auth login --with-token` answers
-  `HTTP 401: Bad credentials` if you paste it literally.
-- `git clone` prompting for a username means `gh auth setup-git` did not run as this user.
-  `gh repo clone` works regardless.
+- `git fetch` prompting for a username, or `Repository not found` on a private repo, means
+  the clone's origin is ssh or the App is not installed on that repo.
+- `sign failed` / `Could not open file` from `openssl` at the first job: `APP_KEY` points at
+  a missing or unreadable `.pem` — it must be owned by `rookery`.
 - With NodeSource Node, the npm package installs under `/usr/lib/node_modules`, not
   `/usr/local/lib/node_modules` — deleting the wrong tree looks like a failed reinstall.
 - A phase label left over from a crashed run blocks re-triggering:

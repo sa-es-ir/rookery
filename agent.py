@@ -6,6 +6,8 @@ State lives on GitHub (labels + comments) and in the target repo
 session ids are derived from repo#issue/key, so nothing is persisted between
 runs.
 """
+import base64
+import calendar
 import hashlib
 import hmac
 import json
@@ -16,6 +18,8 @@ import re
 import subprocess
 import sys
 import threading
+import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -32,6 +36,12 @@ REPOS = json.loads((HERE / "repos.json").read_text(encoding="utf-8")) if (HERE /
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE / "work"))
 # the `claude` CLI must use the claude.ai login; a stale key in the env fails it.
 os.environ.pop("ANTHROPIC_API_KEY", None)
+# GitHub credentials reach gh/git through env= per call, never os.environ, so the
+# claude subprocess (which inherits os.environ) cannot read them.
+for k in ("GH_TOKEN", "GITHUB_TOKEN"):
+    os.environ.pop(k, None)
+APP_ID = os.environ.get("APP_ID", "")
+APP_KEY = os.environ.get("APP_KEY", str(HERE / "app.pem"))
 SECRET = os.environ["WEBHOOK_SECRET"].encode()
 ALLOW = {u.strip().lower() for u in os.environ["ALLOWLIST"].split(",") if u.strip()}
 PORT = int(os.environ.get("PORT", "8787"))
@@ -50,7 +60,7 @@ NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
 
 jobs: "queue.Queue" = queue.Queue()
-ME = ""  # our own gh login, filled at startup so we never answer ourselves
+ME = "rookery-gha[bot]"  # the App's bot login — filtered so we never answer ourselves
 
 
 class Ctx(NamedTuple):
@@ -73,21 +83,74 @@ def pdir(n):
 
 # --- shell / gh --------------------------------------------------------------
 
-def sh(*args, cwd=None, check=True):
-    p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+def sh(*args, cwd=None, check=True, env=None, input=None):
+    p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                       env=env, input=input)
     if check and p.returncode:
         raise RuntimeError(f"{args[0]} failed ({p.returncode}): {p.stderr.strip() or p.stdout.strip()}")
     return p.stdout.strip()
 
 
-def gh(repo, *args, check=True):
-    return sh("gh", *args, "--repo", repo, check=check)
+def gh(repo, *args, check=True, input=None):
+    return sh("gh", *args, "--repo", repo, check=check, env=auth(repo), input=input)
 
 
 def comment(c, body):
     log(f"#{c.n} commenting ({len(body)} chars)")
-    subprocess.run(["gh", "issue", "comment", str(c.n), "--repo", c.repo, "--body-file", "-"],
-                   input=body, text=True, encoding="utf-8", check=True)
+    gh(c.repo, "issue", "comment", str(c.n), "--body-file", "-", input=body)
+
+
+# --- GitHub App auth ---------------------------------------------------------
+
+def b64url(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def jwt():
+    """RS256 App JWT. The stdlib cannot sign RSA, so openssl does — an external
+    CLI like gh and claude."""
+    now = int(time.time())
+    head = b64url(b'{"alg":"RS256","typ":"JWT"}') + "." + b64url(json.dumps(
+        {"iat": now - 60, "exp": now + 540, "iss": APP_ID}).encode())
+    p = subprocess.run(["openssl", "dgst", "-sha256", "-sign", APP_KEY, "-binary"],
+                       input=head.encode(), capture_output=True, check=True)
+    return head + "." + b64url(p.stdout)
+
+
+def api(method, path, bearer):
+    req = urllib.request.Request(
+        "https://api.github.com" + path, method=method,
+        headers={"Authorization": f"Bearer {bearer}", "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+_tokens = {}  # repo -> (installation token, expiry as epoch seconds)
+
+
+def token(repo):
+    """Installation token for repo, re-minted when under 10 minutes remain — an
+    implementation outlives the 1h token, so every gh/git call asks again."""
+    tok, exp = _tokens.get(repo, ("", 0))
+    if exp - time.time() < 600:
+        j = jwt()
+        inst = api("GET", f"/repos/{repo}/installation", j)["id"]
+        r = api("POST", f"/app/installations/{inst}/access_tokens", j)
+        tok, exp = r["token"], calendar.timegm(time.strptime(r["expires_at"], "%Y-%m-%dT%H:%M:%SZ"))
+        _tokens[repo] = (tok, exp)
+        log(f"{repo} minted installation token")
+    return tok
+
+
+def auth(repo):
+    """env= for one gh/git call: GH_TOKEN for gh, an https auth header for git.
+    GIT_CONFIG_* keeps the header out of argv and out of the clone's .git/config."""
+    tok = token(repo)
+    basic = base64.b64encode(f"x-access-token:{tok}".encode()).decode()
+    return {**os.environ, "GH_TOKEN": tok, "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}"}
 
 
 def labels_of(repo, n):
@@ -111,7 +174,7 @@ def worktree(c):
     if not wt.exists():
         log(f"#{c.n} creating worktree {wt} from origin/{c.base}")
         wt.parent.mkdir(parents=True, exist_ok=True)
-        sh("git", "fetch", "origin", c.base, cwd=c.path)
+        sh("git", "fetch", "origin", c.base, cwd=c.path, env=auth(c.repo))
         sh("git", "worktree", "add", "-B", f"feature/issue-{c.n}", str(wt),
            f"origin/{c.base}", cwd=c.path)
     return wt
@@ -334,11 +397,13 @@ def implement(c):
                              key="review", agent="reviewer")
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
-    sh("git", "push", "-u", "origin", branch, cwd=wt)
+    # an explicit https URL, so the push is the App's even when origin is ssh
+    sh("git", "push", f"https://github.com/{c.repo}.git", f"{branch}:{branch}",
+       cwd=wt, env=auth(c.repo))
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
-    url = sh("gh", "pr", "create", "--repo", c.repo, "--draft", "--base", c.base,
-             "--head", branch, "--title", title,
-             "--body", "\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}", cwd=wt)
+    url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
+             "--title", title, "--body-file", "-",
+             input="\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}")
     # The review is advisory: the PR opens either way, so the work is always on
     # GitHub rather than stranded in a local worktree. A bad verdict only flags.
     ok = verdict == "review-ok"
@@ -411,7 +476,8 @@ def enqueue(event, p):
 if __name__ == "__main__":
     if not REPOS:
         sys.exit("repos.json is empty or missing — see repos.example.json")
-    ME = sh("gh", "api", "user", "--jq", ".login").lower()
+    if not APP_ID or not Path(APP_KEY).exists():
+        sys.exit("set APP_ID and APP_KEY (path to the App's private key .pem) in .env")
     for repo in REPOS:
         for l in PHASES + [TRIGGER]:
             gh(repo, "label", "create", l, "--color", "5319e7", check=False)
