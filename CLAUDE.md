@@ -18,8 +18,8 @@ and `openssl` CLIs on PATH. The dry-run forms go through the same `handle()` as 
 transport differs, so use them instead of standing up smee to test a change.
 
 `.env` is gitignored and required at import time (`agent.py` reads
-`WEBHOOK_SECRET`/`ALLOWLIST` from the environment at module level). `test_agent.py` sets both
-env vars _before_ `import agent` for that reason — keep that ordering if you add tests.
+`WEBHOOK_SECRET` from the environment at module level). `test_agent.py` sets it
+_before_ `import agent` for that reason — keep that ordering if you add tests.
 
 ## Architecture
 
@@ -52,7 +52,7 @@ the same issue resumes the same session.
 
 Flow: label `claude:trigger` → `plan()` (`claude:planning`) → either `claude:awaiting-input`
 (a reply re-enters `plan(resume=True)`, same session) or `claude:awaiting-approval` → an
-allowlisted `approve` comment → `implement()` → `claude:reviewing` → `claude:done` /
+`approve` comment from someone with write access → `implement()` → `claude:reviewing` → `claude:done` /
 `claude:error`.
 
 **Named roles are `AGENTS`, passed as `--agents`/`--agent`.** `planmaker` runs `plan()`,
@@ -85,8 +85,17 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   byte by offset so task text is never disturbed. The TASK prompt tells the agent not to commit;
   `--disallowed-tools Bash(git push:*) Bash(gh:*)` enforces it (deny rules beat
   `bypassPermissions`). The agent never publishes.
-- **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a login in
-  `ALLOWLIST`. `ME` (the App's bot login) is filtered out so the bot can't approve itself.
+- **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
+  write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
+  the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
+  bot login) is filtered out so the bot can't approve itself.
+- **Caps are checked before every `claude` call** (`check_caps()`): `RUN_CAP` calls and
+  `USD_CAP` dollars per repo per UTC day (defaults 10 and $20), plus the operator's `PAUSED`
+  file next to `agent.py`. Every call — failed ones too — is recorded with its
+  `total_cost_usd` in `$WORKSPACE/rookery.db`, one sqlite3 connection per call, so a restart
+  keeps the day's count. A cap raises like any other error (comment + `claude:error`); mid
+  implementation that means the current task is committed and the next one never starts.
+  Caps are per tenant; `MAX_TASKS` is per issue — keep them independent.
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason.
@@ -125,7 +134,7 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 1–2 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
-without a restart) are built; phases 3–6 are not.
+Phases 1–3 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+without a restart, approval and caps per repo) are built; phases 4–6 are not.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.

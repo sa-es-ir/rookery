@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 
-os.environ.update(WEBHOOK_SECRET="s3cr3t", ALLOWLIST="alice, Bob")
+os.environ.update(WEBHOOK_SECRET="s3cr3t")
 import agent  # noqa: E402
 
 # approval is a regex, not a judgement call
@@ -18,9 +18,6 @@ assert not agent.APPROVE.match("approver should look first")
 m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
 assert m and m.group(1) == "questions"
 assert not agent.MARKER.search("the STATUS: plan-ready marker must be on its own line")
-
-# allowlist is normalised to lowercase
-assert agent.ALLOW == {"alice", "bob"}
 
 # webhook signature
 raw = b'{"action":"opened"}'
@@ -208,5 +205,75 @@ agent.api = lambda method, path, bearer: (
                       for i in range(100 if path.endswith("page=1") else 3)]})
 agent.sync()
 assert len(seen) == 103 and seen[0] == ("o/r0", "dev"), seen[:2]
+
+# approval and replies: write/maintain/admin on *that* repo, looked up per comment
+import urllib.error  # noqa: E402
+
+perms = {("o/r", "alice"): "admin", ("o/r", "bob"): "write", ("o/r", "carol"): "read",
+         ("o/other", "alice"): "none"}
+def fake_api(method, path, bearer):
+    _, _, repo_a, repo_b, _, user, _ = path.split("/")
+    if (repo_a + "/" + repo_b, user) not in perms:
+        raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+    return {"permission": perms[(repo_a + "/" + repo_b, user)]}
+agent.api, agent.token = fake_api, lambda repo: "ghs_x"
+assert agent.can_write("o/r", "alice") and agent.can_write("o/r", "bob")
+assert not agent.can_write("o/r", "carol"), "read is not enough"
+assert not agent.can_write("o/other", "alice"), "admin on one repo is nothing on another"
+assert not agent.can_write("o/r", "nobody"), "a failed lookup denies"
+
+agent.REPOS = {"o/r": "main", "o/other": "main"}
+agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+for repo, user in [("o/r", "alice"), ("o/other", "alice"), ("o/r", "carol"), ("o/r", agent.ME)]:
+    agent.enqueue("issue_comment", {"action": "created", "repository": {"full_name": repo},
+                                    "issue": {"number": 9}, "comment": {"user": {"login": user}, "body": "approve"}})
+assert [(j["repo"], j["body"]) for j in drain()] == [("o/r", "approve")]
+
+# caps: runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
+agent.WORKSPACE = Path(tempfile.mkdtemp())
+agent.PAUSED = agent.WORKSPACE / "PAUSED"
+agent.RUN_CAP, agent.USD_CAP = 3, 1.0
+assert agent.cost_of('{"result": "x", "total_cost_usd": 0.25}') == 0.25
+assert agent.cost_of("claude crashed") == 0.0
+agent.check_caps("o/r")                      # nothing used yet
+agent.record("o/r", 0.25), agent.record("o/r", 0.25)
+agent.record("o/other", 5.0)                 # another repo's spend is its own
+assert agent.usage("o/r") == (2, 0.5)
+agent.check_caps("o/r")
+agent.record("o/r", 0.0)
+def capped(repo):
+    try:
+        agent.check_caps(repo)
+    except RuntimeError as e:
+        return str(e)
+assert "3/3 runs" in capped("o/r"), "the run cap"
+assert "$5.00/$1.00" in capped("o/other"), "the dollar cap"
+with agent.closing(agent.db()) as con, con:   # yesterday's usage does not count
+    con.execute("UPDATE runs SET day = '2000-01-01'")
+assert agent.usage("o/r") == (0, 0) and capped("o/r") is None
+agent.PAUSED.touch()
+assert "paused" in capped("o/r")
+agent.PAUSED.unlink()
+
+# claude(): the cap is checked before the call, and every call is recorded, failed ones too
+agent.worktree = lambda c: agent.WORKSPACE
+agent.sh = lambda *a, **k: json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
+c = agent.Ctx("o/r", 9, agent.WORKSPACE, "main")
+assert agent.claude(c, "p", key="task-0") == ("task-done", "done")
+def boom(*a, **k):
+    raise RuntimeError("claude failed (1): overloaded")
+agent.sh = boom
+try:
+    agent.claude(c, "p", key="task-1")
+except RuntimeError:
+    pass
+assert agent.usage("o/r") == (2, 0.4)
+agent.record("o/r", 0.0)                      # 3/3: the next call never starts
+agent.sh = lambda *a, **k: (_ for _ in ()).throw(AssertionError("claude ran over the cap"))
+try:
+    agent.claude(c, "p", key="task-2")
+    raise AssertionError("expected the cap to stop it")
+except RuntimeError as e:
+    assert "daily cap" in str(e)
 
 print("ok")

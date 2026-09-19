@@ -31,7 +31,7 @@ Everything is one file, `agent.py` — Python stdlib only, plus the `gh`, `opens
 ## Quick start
 
 ```bash
-cp .env.example .env            # WEBHOOK_SECRET, ALLOWLIST, APP_ID, APP_KEY
+cp .env.example .env            # WEBHOOK_SECRET, APP_ID, APP_KEY
 python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 ```
 
@@ -136,9 +136,13 @@ Add the `claude:trigger` label to an issue, then follow the `claude:*` label:
 | `claude:done` | draft PR is open, review clean |
 | `claude:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
 
-Only logins in `ALLOWLIST` can move an issue along, and approval is a regex
+Only people with write access to the repo can move an issue along, and approval is a regex
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
 `git push` and `gh`; it never publishes.
+
+Each repo gets 10 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
+override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
+new call. Hitting either comments on the issue and sets `claude:error`.
 
 ## Testing without a webhook
 
@@ -154,8 +158,8 @@ python test_agent.py                       # the gates, no network
 
 ## Not built yet
 
-Phases 3–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): per-repo approval
-and caps, parallel repos, a control-plane API and UI, and a second harness.
+Phases 4–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): parallel repos,
+a control-plane API and UI, and a second harness.
 
 One worker, one job at a time — deliberately. A long implementation blocks every
 other issue.

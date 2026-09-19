@@ -2,9 +2,9 @@
 """GitHub issue -> Claude Code agent, for every repo the GitHub App is installed on.
 
 State lives on GitHub (installations, labels, comments) and in the target repo
-(agent-plans/<n>/). The only local state is a clone per repo and a git worktree
-per issue; Claude session ids are derived from repo#issue/key, so nothing is
-persisted between runs.
+(agent-plans/<n>/). The only local state is a clone per repo, a git worktree
+per issue, and rookery.db (the per-repo daily usage behind the caps). Claude
+session ids are derived from repo#issue/key, so no session state is persisted.
 """
 import base64
 import calendar
@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -23,6 +24,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import NamedTuple
@@ -46,7 +48,10 @@ for k in ("GH_TOKEN", "GITHUB_TOKEN"):
 APP_ID = os.environ.get("APP_ID", "")
 APP_KEY = os.environ.get("APP_KEY", str(HERE / "app.pem"))
 SECRET = os.environ["WEBHOOK_SECRET"].encode()
-ALLOW = {u.strip().lower() for u in os.environ["ALLOWLIST"].split(",") if u.strip()}
+# per repo per UTC day; a run is one claude call. RUN_CAP/USD_CAP override them.
+RUN_CAP = int(os.environ.get("RUN_CAP", "10"))
+USD_CAP = float(os.environ.get("USD_CAP", "20"))
+PAUSED = HERE / "PAUSED"  # operator switch: while this file exists, no claude call starts
 PORT = int(os.environ.get("PORT", "8787"))
 HOST = os.environ.get("HOST", "127.0.0.1")  # "" = all interfaces, for a public webhook
 
@@ -176,6 +181,17 @@ def auth(repo):
             "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}"}
 
 
+def can_write(repo, user):
+    """write, maintain or admin on *this* repo — the only people who may steer it.
+    maintain reports as "write" in `permission`; a non-collaborator gets read/none."""
+    try:
+        r = api("GET", f"/repos/{repo}/collaborators/{user}/permission", token(repo))
+    except urllib.error.HTTPError as e:
+        log(f"{repo} permission lookup for {user} failed: {e}")
+        return False
+    return r["permission"] in ("admin", "write")
+
+
 def labels_of(repo, n):
     return {l["name"] for l in json.loads(gh(repo, "issue", "view", str(n), "--json", "labels"))["labels"]}
 
@@ -187,6 +203,51 @@ def set_phase(c, phase):
         args += ["--remove-label", l]
     gh(c.repo, *args)
     log(f"#{c.n} phase: {phase}")
+
+
+# --- usage and caps ----------------------------------------------------------
+
+def db():
+    """A fresh connection per call: per-repo workers write from several threads."""
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(WORKSPACE / "rookery.db", timeout=30)
+    con.execute("CREATE TABLE IF NOT EXISTS runs (repo TEXT, day TEXT, usd REAL)")
+    return con
+
+
+def today():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def record(repo, usd):
+    with closing(db()) as con, con:
+        con.execute("INSERT INTO runs VALUES (?, ?, ?)", (repo, today(), usd))
+
+
+def usage(repo):
+    """-> (runs, usd) for repo so far today."""
+    with closing(db()) as con:
+        return con.execute("SELECT COUNT(*), COALESCE(SUM(usd), 0) FROM runs WHERE repo = ? AND day = ?",
+                           (repo, today())).fetchone()
+
+
+def check_caps(repo):
+    """Before every claude call, so a running implementation stops after the task it
+    is on — that task is committed, and `approve` later resumes at the next one.
+    ponytail: checked before the call, so one call can overshoot USD_CAP by its own cost."""
+    if PAUSED.exists():
+        raise RuntimeError(f"Rookery is paused by the operator ({PAUSED.name} file). Nothing ran.")
+    runs, usd = usage(repo)
+    if runs >= RUN_CAP or usd >= USD_CAP:
+        raise RuntimeError(f"{repo} hit its daily cap: {runs}/{RUN_CAP} runs, ${usd:.2f}/${USD_CAP:.2f} "
+                           "today. It resets at 00:00 UTC; comment again after that to continue.")
+
+
+def cost_of(out):
+    try:
+        return float(json.loads(out).get("total_cost_usd") or 0)
+    except ValueError:
+        return 0.0
 
 
 # --- claude ------------------------------------------------------------------
@@ -218,8 +279,9 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
         # implementation tasks run as no agent, so the model is set here; the two
         # roles carry their own `model:` in agents/*.md.
         cmd += ["--model", "sonnet"]
+    check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    wt = worktree(c)
+    wt, out = worktree(c), ""
     try:
         out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt)
     except RuntimeError as e:
@@ -229,6 +291,9 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
             raise
         log(f"#{c.n} session {sid} exists — resuming it")
         out = sh(*cmd, "--resume", sid, cwd=wt)
+    finally:
+        # a failed call still counts as a run; its cost is lost with its stdout
+        record(c.repo, cost_of(out))
     text = json.loads(out).get("result", "")
     m = MARKER.search(text)
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
@@ -587,7 +652,8 @@ def enqueue(event, p):
                       "title": p["issue"]["title"], "body": p["issue"]["body"] or ""})
     elif event == "issue_comment" and p["action"] == "created":
         user = p["comment"]["user"]["login"].lower()
-        if user != ME and user in ALLOW and labels_of(repo, n) & set(PHASES):
+        # approvals and replies alike: only people who can write to *this* repo
+        if user != ME and labels_of(repo, n) & set(PHASES) and can_write(repo, user):
             jobs.put({"kind": "continue", "repo": repo, "n": n, "body": p["comment"]["body"]})
 
 

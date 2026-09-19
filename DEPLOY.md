@@ -98,7 +98,8 @@ come from `<slug>[bot]`. `ME` in `agent.py` is that login: if your slug is not
 
 Do **not** run `gh auth login` on the box. Left logged in, `~/.config/gh/hosts.yml` is a
 long-lived personal token the agent could read; `gh auth status` should say
-"not logged in". Your own login goes in `ALLOWLIST`.
+"not logged in". Who may approve is not configured here: anyone with write, maintain or
+admin on the issue's repo can, looked up per comment.
 
 Known ceiling: the agent runs as the same user that can read `app.pem`, and the key
 outranks any token minted from it. The deny rules stop `gh` and `git push`, not
@@ -166,8 +167,14 @@ tok() { (cd /opt/rookery && python3 -c "import agent; print(agent.token('$1'))")
 GH_TOKEN=$(tok OWNER/REPO) gh issue list --repo OWNER/REPO
 ```
 
-Check `/opt/rookery/.env`: `ALLOWLIST` holds the logins allowed to comment `approve`, and
-note `WEBHOOK_SECRET` for step 10.
+Check `/opt/rookery/.env`: note `WEBHOOK_SECRET` for step 10. Optional: `RUN_CAP` (default
+10 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
+`$WORKSPACE/rookery.db`:
+
+```bash
+sqlite3 /opt/rookery/work/rookery.db "SELECT repo, COUNT(*), SUM(usd) FROM runs WHERE day = date('now') GROUP BY repo"
+touch /opt/rookery/PAUSED     # stop every new claude call, all repos; rm it to resume
+```
 
 ## 9. Test before any webhook — server, rookery
 
@@ -329,7 +336,8 @@ whether it was acted on or dropped.
 
 ```bash
 journalctl -u rookery --no-pager | grep 'listening on'   # "(bot user: ...)" must be the App's, not you
-grep ALLOWLIST /opt/rookery/.env                         # must contain YOUR login, lowercase
+journalctl -u rookery --no-pager | grep 'permission lookup'   # a failed write-access check denies
+GH_TOKEN=$(tok OWNER/REPO) gh api repos/OWNER/REPO/collaborators/YOU/permission -q .permission  # admin or write
 GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # some claude:* phase label
 ```
 
