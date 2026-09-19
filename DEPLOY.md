@@ -1,5 +1,10 @@
 # Deploying Rookery to a Linux server
 
+> **Phase 5 (portal, API, run log, cancel, `web.py`) is not deployed yet.** It has only run
+> locally ([ai-plans/phase5-notes.md](ai-plans/phase5-notes.md)). This guide describes the
+> Phase 1–4 server. Deploying Phase 5 means copying `web.py` and `ui/` too, the OAuth
+> settings in `.env`, and a TLS reverse proxy in front before the portal faces the internet.
+
 Ubuntu 24.04 LTS. The orchestrator is stdlib-only Python; everything hard is in the two
 CLIs it shells out to (`gh`, `claude`). Written against a real deploy — the gotchas at
 the bottom each cost an hour, read them before you start.

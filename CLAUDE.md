@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 python test_agent.py                       # the whole test suite (asserts, no framework, no network)
-python agent.py                            # webhook server on 127.0.0.1:$PORT (default 8787)
+python agent.py                            # webhook + portal on 127.0.0.1:$PORT (default 8787)
 npx smee-client --url https://smee.io/<ch> --target http://127.0.0.1:8787/
 python agent.py owner/repo 12              # dry run: plan issue 12 as if just labelled
 python agent.py owner/repo 12 approve      # dry run: run the task loop, push, open the draft PR
@@ -23,8 +23,13 @@ _before_ `import agent` for that reason — keep that ordering if you add tests.
 
 ## Architecture
 
-One file, `agent.py`. `Hook` (HTTP, verifies the HMAC, drops a repeated `X-GitHub-Delivery`
-via `fresh()`, never blocks on a job) hands jobs to `submit()`, which puts each on its repo's
+Two files. `agent.py` is the pipeline; `web.py` is everything HTTP on one
+`ThreadingHTTPServer`: the webhook (`Handler.do_POST` on `/`, verifies the HMAC, drops a
+repeated `X-GitHub-Delivery` via `fresh()`, never blocks on a job), GitHub sign-in, the JSON
+API and the static `ui/` files. `route()` is the whole non-webhook app as a function of
+(method, url, headers), which is how `test_agent.py` drives it. `agent.py`'s `__main__`
+re-imports itself as `agent` before `main()`, so `web.py`'s `import agent` is the same
+module, not a second copy. The webhook hands jobs to `submit()`, which puts each on its repo's
 own queue in `queues`; the repo's daemon `worker()` is started lazily on its first job. Repos
 run in parallel, but within a repo it is still one job at a time — deliberate, since two jobs
 on one issue would race on its worktree and labels. A worker whose last job was `offboard`
@@ -76,6 +81,23 @@ session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick 
 `decisions.md` is the only memory that crosses between tasks. A failure raises with everything
 before it already committed, so commenting `approve` again resumes at that same task.
 
+**Run log.** `handle()` opens a `jobs` row per plan/reply/implement (`begin()`), and the
+pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost, tick,
+commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
+ok/failed/cancelled; a restart marks leftovers `interrupted`. `active[repo]` is the job a
+worker is running — one per repo.
+
+**Cancel.** `sh(track=repo)` registers the process in `active[repo]` under `alock`;
+`cancel()` sets the flag and kills the tree (`killpg` / `taskkill /T`) under the same lock,
+so a cancel can't land between the check and the start. `check_caps()` refuses further
+calls, and the job fails through the normal path with a "Cancelled … by @login" comment.
+
+**Portal auth.** GitHub OAuth through the App (`CLIENT_ID`/`CLIENT_SECRET`, callback
+`PUBLIC_URL/auth/callback`, a `state` cookie). The user's token lists their installations'
+repos once at login and is dropped; the session row (keyed by sha256 of the cookie, 8h)
+keeps that list. Visible = that list ∩ `REPOS`. POSTs need the session's `X-CSRF-Token`.
+Cancel needs `can_write()`, the same check as `approve`. `REPOS_ONLY` limits an instance.
+
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
 cached and re-minted with under 10 minutes left, since an implementation outlives the 1h
@@ -101,7 +123,16 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   Caps are per tenant; `MAX_TASKS` is per issue — keep them independent.
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
-  `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason.
+  `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
+  in `web.py`. A user's OAuth token lives only inside `callback()`: never stored, never in
+  the env.
+- **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
+  replayable: session rows are keyed by the cookie's sha256, and no token is stored.
+- **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
+  regex on issue comments. Visibility comes from the user's own installations; anything
+  that steers a repo (cancel) needs `can_write()`. Someone else's run is a 404, not a 403.
+- **User-written text is never `innerHTML`** in `ui/portal.html` — issue titles and errors
+  go in through `textContent` (`h()`).
 - **The push goes to `https://github.com/<repo>.git`**, not `origin`, so it carries the
   App's token even when the clone's origin is ssh.
 - **Planning writes `agent-plans/<n>/` and nothing else**, enforced by `keep_plans_only()`
@@ -139,7 +170,8 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 1–4 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
-without a restart, approval and caps per repo, parallel repos) are built; phases 5–6 are not.
+Phases 1–5 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+without a restart, approval and caps per repo, parallel repos, portal/API/run log) are
+built; 1–4 are deployed, 5 has run locally only; phase 6 is not built.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.

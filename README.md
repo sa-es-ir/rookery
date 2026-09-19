@@ -24,8 +24,9 @@ then implements the plan task by task on a branch and opens a draft PR.
 claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
-Everything is one file, `agent.py` — Python stdlib only, plus the `gh`, `openssl` and
-`claude` CLIs on your PATH. The full roadmap lives in
+Two files: `agent.py` (the pipeline) and `web.py` (the webhook, sign-in, the API and the
+portal in `ui/`) — Python stdlib only, plus the `gh`, `openssl` and `claude` CLIs on your
+PATH. The full roadmap lives in
 [ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
 
 ## Quick start
@@ -156,10 +157,33 @@ python agent.py owner/repo 12 use sqlite   # anything else is fed back as a repl
 python test_agent.py                       # the gates, no network
 ```
 
+## The portal
+
+`python agent.py` also serves a small control plane at `PUBLIC_URL` (default
+`http://127.0.0.1:8787/`). Sign in with GitHub — the App's own OAuth, so set `CLIENT_ID` /
+`CLIENT_SECRET` from the App's settings and add `PUBLIC_URL/auth/callback` as its callback
+URL. You see the repos of your own installations of the App, and for each:
+
+- today's runs and dollars against the caps;
+- every run (plan, reply, implementation), and where it is or where it stopped —
+  *"Failed at task 9 of 12"* — read from the run log in `rookery.db`, not the journal;
+- a run's log step by step: tasks, each `claude` call with its status and cost, commits,
+  push, PR, the error;
+- **Cancel** on a running job (write access needed): the `claude` call is killed and the
+  issue gets the error comment and `claude:error`, like any failure. `approve` resumes it.
+
+There is no approve button. Approval stays an `approve` comment on the issue.
+
+Sessions are server-side and last 8 hours. Your GitHub token is used once at sign-in to
+list your installations and is not kept. Over the internet, put it behind a TLS reverse
+proxy and set `PUBLIC_URL=https://…` (that also turns on the `Secure` cookie flag).
+
+`REPOS_ONLY=owner/a,owner/b` limits an instance to those repos — for a local copy next to
+a server on the same App.
+
 ## Not built yet
 
-Phases 5–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): a control-plane
-API and UI, and a second harness.
+Phase 6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): a second harness.
 
 One worker per repo: repos run in parallel, but within a repo it is one job at a
 time — deliberately. A long implementation blocks the other issues of *that* repo.
