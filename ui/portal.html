@@ -15,411 +15,314 @@
 /* sidebar */
 .side{border-right:1px solid var(--smoke);padding:20px 16px;display:flex;flex-direction:column;gap:28px}
 @media(min-width:900px){.side{position:sticky;top:0;height:100vh}}
-/* below the sidebar breakpoint it collapses to a scrolling top strip */
 @media(max-width:899px){
   .side{flex-direction:row;align-items:center;gap:16px;padding:12px 16px;overflow-x:auto;
     border-right:0;border-bottom:1px solid var(--smoke);scrollbar-width:none}
   .side::-webkit-scrollbar{display:none}
-  .side h4,.side .repos,.side .bottom{display:none}
-  .side .nav{display:flex;gap:4px}
-  .side .nav a{white-space:nowrap}
+  .side h4,.side .bottom{display:none}
+  .side .repos{display:flex;gap:4px}
   .top{padding:0 16px}
-  .top .frost{display:none}
   .view{padding:20px 16px}
 }
 .side .logo{padding:4px 8px 0}
 .side h4{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.1em;
   font-weight:400;padding:0 8px;margin-bottom:8px}
-.side .nav a{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;
-  font-size:14px;color:var(--ash);cursor:pointer}
-.side .nav a:hover{background:var(--shell)}
-.side .nav a[aria-current=page]{background:var(--shell);color:#fff}
-.side .nav .count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--fog)}
-.repos li{display:flex;align-items:center;gap:10px;padding:7px 12px;font-family:var(--mono);
-  font-size:12px;color:var(--fog)}
-.repos .dot{width:6px;height:6px;border-radius:9999px;background:rgb(253,137,37);flex:none}
-.side .bottom{margin-top:auto;border-top:1px solid var(--smoke);padding-top:16px}
-.side .bottom a{font-size:13px;color:var(--fog)}
-.side .bottom a:hover{color:#fff}
+.repos a{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;
+  font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--ash);white-space:nowrap}
+.repos a:hover{background:var(--shell)}
+.repos a[aria-current=true]{background:var(--shell);color:#fff}
+.repos .dot{width:6px;height:6px;border-radius:9999px;background:var(--smoke);flex:none}
+.repos .dot.on{background:rgb(253,137,37);box-shadow:0 0 8px rgba(255,142,93,.9)}
+.repos .name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.repos .use{margin-left:auto;flex:none;color:var(--fog);font-size:11px}
+.repos .use.hot{color:#ffb3a5}
+.side .none{font-size:13px;color:var(--fog);padding:0 12px;font-weight:300}
+.side .bottom{margin-top:auto;border-top:1px solid var(--smoke);padding-top:16px;display:flex;
+  align-items:center;gap:10px;font-size:13px;color:var(--fog)}
+.side .bottom b{font-weight:400;color:var(--ash)}
+.link{background:none;border:0;padding:0;color:var(--fog);cursor:pointer;font-size:13px}
+.link:hover{color:#fff}
 
 /* main */
 main{min-width:0}
 .top{height:66px;border-bottom:1px solid var(--smoke);display:flex;align-items:center;gap:16px;
   padding:0 32px;position:sticky;top:0;background:var(--void);z-index:10}
-.top h1{font-size:18px;font-weight:400}
+.top h1{font-size:18px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .right{margin-left:auto;display:flex;gap:10px;align-items:center}
-.view{padding:32px}
+.view{padding:32px;max-width:1000px}
 .intro{color:var(--fog);font-size:15px;font-weight:300;max-width:70ch;margin-bottom:28px}
-
-/* agents */
-.grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
-.card{background:var(--surface);border-radius:16px;padding:24px;display:flex;flex-direction:column}
-.card .row{display:flex;align-items:baseline;gap:10px}
-.card h3{font-size:18px;font-weight:400}
-.card .role{font-family:var(--mono);font-size:11px;color:var(--fog);margin-left:auto}
-.card p{color:var(--ash);font-weight:300;font-size:14px;margin:12px 0 18px;flex:1}
-.card .meta{display:flex;align-items:center;gap:8px}
-.pill{background:rgba(163,163,163,.2);border:1px solid var(--smoke);border-radius:9999px;
-  padding:3px 12px;font-size:12px;color:var(--ash)}
-.toggle{border:1px solid var(--smoke);background:transparent;color:var(--fog);border-radius:9999px;
-  padding:3px 12px 3px 8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
-.toggle .led{width:7px;height:7px;border-radius:9999px;background:var(--smoke)}
-.toggle[aria-pressed=true]{color:#fff;border-color:rgba(255,142,93,.5)}
-.toggle[aria-pressed=true] .led{background:rgb(253,137,37);box-shadow:0 0 8px rgba(255,142,93,.9)}
-.card .drop{margin-left:auto;font-size:12px;color:var(--fog);font-family:var(--mono)}
 
 /* runs */
 .runs{display:flex;flex-direction:column;gap:14px}
-.run{box-shadow:var(--inset);border-radius:24px;padding:18px 26px;display:grid;
-  grid-template-columns:1fr auto;gap:10px 20px;align-items:center}
+.run{box-shadow:var(--inset);border-radius:24px;padding:18px 26px;display:grid;cursor:pointer;
+  grid-template-columns:1fr auto;gap:10px 20px;align-items:center;color:inherit;transition:background .2s}
+.run:hover{background:rgba(255,255,255,.03)}
 .run h3{font-size:16px;font-weight:400}
-.run .where{font-family:var(--mono);font-size:12px;color:var(--fog);margin-top:4px}
+.run .where{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog);margin-top:4px}
+.run .why{grid-column:1/-1;font-size:13px;color:#ffb3a5;font-weight:300;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
 .bar{grid-column:1/-1;height:3px;border-radius:9999px;background:var(--shell);overflow:hidden}
-.bar i{display:block;height:100%;background:var(--ember);transition:width .4s}
+.bar i{display:block;height:100%;background:var(--current);transition:width .4s}
+.empty{color:var(--fog);font-weight:300;font-size:15px;padding:40px 0}
 
-/* workflow */
-.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
-.toolbar .status{font-family:var(--mono);font-size:12px;color:var(--fog);margin-left:auto}
-.builder{display:grid;gap:20px;grid-template-columns:1fr}
-@media(min-width:900px){.builder{grid-template-columns:220px 1fr;align-items:start}}
-.palette{background:var(--surface);border-radius:16px;padding:18px}
-.palette h4{font-size:13px;font-weight:400;color:#fff;margin-bottom:2px}
-.palette .hint{font-size:12px;color:var(--fog);margin-bottom:14px}
-.drag{background:var(--panel);border:1px solid var(--smoke);border-radius:12px;padding:9px 12px;
-  margin-bottom:8px;cursor:grab;font-size:14px;color:var(--ash);user-select:none}
-.drag:active{cursor:grabbing}
-.drag small{display:block;font-family:var(--mono);color:var(--fog);font-size:11px}
-#canvas{position:relative;background:var(--panel);border-radius:24px;height:540px;overflow:hidden;
-  background-image:radial-gradient(circle,rgba(255,255,255,.07) 1px,transparent 1px);background-size:20px 20px}
-#canvas.over{box-shadow:rgba(255,255,255,.14) 0 0 0 1px inset}
-#wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-#wires path{pointer-events:stroke;cursor:pointer}
-.node{position:absolute;width:196px;background:var(--surface);border:1px solid var(--smoke);
-  border-radius:12px;padding:12px 14px;cursor:grab;user-select:none;touch-action:none}
-.node.running{border-color:rgb(253,137,37);box-shadow:0 0 22px rgba(255,73,44,.28)}
-.node.done{border-color:#077ac7}
-.node b{font-weight:400;font-size:14px;color:#fff;display:block}
-.node small{font-family:var(--mono);font-size:11px;color:var(--fog)}
-.node .x{position:absolute;top:4px;right:8px;color:var(--fog);cursor:pointer;line-height:1}
-.node .x:hover{color:#fff}
-.port{position:absolute;top:50%;margin-top:-6px;width:12px;height:12px;border-radius:9999px;
-  background:var(--shell);border:1px solid var(--smoke);cursor:crosshair}
-.port.in{left:-7px}.port.out{right:-7px}
-.port:hover,.port.armed{background:rgb(7,122,199);border-color:rgb(107,33,239)}
-.empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;
-  color:var(--fog);font-size:14px;pointer-events:none}
+/* one run */
+.back{margin-bottom:20px}
+.head{background:var(--surface);border-radius:16px;padding:28px 32px;margin-bottom:28px;
+  display:grid;grid-template-columns:1fr auto;gap:14px 24px;align-items:start}
+.head h2{font-size:24px;letter-spacing:-.17px;line-height:1.2}
+.head .where{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog);margin-top:8px}
+.head .where a{border-bottom:1px solid var(--smoke)}
+.head .where a:hover{color:#fff;border-color:rgb(107,33,239)}
+.head .state{grid-column:1/-1;font-size:18px;color:#fff;font-weight:300}
+.head .side-actions{display:flex;flex-direction:column;align-items:flex-end;gap:12px}
+.head .facts{grid-column:1/-1;display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:var(--fog)}
+.head .facts b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
+.steps{display:flex;flex-direction:column}
+.step{display:grid;grid-template-columns:76px 20px 1fr;gap:0 12px;min-height:40px}
+.step time{font-family:var(--mono);font-size:11px;letter-spacing:0;color:var(--fog);padding-top:3px;text-align:right}
+.step .rail{position:relative}
+.step .rail::before{content:"";position:absolute;left:9px;top:0;bottom:0;width:2px;background:var(--smoke)}
+.step:first-child .rail::before{top:8px}
+.step:last-child .rail::before{bottom:calc(100% - 8px)}
+.step .rail i{position:absolute;left:4px;top:5px;width:12px;height:12px;border-radius:9999px;
+  background:var(--void);border:2px solid var(--smoke)}
+.step.task .rail i{border-color:#077ac7}
+.step.good .rail i{background:#077ac7;border-color:#077ac7}
+.step.bad .rail i{background:var(--scorch);border-color:var(--scorch)}
+.step .what{padding-bottom:16px;font-size:14px;min-width:0}
+.step.task .what{color:#fff;font-size:15px}
+.step .what small{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog);margin-left:8px}
+.step .what a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
+.step pre{margin:8px 0 0;background:var(--panel);border-radius:12px;padding:14px 16px;
+  font:400 12px/1.6 var(--mono);color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
+  box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 
-/* new agent dialog */
-dialog{background:var(--surface);color:var(--ash);border:1px solid var(--smoke);border-radius:16px;
-  padding:28px;width:min(440px,92vw)}
-dialog::backdrop{background:rgba(14,9,24,.72)}
-dialog h3{font-size:20px;margin-bottom:20px}
-label{display:block;font-size:12px;color:var(--fog);margin-bottom:6px}
-input,textarea,select{width:100%;background:var(--void);border:1px solid var(--smoke);border-radius:8px;
-  color:var(--ash);font:400 14px var(--font);padding:10px 12px;margin-bottom:16px;resize:vertical}
-input:focus,textarea:focus,select:focus{outline:none;border-color:rgb(107,33,239)}
-::placeholder{color:#6b6570}
-dialog .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+/* sign in */
+.gate{min-height:100vh;display:grid;place-items:center;padding:24px;
+  background:radial-gradient(126.99% 234.27% at 10.15% 142.35%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%),var(--void)}
+.gate .box{box-shadow:var(--inset);border-radius:24px;padding:48px 44px;max-width:440px;width:100%}
+.gate .logo{margin-bottom:36px}
+.gate h1{font-size:48px;line-height:.94;letter-spacing:-.86px;margin-bottom:18px}
+.gate p{color:var(--ash);font-weight:300;margin-bottom:32px}
+.gate .fine{font-size:12px;color:var(--fog);margin:20px 0 0}
+.toast{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog)}
 [hidden]{display:none!important}
 </style>
 
-<div class="shell">
+<div class="gate" id="gate" hidden>
+  <div class="box">
+    <div class="logo"><span class="mark"><img src="rookery.png" alt=""></span>rookery</div>
+    <h1>Watch your runs.</h1>
+    <p>Sign in with the GitHub account that installed Rookery. You'll see the repos in your own
+      installations — nothing else.</p>
+    <a class="cta" href="/auth/login">Sign in with GitHub</a>
+    <p class="fine">Plans are still approved on the issue, with an <span class="mono">approve</span> comment.</p>
+  </div>
+</div>
+
+<div class="shell" id="app" hidden>
   <aside class="side">
     <a class="logo" href="index.html"><span class="mark"><img src="rookery.png" alt=""></span>rookery</a>
-
     <div>
-      <h4>Manage</h4>
-      <nav class="nav">
-        <a data-view="agents" aria-current="page">Agents <span class="count" id="cAgents"></span></a>
-        <a data-view="runs">Runs <span class="count" id="cRuns"></span></a>
-        <a data-view="flow">Workflows <span class="count">1</span></a>
-      </nav>
+      <h4>Repos · today</h4>
+      <nav class="repos" id="repos"></nav>
     </div>
-
-    <div>
-      <h4>Connected repos</h4>
-      <ul class="repos">
-        <li><span class="dot"></span>sa-es-ir/rookery</li>
-        <li><span class="dot"></span>sa-es-ir/Llama</li>
-      </ul>
-    </div>
-
-    <div class="bottom"><a href="index.html">← Back to the site</a></div>
+    <div class="bottom"><span>@<b id="who"></b></span><button class="link" id="out">Sign out</button></div>
   </aside>
 
   <main>
     <div class="top">
-      <h1 id="title">Agents</h1>
+      <h1 id="title">Runs</h1>
       <div class="right">
-        <span class="frost" title="Webhook listener">listening · :8787</span>
-        <button class="cta" id="new">New agent</button>
+        <span class="toast" id="toast" role="status"></span>
+        <span class="lbl err" id="paused" hidden title="The operator's PAUSED file is present">paused</span>
       </div>
     </div>
 
-    <section class="view" id="agents">
-      <p class="intro">Agents are named roles the harness runs under. Turn one off and it stops
-        being offered to runs and workflows; the definition stays where it is.</p>
-      <div class="grid" id="agentGrid"></div>
+    <section class="view" id="list">
+      <p class="intro">Every plan, reply and implementation Rookery ran on your repos, newest first.
+        A run's log is written as it happens, so a failure shows the task it stopped at.</p>
+      <div class="runs" id="runs"></div>
     </section>
 
-    <section class="view" id="runs" hidden>
-      <p class="intro">One issue, one worktree, one branch. Phase comes from the labels on the
-        issue, so this view and GitHub can't disagree.</p>
-      <div class="runs" id="runList"></div>
-    </section>
-
-    <section class="view" id="flow" hidden>
-      <p class="intro">Drag an agent onto the canvas, then click an output port and an input port
-        to set the order. Click a wire to cut it.</p>
-      <div class="toolbar">
-        <button class="cta" id="run">Run workflow</button>
-        <button class="ghost" id="clear">Clear canvas</button>
-        <span class="status" id="flowStatus"></span>
-      </div>
-      <div class="builder">
-        <div class="palette">
-          <h4>Enabled agents</h4>
-          <div class="hint">Drag onto the canvas</div>
-          <div id="paletteList"></div>
-        </div>
-        <div id="canvas">
-          <svg id="wires"><defs><linearGradient id="cur" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#077ac7"/><stop offset="1" stop-color="#6b21ef"/></linearGradient></defs></svg>
-          <div class="empty" id="empty">Empty canvas — drag an agent here</div>
-        </div>
-      </div>
+    <section class="view" id="one" hidden>
+      <button class="link back" id="back">← All runs</button>
+      <div id="detail"></div>
     </section>
   </main>
 </div>
 
-<dialog id="dlg">
-  <form method="dialog" id="form">
-    <h3>New agent</h3>
-    <label for="f-id">Name</label>
-    <input id="f-id" name="id" required placeholder="doc-writer" pattern="[a-z0-9\-]+"
-           title="lowercase letters, numbers and dashes">
-    <label for="f-model">Model</label>
-    <select id="f-model" name="model"><option>opus</option><option>sonnet</option></select>
-    <label for="f-desc">What it does</label>
-    <textarea id="f-desc" name="desc" rows="3" required placeholder="Writes the README section for a new endpoint."></textarea>
-    <div class="actions">
-      <button class="ghost" value="cancel" formnovalidate>Cancel</button>
-      <button class="cta" value="save">Add agent</button>
-    </div>
-  </form>
-</dialog>
-
 <script>
-// ponytail: all state in memory, no persistence and no backend. Wire to agent.py when the shapes settle.
-const AGENTS = [
-  {id:'planmaker',   role:'plan',   model:'opus',   on:true,  desc:'Turns a GitHub issue into a plan and an ordered task list. Writes agent-plans/&lt;n&gt;/ and nothing else.'},
-  {id:'implementer', role:'task',   model:'sonnet', on:true,  desc:'Works one task from tasks.md per session. Runs with no persona on purpose — the default harness plus the deny rules is the point.'},
-  {id:'reviewer',    role:'review', model:'opus',   on:true,  desc:'Reads the branch diff once the task loop is done. Advisory: it never blocks the push.'},
-  {id:'security',    role:'review', model:'opus',   on:false, desc:'Looks for leaked secrets and unexpected network calls in the diff.'},
-  {id:'cleaner',     role:'task',   model:'sonnet', on:false, desc:'Dead code, unused dependencies, lint drift.'},
-];
-const RUNS = [
-  {repo:'sa-es-ir/Llama',   n:102, title:'Upload receiver for transfers',        phase:'implementing',      cls:'live', done:7, total:12},
-  {repo:'sa-es-ir/rookery', n:3,   title:'Create the frontend portal',           phase:'awaiting-approval', cls:'',     done:0, total:5},
-  {repo:'sa-es-ir/Llama',   n:98,  title:'Permission handler drops role claims', phase:'error',             cls:'err',  done:2, total:6},
-  {repo:'sa-es-ir/rookery', n:1,   title:'Add default agents',                   phase:'done',              cls:'ok',   done:4, total:4},
-];
-const flow = {nodes:[], edges:[], seq:0};
-
+// ponytail: polls every 4s while the tab is visible; a push channel is not worth it at this size.
 const $ = s => document.querySelector(s);
-const el = (t,c,h) => {const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+const state = {me: null, repo: null, run: null};
 
-/* --- shell nav --- */
-document.querySelectorAll('.side .nav a').forEach(a => a.onclick = () => {
-  document.querySelectorAll('.side .nav a').forEach(x => x.toggleAttribute('aria-current', x===a));
-  ['agents','runs','flow'].forEach(v => $('#'+v).hidden = v !== a.dataset.view);
-  $('#title').textContent = a.textContent.trim().split(' ')[0];
-  $('#new').hidden = a.dataset.view !== 'agents';
-  // wires are measured off the DOM, which reads zero while the view is hidden
-  if (a.dataset.view === 'flow') render();
-});
-
-/* --- agents --- */
-function agents(){
-  const g = $('#agentGrid'); g.innerHTML = '';
-  g.append(...AGENTS.map(a => {
-    const c = el('div','card',
-      '<div class="row"><h3>' + a.id + '</h3><span class="role">' + a.role + '</span></div>' +
-      '<p>' + a.desc + '</p>' +
-      '<div class="meta"><button class="toggle" aria-pressed="' + a.on + '">' +
-        '<span class="led"></span>' + (a.on ? 'Enabled' : 'Disabled') + '</button>' +
-      '<span class="pill">' + a.model + '</span></div>');
-    c.querySelector('.toggle').onclick = () => {
-      a.on = !a.on;
-      if (!a.on) {  // an agent that is off can't stay on the canvas
-        flow.nodes.filter(n => n.agent === a.id).forEach(n => remove(n));
-      }
-      agents(); palette(); counts();
-    };
-    return c;
-  }));
+/* DOM from data. Issue titles and errors are user-written: text only, never innerHTML. */
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})){
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e[k] = v;
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k);
+  return e;
 }
+
+async function call(path, opts = {}){
+  const r = await fetch(path, {credentials: 'same-origin', ...opts,
+    headers: {...(opts.method === 'POST' ? {'X-CSRF-Token': state.me.csrf} : {}), ...(opts.headers || {})}});
+  if (r.status === 401){ signedOut(); throw new Error('signed out'); }
+  const body = r.status === 204 ? null : await r.json();
+  if (!r.ok) throw new Error(body && body.error || r.statusText);
+  return body;
+}
+
+function signedOut(){ $('#app').hidden = true; $('#gate').hidden = false; state.me = null; }
+
+const LBL = {running: 'live', ok: 'ok', failed: 'err', cancelled: 'err', interrupted: 'err'};
+const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation'};
+
+// the one line the whole page exists for: where a run is, or where it stopped
+function where(r){
+  const t = r.task && ('task ' + r.task.i + ' of ' + r.task.of);
+  if (r.status === 'running') return t ? 'Running ' + t : r.act === 'implement' ? 'Starting' : 'Planning';
+  if (r.status === 'failed') return t ? 'Failed at ' + t : 'Failed while ' + (r.act === 'implement' ? 'starting' : 'planning');
+  if (r.status === 'cancelled') return 'Cancelled' + (t ? ' at ' + t : '');
+  if (r.status === 'interrupted') return 'Interrupted by a restart' + (t ? ' at ' + t : '');
+  return r.act === 'implement' ? 'Done — draft PR opened' : r.act === 'plan' ? 'Plan posted' : 'Plan revised';
+}
+
+function progress(r){
+  if (!r.task) return r.status === 'ok' ? 100 : 0;
+  if (r.status === 'ok' && r.act === 'implement') return 100;
+  return Math.round((r.task.i - 1) / r.task.of * 100);
+}
+
+const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+const day = t => new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+const usd = n => '$' + n.toFixed(2);
+const issue = r => 'https://github.com/' + r.repo + '/issues/' + r.n;
+const title = r => r.title || r.repo + '#' + r.n;
+
+/* --- sidebar: repos and today's usage against the caps --- */
+async function repos(){
+  const d = await call('/api/repos');
+  $('#paused').hidden = !d.paused;
+  const nav = $('#repos');
+  nav.replaceChildren(
+    h('a', {'aria-current': state.repo == null, onclick: () => pick(null)}, h('span', {class: 'dot'}), 'All repos'),
+    ...d.repos.map(r => {
+      const hot = r.runs >= r.run_cap || r.usd >= r.usd_cap;
+      return h('a', {'aria-current': state.repo === r.repo, onclick: () => pick(r.repo),
+                     title: r.runs + '/' + r.run_cap + ' runs, ' + usd(r.usd) + '/' + usd(r.usd_cap) + ' today (UTC)'},
+        h('span', {class: 'dot', 'data-repo': r.repo}), h('span', {class: 'name'}, r.repo),
+        h('span', {class: 'use' + (hot ? ' hot' : '')}, r.runs + '/' + r.run_cap));
+    }));
+  if (!d.repos.length) nav.append(h('p', {class: 'none'},
+    'No repos yet. Rookery shows the repos of your own installations of the App.'));
+}
+
+function pick(repo){ state.repo = repo; state.run = null; show(); }
 
 /* --- runs --- */
-$('#runList').append(...RUNS.map(r => el('div','run',
-  '<div><h3>' + r.title + '</h3><div class="where">' + r.repo + ' · #' + r.n + ' · ' +
-    r.done + '/' + r.total + ' tasks</div></div>' +
-  '<span class="lbl ' + r.cls + '">claude:' + r.phase + '</span>' +
-  '<div class="bar"><i style="width:' + Math.round(r.done / r.total * 100) + '%"></i></div>')));
-
-function counts(){
-  $('#cAgents').textContent = AGENTS.filter(a => a.on).length + '/' + AGENTS.length;
-  $('#cRuns').textContent = RUNS.filter(r => !['done','error'].includes(r.phase)).length;
+async function list(){
+  const d = await call('/api/runs' + (state.repo ? '?repo=' + encodeURIComponent(state.repo) : ''));
+  const live = new Set(d.runs.filter(r => r.status === 'running').map(r => r.repo));
+  document.querySelectorAll('.repos .dot[data-repo]').forEach(e => e.classList.toggle('on', live.has(e.dataset.repo)));
+  $('#runs').replaceChildren(...(d.runs.length ? d.runs.map(r =>
+    h('a', {class: 'run', href: '#run/' + r.id},
+      h('div', null, h('h3', null, title(r)),
+        h('div', {class: 'where'}, r.repo + ' · #' + r.n + ' · ' + ACT[r.act] + ' · ' + day(r.started) +
+          (r.usd ? ' · ' + usd(r.usd) : ''))),
+      h('span', {class: 'lbl ' + (LBL[r.status] || '')}, where(r)),
+      r.status === 'failed' && r.error && h('div', {class: 'why'}, r.error.split('\n')[0]),
+      r.act === 'implement' && h('div', {class: 'bar'}, h('i', {style: 'width:' + progress(r) + '%'}))))
+    : [h('p', {class: 'empty'}, 'No runs yet. Label an issue claude:trigger to start one.')]));
 }
 
-/* --- new agent (native dialog, no modal library) --- */
-$('#new').onclick = () => $('#dlg').showModal();
-$('#form').onsubmit = e => {
-  if (e.submitter && e.submitter.value === 'cancel') return;
-  const f = new FormData(e.target);
-  AGENTS.push({id:f.get('id'), role:'task', model:f.get('model'), on:true, desc:f.get('desc')});
-  e.target.reset(); agents(); palette(); counts();
-};
-
-/* --- workflow --- */
-function palette(){
-  const p = $('#paletteList'); p.innerHTML = '';
-  const on = AGENTS.filter(a => a.on);
-  if (!on.length) { p.append(el('div','hint','Every agent is disabled.')); return; }
-  p.append(...on.map(a => {
-    const d = el('div','drag', a.id + '<small>' + a.model + '</small>');
-    d.draggable = true;
-    d.ondragstart = e => e.dataTransfer.setData('text/plain', a.id);
-    return d;
-  }));
+/* --- one run, step by step --- */
+function stepView(s){
+  const t = {
+    phase: () => ['Label ', h('span', {class: 'lbl'}, s.label)],
+    task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
+    claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
+    tick: () => ['Ticked task ' + s.i + ' in tasks.md'],
+    commit: () => ['Committed task ' + s.i, h('small', null, s.sha)],
+    push: () => ['Pushed ', h('span', {class: 'mono'}, s.branch)],
+    // only a github.com URL becomes a link: the value came out of a CLI's stdout
+    pr: () => /^https:\/\/github\.com\//.test(s.url)
+      ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url],
+    error: () => ['Stopped', h('pre', null, s.message)],
+  }[s.what] || (() => [s.what]);
+  const cls = s.what === 'task' ? 'task' : s.what === 'error' || s.status === 'failed' ? 'bad'
+    : s.what === 'commit' || s.what === 'pr' ? 'good' : '';
+  return h('div', {class: 'step ' + cls}, h('time', null, clock(s.at)), h('div', {class: 'rail'}, h('i')),
+    h('div', {class: 'what'}, t()));
 }
 
-const canvas = $('#canvas'), wires = $('#wires');
-canvas.ondragover = e => {e.preventDefault(); canvas.classList.add('over');};
-canvas.ondragleave = () => canvas.classList.remove('over');
-canvas.ondrop = e => {
-  e.preventDefault(); canvas.classList.remove('over');
-  const r = canvas.getBoundingClientRect();
-  add(e.dataTransfer.getData('text/plain'), e.clientX - r.left - 98, e.clientY - r.top - 34);
-};
-
-function add(agent, x, y){
-  const n = {id:'n' + (++flow.seq), agent, x:Math.max(8,x), y:Math.max(8,y), status:'idle'};
-  flow.nodes.push(n); render(); return n;
+async function one(){
+  const r = await call('/api/runs/' + state.run);
+  $('#title').textContent = title(r);
+  const cancel = r.status === 'running' && h('button', {class: 'ghost', onclick: () => stop(r)}, 'Cancel run');
+  $('#detail').replaceChildren(
+    h('div', {class: 'head'},
+      h('div', null, h('h2', null, title(r)),
+        h('div', {class: 'where'}, h('a', {href: issue(r), target: '_blank', rel: 'noopener'}, r.repo + '#' + r.n),
+          ' · ' + ACT[r.act] + ' · run ' + r.id)),
+      h('div', {class: 'side-actions'}, h('span', {class: 'lbl ' + (LBL[r.status] || '')}, r.status), cancel),
+      h('div', {class: 'state'}, where(r)),
+      h('div', {class: 'facts'},
+        h('span', null, 'Started ', h('b', null, day(r.started))),
+        r.ended && h('span', null, 'Ended ', h('b', null, day(r.ended))),
+        h('span', null, 'Model cost ', h('b', null, usd(r.usd))),
+        h('span', null, 'Claude calls ', h('b', null, String(r.steps.filter(s => s.what === 'claude').length))))),
+    r.steps.length ? h('div', {class: 'steps'}, r.steps.map(stepView))
+      : h('p', {class: 'empty'}, 'Nothing logged yet.'));
 }
 
-function remove(n){
-  flow.nodes = flow.nodes.filter(x => x !== n);
-  flow.edges = flow.edges.filter(e => e.from !== n.id && e.to !== n.id);
-  armed = null;
+async function stop(r){
+  if (!confirm('Cancel run ' + r.id + ' on ' + r.repo + '#' + r.n + '?\n\nThe running claude call is killed, the issue gets an error comment and claude:error. Commenting approve resumes at the first unticked task.')) return;
+  try {
+    await call('/api/runs/' + r.id + '/cancel', {method: 'POST'});
+    toast('Cancelling run ' + r.id + '…');
+  } catch (e) { toast(e.message); }
+  refresh();
 }
 
-/* Order = follow the wires from the node nobody points at. Forks take the first
-   edge out; a closed cycle has no head and yields nothing to run. */
-function order(){
-  const targets = new Set(flow.edges.map(e => e.to));
-  let cur = flow.nodes.find(n => !targets.has(n.id));
-  const out = [];
-  while (cur && !out.includes(cur)){
-    out.push(cur);
-    const e = flow.edges.find(e => e.from === cur.id);
-    cur = e && flow.nodes.find(n => n.id === e.to);
-  }
-  return out;
+function toast(msg){ $('#toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').textContent = '', 6000); }
+
+/* --- navigation: #run/<id> is one run, anything else the list --- */
+function show(){
+  const m = location.hash.match(/^#run\/(\d+)$/);
+  state.run = m ? +m[1] : null;
+  if (!m && location.hash) history.replaceState(null, '', location.pathname);
+  $('#list').hidden = !!m; $('#one').hidden = !m;
+  if (!m) $('#title').textContent = state.repo || 'Runs';
+  refresh();
 }
 
-let armed = null; // id of the node whose output port is waiting for a target
-
-function render(){
-  [...canvas.querySelectorAll('.node')].forEach(n => n.remove());
-  $('#empty').hidden = flow.nodes.length > 0;
-  const steps = order();
-  $('#flowStatus').textContent = flow.nodes.length + ' node' + (flow.nodes.length === 1 ? '' : 's') +
-    ' · ' + steps.length + '-step sequence';
-
-  for (const n of flow.nodes){
-    const i = steps.indexOf(n) + 1;
-    const d = el('div', 'node ' + n.status,
-      '<span class="x">&times;</span><b>' + (i ? i + '. ' : '') + n.agent + '</b>' +
-      '<small>' + n.status + '</small><div class="port in"></div><div class="port out"></div>');
-    d.style.left = n.x + 'px'; d.style.top = n.y + 'px';
-    d.dataset.id = n.id;
-    d.querySelector('.x').onclick = ev => {ev.stopPropagation(); remove(n); render();};
-    d.querySelector('.out').onpointerdown = ev => {ev.stopPropagation(); armed = n.id; render();};
-    d.querySelector('.in').onpointerdown = ev => {
-      ev.stopPropagation();
-      if (armed && armed !== n.id && !flow.edges.some(e => e.from === armed && e.to === n.id))
-        flow.edges.push({from:armed, to:n.id});
-      armed = null; render();
-    };
-    if (armed === n.id) d.querySelector('.out').classList.add('armed');
-    d.onpointerdown = ev => drag(ev, n, d);
-    canvas.append(d);
-  }
-  wire();
+let busy = false;
+async function refresh(){
+  if (busy || !state.me) return;
+  busy = true;
+  try { await repos(); await (state.run ? one() : list()); }
+  catch (e) { if (e.message !== 'signed out') toast(e.message); }
+  finally { busy = false; }
 }
 
-function drag(ev, n, d){
-  const ox = ev.clientX - n.x, oy = ev.clientY - n.y;
-  d.setPointerCapture(ev.pointerId);
-  d.onpointermove = e => {
-    n.x = Math.max(0, Math.min(canvas.clientWidth - 196, e.clientX - ox));
-    n.y = Math.max(0, Math.min(canvas.clientHeight - 72, e.clientY - oy));
-    d.style.left = n.x + 'px'; d.style.top = n.y + 'px';
-    wire();
-  };
-  d.onpointerup = () => {d.onpointermove = null;};
-}
+window.onhashchange = show;
+$('#back').onclick = () => { location.hash = ''; };
+$('#out').onclick = async () => { await call('/auth/logout', {method: 'POST'}).catch(() => {}); location.replace('/'); };
+setInterval(() => { if (!document.hidden) refresh(); }, 4000);
 
-function wire(){
-  [...wires.querySelectorAll('path')].forEach(p => p.remove());
-  // ports sit at the node's vertical centre — read it rather than guessing the card height
-  const at = id => {
-    const d = canvas.querySelector('.node[data-id="' + id + '"]');
-    return d && [d.offsetLeft, d.offsetLeft + d.offsetWidth, d.offsetTop + d.offsetHeight / 2];
-  };
-  for (const e of flow.edges){
-    const a = at(e.from), b = at(e.to);
-    if (!a || !b) continue;
-    const x1 = a[1], y1 = a[2], x2 = b[0], y2 = b[2], m = Math.max(40, Math.abs(x2 - x1) / 2);
-    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
-    p.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C' + (x1+m) + ' ' + y1 + ' ' + (x2-m) + ' ' + y2 + ' ' + x2 + ' ' + y2);
-    p.setAttribute('stroke','url(#cur)');
-    p.setAttribute('stroke-width','2');
-    p.setAttribute('fill','none');
-    p.onclick = () => {flow.edges = flow.edges.filter(x => x !== e); render();};
-    wires.append(p);
-  }
-}
-
-$('#clear').onclick = () => {flow.nodes = []; flow.edges = []; armed = null; render();};
-$('#run').onclick = () => {
-  const steps = order();
-  if (!steps.length) return;
-  flow.nodes.forEach(n => n.status = 'idle');
-  steps.forEach((n, i) => {
-    setTimeout(() => {n.status = 'running'; render();}, i * 900);
-    setTimeout(() => {n.status = 'done';    render();}, i * 900 + 800);
-  });
-  render();
-};
-
-agents(); palette(); counts();
-add('planmaker', 24, 50); add('implementer', 215, 175); add('reviewer', 406, 300);
-flow.edges.push({from:'n1', to:'n2'}, {from:'n2', to:'n3'});
-render();
-
-// ponytail: sequencing is the only logic worth a check — open portal.html?test
-if (location.search.includes('test')){
-  const saved = flow.edges;
-  console.assert(order().map(n => n.agent).join() === 'planmaker,implementer,reviewer', 'chain order');
-  flow.edges = [];
-  console.assert(order().length === 1, 'no edges -> head only');
-  flow.edges = [{from:'n1',to:'n2'},{from:'n2',to:'n1'}];
-  console.assert(order().map(n => n.id).join() === 'n3', 'starts at the node nobody points at');
-  flow.edges = [{from:'n1',to:'n2'},{from:'n2',to:'n3'},{from:'n3',to:'n1'}];
-  console.assert(order().length === 0, 'closed cycle has no head -> empty sequence, not a hang');
-  flow.edges = saved; render();
-  console.log('self-check done');
-}
+(async () => {
+  const r = await fetch('/api/me', {credentials: 'same-origin'});
+  if (!r.ok) return signedOut();
+  state.me = await r.json();
+  $('#who').textContent = state.me.login;
+  $('#app').hidden = false;
+  show();
+})();
 </script>
