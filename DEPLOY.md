@@ -172,7 +172,7 @@ Check `/opt/rookery/.env`: note `WEBHOOK_SECRET` for step 10. Optional: `RUN_CAP
 `$WORKSPACE/rookery.db`:
 
 ```bash
-sqlite3 /opt/rookery/work/rookery.db "SELECT repo, COUNT(*), SUM(usd) FROM runs WHERE day = date('now') GROUP BY repo"
+python3 -c "import agent; print(agent.usage('OWNER/REPO'))"   # (runs, usd) today, from /opt/rookery
 touch /opt/rookery/PAUSED     # stop every new claude call, all repos; rm it to resume
 ```
 
