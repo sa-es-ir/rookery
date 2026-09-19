@@ -56,7 +56,8 @@ PAUSED = HERE / "PAUSED"  # operator switch: while this file exists, no claude c
 PORT = int(os.environ.get("PORT", "8787"))
 HOST = os.environ.get("HOST", "127.0.0.1")  # "" = all interfaces, for a public webhook
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+# threadName is the repo on a worker thread, so parallel repos' `#n` lines stay apart
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(threadName)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.info
 
 TRIGGER = "claude:trigger"
@@ -601,7 +602,8 @@ def submit(job):
     with qlock:
         if job["repo"] not in queues:
             queues[job["repo"]] = queue.Queue()
-            threading.Thread(target=worker, args=(job["repo"], queues[job["repo"]]), daemon=True).start()
+            threading.Thread(target=worker, args=(job["repo"], queues[job["repo"]]),
+                             name=job["repo"], daemon=True).start()
         queues[job["repo"]].put(job)
 
 
