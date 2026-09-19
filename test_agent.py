@@ -6,6 +6,8 @@ import os
 os.environ.update(WEBHOOK_SECRET="s3cr3t")
 import agent  # noqa: E402
 
+real_sh = agent.sh
+
 # approval is a regex, not a judgement call
 assert agent.APPROVE.match("approve")
 assert agent.APPROVE.match("  LGTM, ship it")
@@ -280,6 +282,41 @@ try:
     raise AssertionError("expected the cap to stop it")
 except RuntimeError as e:
     assert "daily cap" in str(e)
+
+# run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
+agent.sh, agent.WORKSPACE = real_sh, Path(tempfile.mkdtemp())
+wt = agent.WORKSPACE / "wt"
+wt.mkdir()
+git = lambda *a: subprocess.run(("git",) + a, cwd=wt, capture_output=True, check=True)
+git("init", "-q", "-b", "main"), git("config", "user.email", "t@t"), git("config", "user.name", "t")
+(wt / agent.pdir(5)).mkdir(parents=True)
+(wt / agent.pdir(5) / "tasks.md").write_text("- [ ] one\n- [ ] two\n- [ ] three\n", encoding="utf-8")
+git("add", "-A"), git("commit", "-qm", "plan")
+agent.worktree = lambda c: wt
+agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+agent.set_phase = lambda c, phase: agent.step(c.repo, "phase", label=phase)
+posted = []
+agent.comment = lambda c, body: posted.append(body)
+agent.REPOS = {"o/r": "main"}
+real_claude = agent.claude
+def fake_claude(c, prompt, key="plan", resume=False, agent_=None, **k):
+    agent.step(c.repo, "claude", key=key, status="task-done" if key == "task-0" else "failed", usd=0.1)
+    return ("task-done", "did it") if key == "task-0" else ("failed", "could not")
+agent.claude = fake_claude
+agent.handle({"kind": "continue", "repo": "o/r", "n": 5, "body": "approve"})
+with agent.closing(agent.db()) as con:
+    jobs = con.execute("SELECT id, repo, n, act, status FROM jobs").fetchall()
+    steps = [(w, json.loads(d)) for w, d in con.execute("SELECT what, detail FROM steps ORDER BY rowid")]
+assert [j[1:] for j in jobs] == [("o/r", 5, "implement", "failed")], jobs
+assert [w for w, _ in steps] == ["phase", "task", "claude", "tick", "commit", "task", "claude", "error", "phase"], steps
+assert steps[5][1] == {"i": 2, "of": 3, "text": "two"}, "the task it failed at, and of how many"
+assert "task 2 (two) reported failed" in steps[7][1]["message"] and posted, "error logged and commented"
+assert steps[8][1] == {"label": "claude:error"}
+assert not agent.active, "a finished job is no longer active"
+agent.step("o/r", "claude", key="x")            # outside a job: nothing is written
+with agent.closing(agent.db()) as con:
+    assert con.execute("SELECT COUNT(*) FROM steps").fetchone()[0] == len(steps)
+agent.claude = real_claude
 
 # parallel repos: a worker per repo, one job at a time within it
 import threading  # noqa: E402

@@ -3,7 +3,8 @@
 
 State lives on GitHub (installations, labels, comments) and in the target repo
 (agent-plans/<n>/). The only local state is a clone per repo, a git worktree
-per issue, and rookery.db (the per-repo daily usage behind the caps). Claude
+per issue, and rookery.db (the per-repo daily usage behind the caps, and the run
+log the UI reads). Claude
 session ids are derived from repo#issue/key, so no session state is persisted.
 """
 import base64
@@ -206,6 +207,7 @@ def set_phase(c, phase):
     for l in stale:
         args += ["--remove-label", l]
     gh(c.repo, *args)
+    step(c.repo, "phase", label=phase)
     log(f"#{c.n} phase: {phase}")
 
 
@@ -215,7 +217,14 @@ def db():
     """A fresh connection per call: per-repo workers write from several threads."""
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(WORKSPACE / "rookery.db", timeout=30)
-    con.execute("CREATE TABLE IF NOT EXISTS runs (repo TEXT, day TEXT, usd REAL)")
+    # runs: one row per claude call, for the caps. jobs/steps: the run log — one
+    # job per plan/implement, its steps in order, so a failure is visible task by task.
+    con.executescript("""
+        CREATE TABLE IF NOT EXISTS runs (repo TEXT, day TEXT, usd REAL);
+        CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, repo TEXT, n INTEGER, act TEXT,
+            title TEXT, started REAL, ended REAL, status TEXT);
+        CREATE TABLE IF NOT EXISTS steps (job INTEGER, at REAL, what TEXT, detail TEXT);
+    """)
     return con
 
 
@@ -233,6 +242,33 @@ def usage(repo):
     with closing(db()) as con:
         return con.execute("SELECT COUNT(*), COALESCE(SUM(usd), 0) FROM runs WHERE repo = ? AND day = ?",
                            (repo, today())).fetchone()
+
+
+# --- run log -----------------------------------------------------------------
+# active[repo] is the job its worker is running. One worker per repo, so one
+# entry per repo.
+
+active = {}
+
+
+def begin(c, act, title=None):
+    with closing(db()) as con, con:
+        job = con.execute("INSERT INTO jobs (repo, n, act, title, started, status) VALUES (?, ?, ?, ?, ?, 'running')",
+                          (c.repo, c.n, act, title, time.time())).lastrowid
+    active[c.repo] = {"job": job}
+
+
+def step(repo, what, **detail):
+    """Append to the running job's log; outside a job (dry-run helpers, tests) a no-op."""
+    if a := active.get(repo):
+        with closing(db()) as con, con:
+            con.execute("INSERT INTO steps VALUES (?, ?, ?, ?)", (a["job"], time.time(), what, json.dumps(detail)))
+
+
+def finish(repo, status):
+    if a := active.pop(repo, None):
+        with closing(db()) as con, con:
+            con.execute("UPDATE jobs SET ended = ?, status = ? WHERE id = ?", (time.time(), status, a["job"]))
 
 
 def check_caps(repo):
@@ -285,21 +321,24 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
         cmd += ["--model", "sonnet"]
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    wt, out = worktree(c), ""
+    wt, out, m = worktree(c), "", None
     try:
-        out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt)
-    except RuntimeError as e:
-        # a previous run already created this session (it crashed, or we are being
-        # re-run): the id is derived from repo#issue/key, so pick that session up.
-        if resume or "already in use" not in str(e):
-            raise
-        log(f"#{c.n} session {sid} exists — resuming it")
-        out = sh(*cmd, "--resume", sid, cwd=wt)
+        try:
+            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt)
+        except RuntimeError as e:
+            # a previous run already created this session (it crashed, or we are being
+            # re-run): the id is derived from repo#issue/key, so pick that session up.
+            if resume or "already in use" not in str(e):
+                raise
+            log(f"#{c.n} session {sid} exists — resuming it")
+            out = sh(*cmd, "--resume", sid, cwd=wt)
+        text = json.loads(out).get("result", "")
+        m = MARKER.search(text)
     finally:
         # a failed call still counts as a run; its cost is lost with its stdout
         record(c.repo, cost_of(out))
-    text = json.loads(out).get("result", "")
-    m = MARKER.search(text)
+        step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
+             usd=cost_of(out))
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
@@ -469,13 +508,16 @@ def implement(c):
             break
         i, at, text = todo
         log(f"#{c.n} task {i + 1}/{len(tasks)}: {text}")
+        step(c.repo, "task", i=i + 1, of=len(tasks), text=text)
         status, msg = claude(c, TASK.format(n=c.n, d=pdir(c.n), task=text, base=c.base),
                              key=f"task-{i}")
         if status != "task-done":
             raise RuntimeError(f"task {i + 1} ({text}) reported {status}:\n\n{msg}")
         tick(wt, c.n, at)
+        step(c.repo, "tick", i=i + 1, of=len(tasks))
         sh("git", "add", "-A", cwd=wt)
         sh("git", "commit", "-m", f"#{c.n} task {i + 1}: {text}", cwd=wt)
+        step(c.repo, "commit", i=i + 1, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
         log(f"#{c.n} committed task {i + 1}")
         done.append(f"**{i + 1}. {text}**\n\n{msg}")
     else:
@@ -495,12 +537,14 @@ def implement(c):
     # a push to a URL updates no remote-tracking ref; record it, so unpushed()
     # sees this work as safe on GitHub
     sh("git", "update-ref", f"refs/remotes/origin/{branch}", branch, cwd=wt)
+    step(c.repo, "push", branch=branch)
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
              "--title", title, "--body-file", "-",
              input="\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}")
     # The review is advisory: the PR opens either way, so the work is always on
     # GitHub rather than stranded in a local worktree. A bad verdict only flags.
+    step(c.repo, "pr", url=url)
     ok = verdict == "review-ok"
     comment(c, f"Draft PR: {url}" if ok else
             f"Draft PR: {url}\n\nThe reviewer wants changes — see **Review** in the PR body.")
@@ -582,18 +626,26 @@ def handle(job):
     log(f"{c.repo}#{c.n} job: {job['kind']}")
     try:
         if job["kind"] == "start":
+            begin(c, "plan", job["title"])
             plan(c, job["title"], job["body"], resume=False)
-            return
-        phase = labels_of(c.repo, c.n)
-        # approving again after an error resumes at the first unticked task
-        if APPROVE.match(job["body"]) and phase & {"claude:awaiting-approval", "claude:error"}:
-            implement(c)
-        elif phase & {"claude:awaiting-input", "claude:awaiting-approval"}:
-            plan(c, None, job["body"], resume=True)
+        else:
+            phase = labels_of(c.repo, c.n)
+            # approving again after an error resumes at the first unticked task
+            if APPROVE.match(job["body"]) and phase & {"claude:awaiting-approval", "claude:error"}:
+                begin(c, "implement")
+                implement(c)
+            elif phase & {"claude:awaiting-input", "claude:awaiting-approval"}:
+                begin(c, "reply")
+                plan(c, None, job["body"], resume=True)
+        finish(c.repo, "ok")
     except Exception as e:
         log(f"#{c.n} FAILED: {e}")
-        comment(c, f"Agent error:\n\n```\n{e}\n```")
-        set_phase(c, "claude:error")
+        step(c.repo, "error", message=str(e)[-2000:])
+        try:
+            comment(c, f"Agent error:\n\n```\n{e}\n```")
+            set_phase(c, "claude:error")
+        finally:
+            finish(c.repo, "failed")
 
 
 def submit(job):
