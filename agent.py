@@ -10,8 +10,6 @@ session ids are derived from repo#issue/key, so no session state is persisted.
 import base64
 import calendar
 import collections
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -27,7 +25,6 @@ import time
 import urllib.request
 import uuid
 from contextlib import closing
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import NamedTuple
 
@@ -54,6 +51,9 @@ SECRET = os.environ["WEBHOOK_SECRET"].encode()
 RUN_CAP = int(os.environ.get("RUN_CAP", "10"))
 USD_CAP = float(os.environ.get("USD_CAP", "20"))
 PAUSED = HERE / "PAUSED"  # operator switch: while this file exists, no claude call starts
+# comma-separated owner/name: serve only these of the App's repos. For a local
+# instance next to the server, so the two never work the same repo; unset = all.
+ONLY = {r.strip() for r in os.environ.get("REPOS_ONLY", "").split(",") if r.strip()}
 PORT = int(os.environ.get("PORT", "8787"))
 HOST = os.environ.get("HOST", "127.0.0.1")  # "" = all interfaces, for a public webhook
 
@@ -73,6 +73,7 @@ MAX_TASKS = 15
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
 seen = collections.OrderedDict()  # recent X-GitHub-Delivery ids; GitHub redelivers
+seenlock = threading.Lock()  # the HTTP server is threaded: deliveries can race
 ME = "rookery-gha[bot]"  # the App's bot login — filtered so we never answer ourselves
 
 
@@ -224,6 +225,8 @@ def db():
         CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, repo TEXT, n INTEGER, act TEXT,
             title TEXT, started REAL, ended REAL, status TEXT);
         CREATE TABLE IF NOT EXISTS steps (job INTEGER, at REAL, what TEXT, detail TEXT);
+        CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, login TEXT, repos TEXT,
+            csrf TEXT, expires REAL);
     """)
     return con
 
@@ -558,7 +561,12 @@ def sync():
     for inst in api_all("/app/installations", jwt()):
         tok = api("POST", f"/app/installations/{inst['id']}/access_tokens", jwt())["token"]
         for r in api_all("/installation/repositories", tok, "repositories"):
-            onboard(r["full_name"], r["default_branch"])
+            if wanted(r["full_name"]):
+                onboard(r["full_name"], r["default_branch"])
+
+
+def wanted(repo):
+    return not ONLY or repo in ONLY
 
 
 def onboard(repo, base=None):
@@ -673,41 +681,19 @@ def worker(repo, q):
                 return
 
 
-# --- webhook -----------------------------------------------------------------
-
-class Hook(BaseHTTPRequestHandler):
-    def do_POST(self):
-        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        sig = "sha256=" + hmac.new(SECRET, raw, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, self.headers.get("X-Hub-Signature-256", "")):
-            self.send_response(401)
-            self.end_headers()
-            return
-        self.send_response(204)
-        self.end_headers()
-        if not fresh(self.headers.get("X-GitHub-Delivery")):
-            log(f"duplicate delivery {self.headers['X-GitHub-Delivery']} — ignored")
-            return
-        try:
-            enqueue(self.headers.get("X-GitHub-Event", ""), json.loads(raw))
-        except Exception as e:
-            print("dispatch error:", e, file=sys.stderr)
-
-    def log_message(self, *a):
-        pass
-
+# --- webhook dispatch (the HTTP side is web.py) ---------------------------
 
 def fresh(delivery, keep=1000):
-    """False for a delivery id seen recently. In memory: a restart forgetting it is fine.
-    Only the HTTP thread calls this — HTTPServer serves one request at a time."""
+    """False for a delivery id seen recently. In memory: a restart forgetting it is fine."""
     if not delivery:
         return True
-    if delivery in seen:
-        return False
-    seen[delivery] = None
-    if len(seen) > keep:
-        seen.popitem(last=False)
-    return True
+    with seenlock:
+        if delivery in seen:
+            return False
+        seen[delivery] = None
+        if len(seen) > keep:
+            seen.popitem(last=False)
+        return True
 
 
 def enqueue(event, p):
@@ -715,7 +701,7 @@ def enqueue(event, p):
         every = p.get("repositories") or []
         added = p.get("repositories_added", []) + (every if p["action"] == "created" else [])
         removed = p.get("repositories_removed", []) + (every if p["action"] == "deleted" else [])
-        for r in added:
+        for r in [r for r in added if wanted(r["full_name"])]:
             # accept its events now; the queue runs them after the onboarding
             REPOS.setdefault(r["full_name"], "")
             submit({"kind": "onboard", "repo": r["full_name"]})
@@ -745,7 +731,7 @@ def enqueue(event, p):
             submit({"kind": "continue", "repo": repo, "n": n, "body": p["comment"]["body"]})
 
 
-if __name__ == "__main__":
+def main():
     if not APP_ID or not Path(APP_KEY).exists():
         sys.exit("set APP_ID and APP_KEY (path to the App's private key .pem) in .env")
     sync()
@@ -761,7 +747,14 @@ if __name__ == "__main__":
                     "title": iss["title"], "body": iss["body"] or ""})
         sys.exit()
 
-    # log(), not print(): stdout is block-buffered under systemd, stderr is not,
-    # so a print() banner never reaches the journal.
-    log(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS) or 'no repos yet'} (bot user: {ME})")
-    HTTPServer((HOST, PORT), Hook).serve_forever()
+    # a job still "running" in the log died with the previous process
+    with closing(db()) as con, con:
+        con.execute("UPDATE jobs SET status = 'interrupted', ended = ? WHERE status = 'running'", (time.time(),))
+    import web
+    web.serve()
+
+
+if __name__ == "__main__":
+    # run as the `agent` module that web.py imports, not as a second copy named __main__
+    import agent
+    agent.main()

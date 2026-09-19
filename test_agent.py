@@ -212,6 +212,10 @@ agent.api = lambda method, path, bearer: (
                       for i in range(100 if path.endswith("page=1") else 3)]})
 agent.sync()
 assert len(seen) == 103 and seen[0] == ("o/r0", "dev"), seen[:2]
+agent.ONLY, seen[:] = {"o/r5"}, []   # REPOS_ONLY: a local instance serves only these
+agent.sync()
+assert seen == [("o/r5", "dev")]
+agent.ONLY = set()
 
 # approval and replies: write/maintain/admin on *that* repo, looked up per comment
 import urllib.error  # noqa: E402
@@ -354,5 +358,120 @@ assert agent.fresh(None) and agent.fresh(None), "no id: nothing to dedupe on"
 for i in range(3):
     agent.fresh(f"x-{i}", keep=2)
 assert agent.fresh("x-0", keep=2), "bounded: the oldest is forgotten"
+
+# web: sign-in through GitHub, server-side sessions, and who sees what
+import urllib.parse  # noqa: E402
+
+import web  # noqa: E402
+
+agent.WORKSPACE = Path(tempfile.mkdtemp())
+agent.REPOS = {"o/r": "main", "o/other": "main"}
+def req(method, url, sid=None, csrf=None, cookie=None):
+    h = {}
+    if sid or cookie:
+        h["Cookie"] = cookie or f"rookery_session={sid}"
+    if csrf:
+        h["X-CSRF-Token"] = csrf
+    return web.route(method, url, h)
+body = lambda r: json.loads(r[2])
+
+assert req("GET", "/api/repos")[0] == 401 and req("GET", "/api/runs/1")[0] == 401, "nothing without a session"
+assert req("GET", "/api/me", sid="made-up")[0] == 401
+
+code, hdrs, _ = req("GET", "/auth/login")
+loc = dict(hdrs)["Location"]
+state = urllib.parse.parse_qs(urllib.parse.urlsplit(loc).query)["state"][0]
+assert code == 302 and loc.startswith("https://github.com/login/oauth/authorize?")
+assert f"rookery_state={state};" in dict(hdrs)["Set-Cookie"]
+assert req("GET", "/auth/callback?code=c&state=forged", cookie=f"rookery_state={state}")[0] == 400, \
+    "a callback whose state is not this browser's is refused"
+assert req("GET", f"/auth/callback?code=c&state={state}")[0] == 400, "no state cookie, no login"
+
+web.exchange = lambda code: "ghu_user"
+def fake_api(method, path, bearer):
+    assert bearer == "ghu_user", "installations are listed with the user's own token"
+    if path == "/user":
+        return {"login": "alice"}
+    if path.startswith("/user/installations?"):
+        return {"installations": [{"id": 7}]}
+    assert path.startswith("/user/installations/7/repositories?"), path
+    return {"repositories": [{"full_name": "o/r"}, {"full_name": "o/not-served"}]}
+agent.api = fake_api
+code, hdrs, _ = req("GET", f"/auth/callback?code=c&state={state}", cookie=f"rookery_state={state}")
+cookies = [v for k, v in hdrs if k == "Set-Cookie"]
+sid = next(c.split(";")[0].split("=", 1)[1] for c in cookies if c.startswith("rookery_session="))
+assert code == 302 and dict(hdrs)["Location"] == "/"
+assert all("HttpOnly" in c and "SameSite=Lax" in c for c in cookies)
+assert f"Max-Age={8 * 3600}" in next(c for c in cookies if c.startswith("rookery_session="))
+with agent.closing(agent.db()) as con:
+    dump = repr(con.execute("SELECT * FROM sessions").fetchall())
+assert "ghu_user" not in dump and sid not in dump, "no token and no replayable session id at rest"
+assert "ghu_user" not in os.environ.values()
+
+me = body(req("GET", "/api/me", sid=sid))
+assert me["login"] == "alice" and me["csrf"]
+assert [r["repo"] for r in body(req("GET", "/api/repos", sid=sid))["repos"]] == ["o/r"], \
+    "installations ∩ REPOS: o/other is not alice's, o/not-served is not served"
+
+# runs: only visible repos', each summarised from its steps
+for repo in ("o/r", "o/other"):
+    rc = agent.Ctx(repo, 4, Path("."), "main")
+    agent.begin(rc, "plan", "Add a thing")
+    agent.step(repo, "task", i=9, of=12, text="wire it")
+    agent.step(repo, "claude", key="task-8", status="failed", usd=0.25)
+    agent.step(repo, "error", message="task 9 (wire it) reported failed")
+    agent.finish(repo, "failed")
+with agent.closing(agent.db()) as con:
+    ids = dict(con.execute("SELECT repo, id FROM jobs"))
+mine, theirs = ids["o/r"], ids["o/other"]
+listed = body(req("GET", "/api/runs", sid=sid))["runs"]
+assert [(r["repo"], r["status"], r["task"]["i"], r["task"]["of"], r["usd"]) for r in listed] == \
+    [("o/r", "failed", 9, 12, 0.25)], listed
+assert body(req("GET", "/api/runs?repo=o/other", sid=sid))["runs"] == []
+assert req("GET", f"/api/runs/{theirs}", sid=sid)[0] == 404, "another tenant's run looks like no run"
+one = body(req("GET", f"/api/runs/{mine}", sid=sid))
+assert one["title"] == "Add a thing" and [s["what"] for s in one["steps"]] == ["task", "claude", "error"]
+
+# POSTs need the session's CSRF token; logout ends the session server-side
+assert req("POST", "/auth/logout", sid=sid)[0] == 403
+assert req("POST", "/auth/logout", sid=sid, csrf="wrong")[0] == 403
+assert req("POST", "/auth/logout", sid=sid, csrf=me["csrf"])[0] == 204
+assert req("GET", "/api/me", sid=sid)[0] == 401
+sid = web.new_session("alice", ["o/r"])
+with agent.closing(agent.db()) as con, con:
+    con.execute("UPDATE sessions SET expires = 1")
+assert req("GET", "/api/me", sid=sid)[0] == 401, "expired"
+
+# static: a flat whitelist of ui/ files, nothing else in the tree
+assert req("GET", "/")[0] == 200 and dict(req("GET", "/")[1])["Content-Type"] == "text/html"
+assert req("GET", "/styles.css")[0] == 200
+for bad in ("/agent.py", "/../agent.py", "/%2e%2e/agent.py", "/.env", "/ui/portal.html", "/..\\agent.py"):
+    assert req("GET", bad)[0] == 404, bad
+
+
+# the webhook over a real socket: HMAC first, 204 before any work, then enqueue
+import threading as _t  # noqa: E402
+import urllib.request as _u  # noqa: E402
+
+got = []
+agent.enqueue = lambda event, p: got.append((event, p))
+srv = web.ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+_t.Thread(target=srv.serve_forever, daemon=True).start()
+def hook(payload, secret=b"s3cr3t", delivery="d-web-1"):
+    sig = "sha256=" + hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    rq = _u.Request(f"http://127.0.0.1:{srv.server_address[1]}/", data=payload, method="POST",
+                    headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "issues", "X-GitHub-Delivery": delivery})
+    try:
+        return _u.urlopen(rq, timeout=5).status
+    except urllib.error.HTTPError as e:
+        return e.code
+assert hook(b'{"a": 1}', secret=b"wrong") == 401
+assert hook(b'{"a": 1}') == 204 and hook(b'{"a": 1}') == 204   # a redelivery: answered, not acted on
+deadline = time.time() + 5
+while not got and time.time() < deadline:
+    time.sleep(0.01)
+assert got == [("issues", {"a": 1})], got
+assert _u.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/", timeout=5).status == 200, "the UI"
+srv.shutdown()
 
 print("ok")
