@@ -1,9 +1,10 @@
 # Rookery — PRD Implementation Phases
 
-**Status:** Phases 1–4 built and live-tested (notes: [phase1-notes.md](phase1-notes.md),
-[phase2-notes.md](phase2-notes.md), [phase3-4-notes.md](phase3-4-notes.md)). Next: §5 step 3,
-an invited trial, after the security items in phase3-4-notes.md "Next steps".
-Phases 5–6 not started.
+**Status:** Phases 1–4 built and live-tested on the server (notes: [phase1-notes.md](phase1-notes.md),
+[phase2-notes.md](phase2-notes.md), [phase3-4-notes.md](phase3-4-notes.md)). Phase 5 built and
+tested locally only, not deployed ([phase5-notes.md](phase5-notes.md), branch `phase5-local`).
+Next: §5 step 3, an invited trial, after the security items in phase3-4-notes.md "Next steps";
+deploying Phase 5 needs a TLS reverse proxy first. Phase 6 not started.
 **Last updated:** 19 September 2026
 
 Companion docs: [PRD.md](PRD.md) (the requirements this file sequences),
