@@ -438,3 +438,9 @@ look — but a geo-block is a fast 403, never a hang.
   `gh issue edit N --repo OWNER/REPO --remove-label claude:planning`.
 - Re-commenting `approve` after a failure resumes at the first unticked task; everything
   finished before it is already committed.
+- A restart is deaf for the ~20s startup `sync()` takes: a comment in that window gets a
+  `502` in Recent Deliveries and GitHub does not retry it. Hit **Redeliver** — dedupe on
+  `X-GitHub-Delivery` only drops ids the server actually received.
+- `hit its daily cap` as the error comment: the repo used `RUN_CAP` claude calls or
+  `USD_CAP` dollars today (UTC). Wait for 00:00 UTC or raise the cap in `.env` and restart,
+  then comment `approve` again.
