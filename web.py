@@ -211,6 +211,16 @@ def route(method, url, headers, body=b""):
         if method == "GET" and (m := re.fullmatch(r"/api/runs/(\d+)", path)):
             r = run(s, int(m.group(1)))
             return js(200, r) if r else js(404, {"error": "no such run"})
+        if method == "POST" and (m := re.fullmatch(r"/api/runs/(\d+)/cancel", path)):
+            r = run(s, int(m.group(1)))
+            if not r:
+                return js(404, {"error": "no such run"})
+            # seeing a repo is not steering it: cancel needs what `approve` needs
+            if not agent.can_write(r["repo"], s["login"]):
+                return js(403, {"error": f"cancelling needs write access to {r['repo']}"})
+            if not agent.cancel(r["repo"], r["id"], s["login"]):
+                return js(409, {"error": "that run is not running"})
+            return js(202, {"cancelled": r["id"]})
         return js(404, {"error": "no such endpoint"})
 
     if method == "GET":

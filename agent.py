@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -105,12 +106,27 @@ def pdir(n):
 
 # --- shell / gh --------------------------------------------------------------
 
-def sh(*args, cwd=None, check=True, env=None, input=None):
-    p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                       env=env, input=input)
+def sh(*args, cwd=None, check=True, env=None, input=None, track=None):
+    """track=repo registers the process as that repo's running job's, so cancel()
+    can kill it; a job already cancelled never starts it."""
+    with alock:
+        a = active.get(track)
+        if a and a["cancel"]:
+            raise RuntimeError(f"Cancelled from the Rookery UI by @{a['cancel']}.")
+        # own process group on POSIX, so kill() takes claude's children with it
+        p = subprocess.Popen(args, cwd=cwd, env=env, text=True, encoding="utf-8",
+                             stdin=subprocess.PIPE if input is not None else None,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=bool(track))
+        if a:
+            a["proc"] = p
+    try:
+        out, err = p.communicate(input)
+    finally:
+        if a:
+            a["proc"] = None
     if check and p.returncode:
-        raise RuntimeError(f"{args[0]} failed ({p.returncode}): {p.stderr.strip() or p.stdout.strip()}")
-    return p.stdout.strip()
+        raise RuntimeError(f"{args[0]} failed ({p.returncode}): {err.strip() or out.strip()}")
+    return out.strip()
 
 
 def gh(repo, *args, check=True, input=None):
@@ -248,17 +264,19 @@ def usage(repo):
 
 
 # --- run log -----------------------------------------------------------------
-# active[repo] is the job its worker is running. One worker per repo, so one
-# entry per repo.
+# active[repo] is the job its worker is running: {"job": id, "proc": Popen|None,
+# "cancel": login|None}. One worker per repo, so one entry per repo; alock guards
+# proc/cancel against the HTTP thread that cancels.
 
 active = {}
+alock = threading.Lock()
 
 
 def begin(c, act, title=None):
     with closing(db()) as con, con:
         job = con.execute("INSERT INTO jobs (repo, n, act, title, started, status) VALUES (?, ?, ?, ?, ?, 'running')",
                           (c.repo, c.n, act, title, time.time())).lastrowid
-    active[c.repo] = {"job": job}
+    active[c.repo] = {"job": job, "proc": None, "cancel": None}
 
 
 def step(repo, what, **detail):
@@ -274,10 +292,34 @@ def finish(repo, status):
             con.execute("UPDATE jobs SET ended = ?, status = ? WHERE id = ?", (time.time(), status, a["job"]))
 
 
+def cancel(repo, job, by):
+    """Stop repo's running job if it is `job`: flag it, so no further claude call
+    starts, and kill the call in flight. False when that job is not running."""
+    with alock:
+        a = active.get(repo)
+        if not a or a["job"] != job:
+            return False
+        a["cancel"] = by
+        if a["proc"]:
+            kill(a["proc"])
+    log(f"{repo} job {job} cancelled by {by}")
+    return True
+
+
+def kill(p):
+    """The whole tree: claude's own tool subprocesses would otherwise outlive it."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+    else:
+        os.killpg(p.pid, signal.SIGKILL)
+
+
 def check_caps(repo):
     """Before every claude call, so a running implementation stops after the task it
     is on — that task is committed, and `approve` later resumes at the next one.
     ponytail: checked before the call, so one call can overshoot USD_CAP by its own cost."""
+    if (a := active.get(repo)) and a["cancel"]:
+        raise RuntimeError(f"Cancelled from the Rookery UI by @{a['cancel']}.")
     if PAUSED.exists():
         raise RuntimeError(f"Rookery is paused by the operator ({PAUSED.name} file). Nothing ran.")
     runs, usd = usage(repo)
@@ -327,14 +369,14 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
     wt, out, m = worktree(c), "", None
     try:
         try:
-            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt)
+            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, track=c.repo)
         except RuntimeError as e:
             # a previous run already created this session (it crashed, or we are being
             # re-run): the id is derived from repo#issue/key, so pick that session up.
             if resume or "already in use" not in str(e):
                 raise
             log(f"#{c.n} session {sid} exists — resuming it")
-            out = sh(*cmd, "--resume", sid, cwd=wt)
+            out = sh(*cmd, "--resume", sid, cwd=wt, track=c.repo)
         text = json.loads(out).get("result", "")
         m = MARKER.search(text)
     finally:
@@ -648,12 +690,15 @@ def handle(job):
         finish(c.repo, "ok")
     except Exception as e:
         log(f"#{c.n} FAILED: {e}")
-        step(c.repo, "error", message=str(e)[-2000:])
+        # a killed claude fails with its own noise; say what actually happened
+        cancelled = (active.get(c.repo) or {}).get("cancel")
+        msg = f"Cancelled from the Rookery UI by @{cancelled}." if cancelled else str(e)
+        step(c.repo, "error", message=msg[-2000:])
         try:
-            comment(c, f"Agent error:\n\n```\n{e}\n```")
+            comment(c, f"Agent error:\n\n```\n{msg}\n```")
             set_phase(c, "claude:error")
         finally:
-            finish(c.repo, "failed")
+            finish(c.repo, "cancelled" if cancelled else "failed")
 
 
 def submit(job):

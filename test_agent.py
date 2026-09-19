@@ -6,7 +6,7 @@ import os
 os.environ.update(WEBHOOK_SECRET="s3cr3t")
 import agent  # noqa: E402
 
-real_sh = agent.sh
+real_sh, real_handle = agent.sh, agent.handle
 
 # approval is a regex, not a judgement call
 assert agent.APPROVE.match("approve")
@@ -473,5 +473,40 @@ while not got and time.time() < deadline:
 assert got == [("issues", {"a": 1})], got
 assert _u.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/", timeout=5).status == 200, "the UI"
 srv.shutdown()
+
+# cancel: kill the running claude, refuse any next call, end like any failure
+import sys  # noqa: E402
+
+agent.sh, agent.WORKSPACE, agent.REPOS = real_sh, Path(tempfile.mkdtemp()), {"o/r": "main"}
+agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+posted.clear()
+def slow_implement(c):
+    agent.step(c.repo, "task", i=1, of=2, text="slow")
+    agent.sh(sys.executable, "-c", "import time; time.sleep(60)", track=c.repo)  # stands in for claude
+    raise AssertionError("the process was not killed")
+agent.implement = slow_implement
+th = _t.Thread(target=real_handle, args=({"kind": "continue", "repo": "o/r", "n": 6, "body": "approve"},))
+t0 = time.time()
+th.start()
+while not (agent.active.get("o/r") or {}).get("proc") and time.time() - t0 < 5:
+    time.sleep(0.01)
+job = agent.active["o/r"]["job"]
+agent.can_write = lambda repo, user: user == "bob"
+bob, carol = web.new_session("bob", ["o/r"]), web.new_session("carol", ["o/r"])
+csrf = lambda sid: body(req("GET", "/api/me", sid=sid))["csrf"]
+assert req("POST", f"/api/runs/{job}/cancel", sid=bob)[0] == 403, "no CSRF token"
+assert req("POST", f"/api/runs/{job}/cancel", sid=carol, csrf=csrf(carol))[0] == 403, "seeing is not steering"
+assert req("POST", f"/api/runs/{job + 1}/cancel", sid=bob, csrf=csrf(bob))[0] == 404
+assert req("POST", f"/api/runs/{job}/cancel", sid=bob, csrf=csrf(bob))[0] == 202
+th.join(10)
+assert not th.is_alive() and time.time() - t0 < 10, "the running process was killed, not waited out"
+assert body(req("GET", f"/api/runs/{job}", sid=bob))["status"] == "cancelled"
+assert posted == ["Agent error:\n\n```\nCancelled from the Rookery UI by @bob.\n```"], posted
+assert [s["label"] for s in body(req("GET", f"/api/runs/{job}", sid=bob))["steps"] if s["what"] == "phase"]     == ["claude:error"]
+assert req("POST", f"/api/runs/{job}/cancel", sid=bob, csrf=csrf(bob))[0] == 409, "no longer running"
+agent.begin(agent.Ctx("o/r", 6, Path("."), "main"), "implement")   # cancelled between tasks:
+assert agent.cancel("o/r", agent.active["o/r"]["job"], "bob")        # nothing to kill, but
+assert "Cancelled" in capped("o/r"), "the next claude call never starts"
+agent.finish("o/r", "cancelled")
 
 print("ok")
