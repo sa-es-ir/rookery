@@ -158,8 +158,8 @@ python test_agent.py                       # the gates, no network
 
 ## Not built yet
 
-Phases 4–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): parallel repos,
-a control-plane API and UI, and a second harness.
+Phases 5–6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): a control-plane
+API and UI, and a second harness.
 
-One worker, one job at a time — deliberately. A long implementation blocks every
-other issue.
+One worker per repo: repos run in parallel, but within a repo it is one job at a
+time — deliberately. A long implementation blocks the other issues of *that* repo.

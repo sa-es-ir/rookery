@@ -138,15 +138,20 @@ assert "GH_TOKEN" not in os.environ and "GIT_CONFIG_VALUE_0" not in os.environ, 
 assert agent.ME == "rookery-gha[bot]"
 
 # an issue created with the trigger label fires `opened` and `labeled`: start once
+real_submit, submitted = agent.submit, []
+agent.submit = submitted.append   # capture jobs instead of starting workers
+def drain():
+    out = submitted[:]
+    submitted.clear()
+    return out
 agent.labels_of = lambda repo, n: set()
 issue = {"number": 1, "title": "t", "body": "", "labels": [{"name": agent.TRIGGER}]}
 for action, label in [("opened", None), ("labeled", agent.TRIGGER), ("labeled", "bug")]:
     agent.enqueue("issues", {"action": action, "label": {"name": label},
                              "repository": {"full_name": "o/r"}, "issue": issue})
-assert agent.jobs.qsize() == 1 and agent.jobs.get()["kind"] == "start"
+assert [j["kind"] for j in drain()] == ["start"]
 
 # installation events keep REPOS live: added repos are accepted at once, then onboarded
-drain = lambda: [agent.jobs.get() for _ in range(agent.jobs.qsize())]
 agent.enqueue("installation_repositories", {"action": "added", "repositories_added": [{"full_name": "o/new"}],
                                             "repositories_removed": []})
 agent.enqueue("installation", {"action": "created", "repositories": [{"full_name": "p/one"}]})
@@ -159,7 +164,7 @@ assert "o/new" not in agent.REPOS and "p/one" not in agent.REPOS
 assert drain() == [{"kind": "offboard", "repo": "o/new"}, {"kind": "offboard", "repo": "p/one"}]
 agent.enqueue("issues", {"action": "labeled", "label": {"name": agent.TRIGGER},
                          "repository": {"full_name": "o/new"}, "issue": issue})
-assert agent.jobs.empty(), "a removed repo's events are ignored"
+assert not submitted, "a removed repo's events are ignored"
 
 # a closed PR frees its worktree — only the bot's PRs, only feature/issue-<n>
 pr = lambda ref, user: {"action": "closed", "repository": {"full_name": "o/r"},
@@ -275,5 +280,42 @@ try:
     raise AssertionError("expected the cap to stop it")
 except RuntimeError as e:
     assert "daily cap" in str(e)
+
+# parallel repos: a worker per repo, one job at a time within it
+import threading  # noqa: E402
+
+agent.submit = real_submit
+release, ran = threading.Event(), []
+def fake_handle(job):
+    if job.get("n") == 1:
+        release.wait(5)            # a long implementation on o/slow
+    ran.append((job["repo"], job.get("n"), job["kind"]))
+agent.handle = fake_handle
+agent.submit({"kind": "continue", "repo": "o/slow", "n": 1})
+agent.submit({"kind": "start", "repo": "o/slow", "n": 2})   # same repo: waits its turn
+agent.submit({"kind": "start", "repo": "o/fast", "n": 3})   # other repo: does not
+deadline = time.time() + 5
+while ("o/fast", 3, "start") not in ran and time.time() < deadline:
+    time.sleep(0.01)
+assert ran == [("o/fast", 3, "start")], "planning on o/fast waited for o/slow"
+release.set()
+agent.submit({"kind": "offboard", "repo": "o/fast"})
+while len(ran) < 4 and time.time() < deadline:
+    time.sleep(0.01)
+assert [r for r in ran if r[0] == "o/slow"] == [("o/slow", 1, "continue"), ("o/slow", 2, "start")],     "order within a repo"
+while "o/fast" in agent.queues and time.time() < deadline:
+    time.sleep(0.01)
+assert "o/fast" not in agent.queues and "o/slow" in agent.queues, "offboard stops only that worker"
+agent.submit({"kind": "onboard", "repo": "o/fast"})         # re-added: a fresh worker
+while len(ran) < 5 and time.time() < deadline:
+    time.sleep(0.01)
+assert ran[-1] == ("o/fast", None, "onboard")
+
+# a redelivered webhook carries the same X-GitHub-Delivery: act on it once
+assert agent.fresh("d-1") and not agent.fresh("d-1") and agent.fresh("d-2")
+assert agent.fresh(None) and agent.fresh(None), "no id: nothing to dedupe on"
+for i in range(3):
+    agent.fresh(f"x-{i}", keep=2)
+assert agent.fresh("x-0", keep=2), "bounded: the oldest is forgotten"
 
 print("ok")

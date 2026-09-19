@@ -8,6 +8,7 @@ session ids are derived from repo#issue/key, so no session state is persisted.
 """
 import base64
 import calendar
+import collections
 import hashlib
 import hmac
 import json
@@ -67,7 +68,9 @@ TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
 
-jobs: "queue.Queue" = queue.Queue()
+queues = {}                  # repo -> its job queue; a worker thread per queue
+qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
+seen = collections.OrderedDict()  # recent X-GitHub-Delivery ids; GitHub redelivers
 ME = "rookery-gha[bot]"  # the App's bot login — filtered so we never answer ourselves
 
 
@@ -592,13 +595,28 @@ def handle(job):
         set_phase(c, "claude:error")
 
 
-def worker():
+def submit(job):
+    """Onto the repo's own queue: repos run in parallel, one job at a time within a
+    repo. The queue and its worker are created on the repo's first job."""
+    with qlock:
+        if job["repo"] not in queues:
+            queues[job["repo"]] = queue.Queue()
+            threading.Thread(target=worker, args=(job["repo"], queues[job["repo"]]), daemon=True).start()
+        queues[job["repo"]].put(job)
+
+
+def worker(repo, q):
     while True:
-        job = jobs.get()
+        job = q.get()
         try:
             handle(job)
         except Exception as e:  # e.g. the error comment itself failed: never let the worker die
             log(f"{job['repo']} {job['kind']} FAILED: {e}")
+        with qlock:
+            # the repo left and nothing followed: stop. A re-add starts a fresh worker.
+            if job["kind"] == "offboard" and q.empty():
+                del queues[repo]
+                return
 
 
 # --- webhook -----------------------------------------------------------------
@@ -613,6 +631,9 @@ class Hook(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self.end_headers()
+        if not fresh(self.headers.get("X-GitHub-Delivery")):
+            log(f"duplicate delivery {self.headers['X-GitHub-Delivery']} — ignored")
+            return
         try:
             enqueue(self.headers.get("X-GitHub-Event", ""), json.loads(raw))
         except Exception as e:
@@ -620,6 +641,19 @@ class Hook(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+
+def fresh(delivery, keep=1000):
+    """False for a delivery id seen recently. In memory: a restart forgetting it is fine.
+    Only the HTTP thread calls this — HTTPServer serves one request at a time."""
+    if not delivery:
+        return True
+    if delivery in seen:
+        return False
+    seen[delivery] = None
+    if len(seen) > keep:
+        seen.popitem(last=False)
+    return True
 
 
 def enqueue(event, p):
@@ -630,10 +664,10 @@ def enqueue(event, p):
         for r in added:
             # accept its events now; the queue runs them after the onboarding
             REPOS.setdefault(r["full_name"], "")
-            jobs.put({"kind": "onboard", "repo": r["full_name"]})
+            submit({"kind": "onboard", "repo": r["full_name"]})
         for r in removed:
             REPOS.pop(r["full_name"], None)
-            jobs.put({"kind": "offboard", "repo": r["full_name"]})
+            submit({"kind": "offboard", "repo": r["full_name"]})
         return
     repo = p.get("repository", {}).get("full_name")
     if repo not in REPOS:
@@ -641,20 +675,20 @@ def enqueue(event, p):
     if event == "pull_request" and p["action"] == "closed":
         m = re.fullmatch(r"feature/issue-(\d+)", p["pull_request"]["head"]["ref"])
         if m and p["pull_request"]["user"]["login"] == ME:  # our PRs only
-            jobs.put({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
+            submit({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
         return
     n = p.get("issue", {}).get("number")
     # `labeled` only: an issue created with the label fires `opened` *and* `labeled`,
     # both before the first job sets a phase — reacting to both plans it twice.
     if event == "issues" and p["action"] == "labeled":
         if p["label"]["name"] == TRIGGER and not labels_of(repo, n) & set(PHASES):
-            jobs.put({"kind": "start", "repo": repo, "n": n,
+            submit({"kind": "start", "repo": repo, "n": n,
                       "title": p["issue"]["title"], "body": p["issue"]["body"] or ""})
     elif event == "issue_comment" and p["action"] == "created":
         user = p["comment"]["user"]["login"].lower()
         # approvals and replies alike: only people who can write to *this* repo
         if user != ME and labels_of(repo, n) & set(PHASES) and can_write(repo, user):
-            jobs.put({"kind": "continue", "repo": repo, "n": n, "body": p["comment"]["body"]})
+            submit({"kind": "continue", "repo": repo, "n": n, "body": p["comment"]["body"]})
 
 
 if __name__ == "__main__":
@@ -673,7 +707,6 @@ if __name__ == "__main__":
                     "title": iss["title"], "body": iss["body"] or ""})
         sys.exit()
 
-    threading.Thread(target=worker, daemon=True).start()
     # log(), not print(): stdout is block-buffered under systemd, stderr is not,
     # so a print() banner never reaches the journal.
     log(f"listening on {HOST or '*'}:{PORT} for {', '.join(REPOS) or 'no repos yet'} (bot user: {ME})")

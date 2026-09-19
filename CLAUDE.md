@@ -23,16 +23,19 @@ _before_ `import agent` for that reason — keep that ordering if you add tests.
 
 ## Architecture
 
-One file, `agent.py`. Two threads: `Hook` (HTTP, verifies the HMAC, never blocks) puts jobs on
-`jobs`; a single daemon `worker()` drains them one at a time. One job at a time is deliberate —
-a long implementation blocks every other issue.
+One file, `agent.py`. `Hook` (HTTP, verifies the HMAC, drops a repeated `X-GitHub-Delivery`
+via `fresh()`, never blocks on a job) hands jobs to `submit()`, which puts each on its repo's
+own queue in `queues`; the repo's daemon `worker()` is started lazily on its first job. Repos
+run in parallel, but within a repo it is still one job at a time — deliberate, since two jobs
+on one issue would race on its worktree and labels. A worker whose last job was `offboard`
+exits under `qlock`, so a job submitted at that moment gets a fresh worker, never a dead one.
 
 **This repo is the orchestrator, never the target.** `REPOS` maps `owner/name` → base branch
 and is never written to disk: `sync()` rebuilds it at startup from the App's installations
 (`default_branch` is the base), and `installation` / `installation_repositories` events
 keep it current — `enqueue()` adds or drops the repo at once and queues an `onboard` /
-`offboard` job, so a trigger that arrives while the clone is still being made is queued
-behind it. Clones live at `$WORKSPACE/repos/<owner>_<repo>`; `Ctx` (repo, issue number,
+`offboard` job on that repo's queue, so a trigger that arrives while the clone is still
+being made is queued behind it. Clones live at `$WORKSPACE/repos/<owner>_<repo>`; `Ctx` (repo, issue number,
 clone path, base branch) is threaded through every function. Each issue gets its own
 `git worktree` at `$WORKSPACE/<owner>_<repo>/issue-<n>` on `feature/issue-<n>`, so two
 repos can share an issue number.
@@ -120,7 +123,9 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **Never push to base**: `assert branch != c.base` before `git push`; branch protection on the
   target repo is the backstop, not the primary guard.
 - Webhook signature is checked with `hmac.compare_digest` before anything else; `enqueue()`
-  ignores repos absent from `REPOS`.
+  ignores repos absent from `REPOS`. Deliveries are deduped on `X-GitHub-Delivery` (last 1000,
+  in memory — a restart forgetting them is accepted); the phase-label checks in `enqueue()`
+  remain the guard against a redelivery after that.
 - **Retention never deletes unpushed commits.** `drop_worktree()`/`offboard()` check
   `unpushed()` first and keep everything if it finds any. `worker()` catches everything
   `handle()` lets out, so one bad job cannot kill the loop.
@@ -134,7 +139,7 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 1–3 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
-without a restart, approval and caps per repo) are built; phases 4–6 are not.
+Phases 1–4 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+without a restart, approval and caps per repo, parallel repos) are built; phases 5–6 are not.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
