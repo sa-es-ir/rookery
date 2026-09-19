@@ -462,9 +462,10 @@ def enqueue(event, p):
     if repo not in REPOS:
         return
     n = p.get("issue", {}).get("number")
-    if event == "issues" and p["action"] in ("opened", "labeled"):
-        if (TRIGGER in {l["name"] for l in p["issue"]["labels"]}
-                and not labels_of(repo, n) & set(PHASES)):
+    # `labeled` only: an issue created with the label fires `opened` *and* `labeled`,
+    # both before the first job sets a phase — reacting to both plans it twice.
+    if event == "issues" and p["action"] == "labeled":
+        if p["label"]["name"] == TRIGGER and not labels_of(repo, n) & set(PHASES):
             jobs.put({"kind": "start", "repo": repo, "n": n,
                       "title": p["issue"]["title"], "body": p["issue"]["body"] or ""})
     elif event == "issue_comment" and p["action"] == "created":

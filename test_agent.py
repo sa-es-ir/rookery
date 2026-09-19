@@ -139,4 +139,12 @@ assert "GH_TOKEN" not in os.environ and "GIT_CONFIG_VALUE_0" not in os.environ, 
     "the claude subprocess inherits os.environ — the token must never be there"
 assert agent.ME == "rookery-gha[bot]"
 
+# an issue created with the trigger label fires `opened` and `labeled`: start once
+agent.labels_of = lambda repo, n: set()
+issue = {"number": 1, "title": "t", "body": "", "labels": [{"name": agent.TRIGGER}]}
+for action, label in [("opened", None), ("labeled", agent.TRIGGER), ("labeled", "bug")]:
+    agent.enqueue("issues", {"action": action, "label": {"name": label},
+                             "repository": {"full_name": "o/r"}, "issue": issue})
+assert agent.jobs.qsize() == 1 and agent.jobs.get()["kind"] == "start"
+
 print("ok")
