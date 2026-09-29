@@ -1,10 +1,5 @@
 # Deploying Rookery to a Linux server
 
-> **Phase 5 (portal, API, run log, cancel, `web.py`) is not deployed yet.** It has only run
-> locally ([ai-plans/phase5-notes.md](ai-plans/phase5-notes.md)). This guide describes the
-> Phase 1–4 server. Deploying Phase 5 means copying `web.py` and `ui/` too, the OAuth
-> settings in `.env`, and a TLS reverse proxy in front before the portal faces the internet.
-
 Ubuntu 24.04 LTS. The orchestrator is stdlib-only Python; everything hard is in the two
 CLIs it shells out to (`gh`, `claude`). Written against a real deploy — the gotchas at
 the bottom each cost an hour, read them before you start.
@@ -54,14 +49,17 @@ under uid 0, which is what `agent.py` uses.
 ## 3. Copy the files — your machine
 
 ```bash
-scp agent.py test_agent.py root@SERVER_IP:/opt/rookery/
+scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
 scp -r agents root@SERVER_IP:/opt/rookery/
+ssh root@SERVER_IP mkdir -p /opt/rookery/ui
+scp ui/index.html ui/portal.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
 scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
 ```
 
-Skipped on purpose: `work/` (clones are made on the server — step 8), `ui/`, `.git`.
+Skipped on purpose: `work/` (clones are made on the server — step 8), `ui/index2.html` and
+`ui/tui/` (the server only serves files directly in `ui/`), `.git`.
 
 The credentials copy saves you the interactive login for first light only — the token it
 carries rotates, and your laptop refreshing it revokes the server's copy mid-run (see
@@ -84,16 +82,23 @@ Everything from here runs as `rookery`.
 ## 5. GitHub auth — the App, not a login
 
 GitHub → Settings → Developer settings → **GitHub Apps → New**: webhook URL
-`http://SERVER_IP:8787/`, content type JSON, a fresh secret; the permissions and events
-from step 0. Generate a private key, then **Install** it on the target repo.
+`https://HOSTNAME/` (nginx, step 10), content type JSON, a fresh secret; the permissions
+and events from step 0. **Callback URL** `https://HOSTNAME/auth/callback` for portal
+sign-in (add `http://127.0.0.1:8787/auth/callback` too to test the portal locally).
+Generate a private key and a client secret, then **Install** it on the target repo.
 
-`/opt/rookery/.env` gets the three values (the secret replaces any old per-repo one):
+`/opt/rookery/.env` gets these values (the secret replaces any old per-repo one):
 
 ```bash
 APP_ID=1234567
 APP_KEY=/opt/rookery/app.pem
 WEBHOOK_SECRET=<the App's webhook secret>
+CLIENT_ID=<the App's client id>
+CLIENT_SECRET=<the App's client secret>
+PUBLIC_URL=https://HOSTNAME
 ```
+
+`PUBLIC_URL` being `https://` sets the `Secure` flag on the session cookie.
 
 Per job, `agent.py` signs a JWT with the key (`openssl`), exchanges it for a one-hour
 installation token, and hands that to `gh` and `git` through `env=` — never
@@ -193,22 +198,11 @@ python3 agent.py OWNER/REPO 12 approve   # task loop -> push -> draft PR
 Same `handle()` as the webhook; only the transport differs. If these pass, the agent is
 deployed and only delivery is left.
 
-## 10. Listen — server, root then rookery
+## 10. Listen — server, root
 
-`agent.py` binds loopback by default, which GitHub cannot reach. Set `HOST=` (empty =
-all interfaces) in `/opt/rookery/.env`:
-
-```bash
-echo 'HOST=' >> /opt/rookery/.env
-```
-
-If you deployed before `HOST` existed, re-copy `agent.py` too — otherwise the bind stays
-hardcoded and the new `.env` line does nothing:
-
-```bash
-scp agent.py root@SERVER_IP:/opt/rookery/          # your machine
-chown rookery:rookery /opt/rookery/agent.py        # server, root
-```
+`agent.py` binds `127.0.0.1:8787` by default and stays there: nginx on port 80 fronts it,
+and Cloudflare fronts nginx. Leave `HOST` unset — `HOST=` (empty) binds all interfaces
+and exposes the plain `http.server` on 8787.
 
 Run it under systemd from the start — the unit file and `systemctl` need **root**, the
 process itself runs as `rookery` via `User=`:
@@ -227,16 +221,16 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable --now rookery
-journalctl -u rookery -n 20 --no-pager     # want: listening on *:8787 for OWNER/REPO
+journalctl -u rookery -n 20 --no-pager     # want: listening on 127.0.0.1:8787 for OWNER/REPO ... UI at https://HOSTNAME/
 ```
 
 Every later change to `agent.py` or `.env` needs both halves — copy it up, then restart,
 as **root** (`rookery` is not a sudoer):
 
 ```bash
-scp agent.py root@SERVER_IP:/opt/rookery/        # your machine
-chown rookery:rookery /opt/rookery/agent.py      # server, root
-systemctl restart rookery                        # server, root
+scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
+chown rookery:rookery /opt/rookery/agent.py /opt/rookery/web.py  # server, root
+systemctl restart rookery                                        # server, root
 ```
 
 Editing the file alone changes nothing — the running process keeps the old code, and
@@ -253,24 +247,55 @@ from a leftover manual run — a port probe cannot, both answer identically.
 supply: systemd does not read `.bashrc`, and without `~/.local/bin` first it would find
 the system `claude`.
 
-### Prove it is reachable before touching GitHub
+### nginx on port 80 — server, root
 
-From your own machine, **not** the server — the point is to cross the provider firewall:
+Cloudflare DNS: an A record `HOSTNAME` → `SERVER_IP`, **Proxied**, SSL/TLS mode
+**Flexible** (browser → Cloudflare is HTTPS, Cloudflare → server is plain http on 80).
 
 ```bash
-curl.exe -sv -m 10 http://SERVER_IP:8787/ -X POST -d '{}'    # PowerShell: curl.exe, not curl
+apt install -y nginx
+rm /etc/nginx/sites-enabled/default
+tee /etc/nginx/sites-available/rookery >/dev/null <<'EOF'
+# Cloudflare (SSL mode Flexible) -> here over http. No https redirect: it would loop.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size 26m;           # GitHub webhooks go up to 25 MB; nginx's default is 1 MB
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+ln -s /etc/nginx/sites-available/rookery /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
 ```
 
-Read the outcome, each one means something different:
+**Never add an https redirect on port 80 while SSL mode is Flexible** — Cloudflare sends
+every request to the origin as http, so it loops. Flexible leaves the Cloudflare → server
+hop in cleartext (cookies, the OAuth code, webhook payloads); moving to Full (strict) with
+a Cloudflare Origin Certificate is in [ai-plans/phase5-deploy.md](ai-plans/phase5-deploy.md).
+
+### Prove it is reachable before touching GitHub
+
+From your own machine. In PowerShell use `curl.exe` — bare `curl` is `Invoke-WebRequest`:
+
+```bash
+curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/                    # 200, landing page
+curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/portal.html         # 200
+curl.exe -s -o NUL -w "%{http_code}\n" -X POST -d '{}' https://HOSTNAME/    # 401 = HMAC rejected it: correct
+curl.exe -s -m 5 http://SERVER_IP:8787/                                     # must fail: 8787 is loopback only
+```
 
 | Result | Meaning |
 |---|---|
-| `HTTP/1.0 401 Unauthorized` | **Working.** The HMAC rejected an unsigned body — exactly right. |
-| `Connection refused` | Reached the host, nothing listening. The service is down or still on `127.0.0.1`. |
-| Hangs, then times out | A firewall is dropping. `ufw` is inactive on a fresh 24.04, so look at the provider's cloud firewall panel for an inbound TCP 8787 rule. |
-
-In Windows PowerShell, bare `curl` is an alias for `Invoke-WebRequest` and answers
-`A parameter cannot be found that matches parameter name 'X'`. Use `curl.exe`.
+| `401` on the POST | **Working.** The HMAC rejected an unsigned body — exactly right. |
+| `502` | nginx is up, the app is not (down, or still in its ~20 s startup `sync()`). |
+| Cloudflare `521` / `522` | Cloudflare cannot reach port 80: nginx is down, or something else holds 80. |
 
 ## 11. Deliver — GitHub
 
@@ -280,21 +305,19 @@ matches, so it only adds red `401`s.
 
 App settings → **Advanced → Recent Deliveries** should show green `204`s (a `ping`
 redelivered after the restart is a quick check); a red `401` means the App's secret does
-not match `WEBHOOK_SECRET` in `.env`.
+not match `WEBHOOK_SECRET` in `.env`; a `403` with a Cloudflare page means **Security →
+Bots → Bot Fight Mode** is blocking GitHub — turn it off.
+
+Portal: `https://HOSTNAME/` → *Open portal* → *Sign in with GitHub* → back on
+`/portal.html` with your repos listed.
 
 Now label a **fresh** issue `claude:trigger` — `enqueue()` ignores any issue that already
 carries a `claude:*` phase label, so the issues you exercised by CLI in step 9 will not
 re-fire (see the gotchas). `job: start` in `journalctl -u rookery -f` means the chain is
 live end to end.
 
-HTTP is cleartext — the HMAC authenticates the payload, it does not encrypt it. Put Caddy
-in front once this handles a real repo.
-
-Prefer no open port? Leave `HOST` unset and tunnel instead, as a second unit:
-
-```bash
-npx smee-client --url https://smee.io/<channel> --target http://127.0.0.1:8787/
-```
+Port 80 answers anyone, not only Cloudflare: restricting it to Cloudflare's IP ranges
+(nginx `allow`/`deny` or `ufw`) is not done yet.
 
 ---
 

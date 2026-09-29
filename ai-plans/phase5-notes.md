@@ -1,8 +1,8 @@
 # Phase 5 notes — control-plane API, portal, run log, cancel
 
 **Date:** 19 September 2026
-**Status:** built and tested **locally only** (Windows, 127.0.0.1, the real App). Not deployed;
-the server was not touched. Spec: [PRD-Phases.md](PRD-Phases.md) §2 Phase 5, brief in
+**Status:** built and tested locally (Windows, 127.0.0.1, the real App), then **deployed** on
+29 September 2026 to https://rookery.codesimple.dev ([phase5-deploy.md](phase5-deploy.md)). Spec: [PRD-Phases.md](PRD-Phases.md) §2 Phase 5, brief in
 [phase5-prompt.md](phase5-prompt.md). Follows [phase3-4-notes.md](phase3-4-notes.md).
 Branch `phase5-local` off `prd-implementation-phases`.
 
@@ -95,10 +95,8 @@ killed call counts as a run at $0 (its cost is lost with its stdout, as for any 
 
 ## Known limitations / open items
 
-- **Not deployed.** Deploying needs `web.py` and `ui/` copied, `CLIENT_ID`/`CLIENT_SECRET`/
-  `PUBLIC_URL` in the server's `.env`, the server's callback URL added to the App, and a TLS
-  reverse proxy before the portal faces the internet (`http.server` must not). Until then
-  `PUBLIC_URL` would be `http://` and the cookie not `Secure`.
+- **Deployed behind Cloudflare Flexible** (29 Sep 2026): the Cloudflare → server hop is
+  plain http. The upgrade to Full (strict) is in [phase5-deploy.md](phase5-deploy.md).
 - **Repo list is fixed per session** (8h). Losing access on GitHub is not seen until the next
   sign-in; cancel is still re-checked live with `can_write()`.
 - **Cancel between the last claude call and the push** (during push/PR) doesn't stop the
