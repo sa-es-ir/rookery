@@ -125,6 +125,20 @@ footer .logo{font-size:24px;gap:14px}
 footer p{color:var(--fog);font-size:13px;max-width:40ch;font-weight:300;margin-top:14px}
 footer .links{display:flex;gap:28px;font-size:14px;color:var(--fog)}
 footer .links a:hover{color:#fff}
+
+/* phones: same layout, tighter rhythm — desktop's 96px section gaps read as empty screens here */
+@media(max-width:600px){
+  .hero{padding:40px 0 64px}
+  .hero .wrap{gap:40px}
+  .crest .mark{width:120px;height:120px}
+  .issue{padding:24px 20px}
+  .sec{padding:64px 0}
+  .sec-head{margin-bottom:40px}
+  .card{padding:28px 24px}
+  .close{padding:48px 24px;margin-bottom:64px}
+  footer{padding:40px 0 48px}
+  footer .links{gap:20px;flex-wrap:wrap}
+}
 </style>
 
 <header class="nav"><div class="wrap">

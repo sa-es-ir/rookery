@@ -400,7 +400,7 @@ agent.api = fake_api
 code, hdrs, _ = req("GET", f"/auth/callback?code=c&state={state}", cookie=f"rookery_state={state}")
 cookies = [v for k, v in hdrs if k == "Set-Cookie"]
 sid = next(c.split(";")[0].split("=", 1)[1] for c in cookies if c.startswith("rookery_session="))
-assert code == 302 and dict(hdrs)["Location"] == "/"
+assert code == 302 and dict(hdrs)["Location"] == "/portal.html"
 assert all("HttpOnly" in c and "SameSite=Lax" in c for c in cookies)
 assert f"Max-Age={8 * 3600}" in next(c for c in cookies if c.startswith("rookery_session="))
 with agent.closing(agent.db()) as con:
@@ -444,6 +444,7 @@ assert req("GET", "/api/me", sid=sid)[0] == 401, "expired"
 
 # static: a flat whitelist of ui/ files, nothing else in the tree
 assert req("GET", "/")[0] == 200 and dict(req("GET", "/")[1])["Content-Type"] == "text/html"
+assert b'class="hero"' in req("GET", "/")[2]   # / is the landing page; the portal is /portal.html
 assert req("GET", "/styles.css")[0] == 200
 for bad in ("/agent.py", "/../agent.py", "/%2e%2e/agent.py", "/.env", "/ui/portal.html", "/..\\agent.py"):
     assert req("GET", bad)[0] == 404, bad

@@ -9,18 +9,23 @@
 <link rel="icon" href="rookery.png">
 <link rel="stylesheet" href="styles.css">
 <style>
-.shell{display:grid;min-height:100vh;grid-template-columns:1fr}
+/* minmax(0,…) so the repo strip's scroll width can't widen the page; start so rows don't stretch */
+.shell{display:grid;min-height:100vh;grid-template-columns:minmax(0,1fr);align-content:start}
 @media(min-width:900px){.shell{grid-template-columns:248px 1fr}}
 
 /* sidebar */
 .side{border-right:1px solid var(--smoke);padding:20px 16px;display:flex;flex-direction:column;gap:28px}
 @media(min-width:900px){.side{position:sticky;top:0;height:100vh}}
 @media(max-width:899px){
-  .side{flex-direction:row;align-items:center;gap:16px;padding:12px 16px;overflow-x:auto;
-    border-right:0;border-bottom:1px solid var(--smoke);scrollbar-width:none}
-  .side::-webkit-scrollbar{display:none}
-  .side h4,.side .bottom{display:none}
-  .side .repos{display:flex;gap:4px}
+  /* one row: logo, the repos (which scroll on their own), sign out pinned at the end */
+  .side{flex-direction:row;align-items:center;gap:12px;padding:12px 16px;
+    border-right:0;border-bottom:1px solid var(--smoke)}
+  .side .pick{flex:1;min-width:0}
+  .side h4,.side .bottom>span{display:none}
+  .side .repos{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+  .side .repos::-webkit-scrollbar{display:none}
+  .shell .side .bottom{margin:0;padding:0;border:0}   /* .shell: outranks the desktop rule below */
+  .side .bottom .link{padding:8px 0}
   .top{padding:0 16px}
   .view{padding:20px 16px}
 }
@@ -106,6 +111,21 @@ main{min-width:0}
 .gate p{color:var(--ash);font-weight:300;margin-bottom:32px}
 .gate .fine{font-size:12px;color:var(--fog);margin:20px 0 0}
 .toast{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog)}
+
+/* phones: nothing sits beside a title — the status pill and cancel drop under it, and a
+   step's time moves above its text instead of eating a 76px column */
+@media(max-width:600px){
+  .run{grid-template-columns:1fr;padding:16px 20px}
+  .run .lbl{justify-self:start}
+  .head{grid-template-columns:1fr;padding:20px}
+  .head .side-actions{flex-direction:row;align-items:center;justify-content:space-between}
+  .step{grid-template-columns:20px 1fr}
+  .step .rail{grid-column:1;grid-row:1/3}
+  .step time{grid-column:2;grid-row:1;text-align:left;padding-top:0}
+  .step .what{grid-column:2;grid-row:2}
+  .gate .box{padding:36px 24px}
+  .gate h1{font-size:40px}
+}
 [hidden]{display:none!important}
 </style>
 
@@ -123,7 +143,7 @@ main{min-width:0}
 <div class="shell" id="app" hidden>
   <aside class="side">
     <a class="logo" href="index.html"><span class="mark"><img src="rookery.png" alt=""></span>rookery</a>
-    <div>
+    <div class="pick">
       <h4>Repos · today</h4>
       <nav class="repos" id="repos"></nav>
     </div>

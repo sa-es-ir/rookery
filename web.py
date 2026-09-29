@@ -120,7 +120,7 @@ def callback(q, jar):
              for i in agent.api_all("/user/installations", tok, "installations")
              for r in agent.api_all(f"/user/installations/{i['id']}/repositories", tok, "repositories")}
     log(f"{who} signed in ({len(repos)} repos in their installations)")
-    return 302, [("Location", "/"), cookie("rookery_session", new_session(who, repos), TTL),
+    return 302, [("Location", "/portal.html"), cookie("rookery_session", new_session(who, repos), TTL),
                  cookie("rookery_state", "", 0)], b""
 
 
@@ -224,7 +224,7 @@ def route(method, url, headers, body=b""):
         return js(404, {"error": "no such endpoint"})
 
     if method == "GET":
-        name = "portal.html" if path == "/" else path[1:]
+        name = "index.html" if path == "/" else path[1:]
         # a flat whitelist of ui/ files: no subdirectories, so no way out of ui/
         if re.fullmatch(r"[\w-]+\.(html|css|png|js)", name) and (UI / name).is_file():
             kind = mimetypes.guess_type(name)[0] or "application/octet-stream"

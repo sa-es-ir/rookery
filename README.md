@@ -159,8 +159,8 @@ python test_agent.py                       # the gates, no network
 
 ## The portal
 
-`python agent.py` also serves a small control plane at `PUBLIC_URL` (default
-`http://127.0.0.1:8787/`). Sign in with GitHub — the App's own OAuth, so set `CLIENT_ID` /
+`python agent.py` also serves the landing page at `PUBLIC_URL` (default
+`http://127.0.0.1:8787/`) and a small control plane at `PUBLIC_URL/portal.html`. Sign in with GitHub — the App's own OAuth, so set `CLIENT_ID` /
 `CLIENT_SECRET` from the App's settings and add `PUBLIC_URL/auth/callback` as its callback
 URL. You see the repos of your own installations of the App, and for each:
 
