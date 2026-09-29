@@ -24,15 +24,15 @@ then implements the plan task by task on a branch and opens a draft PR.
 claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
-Everything is one file, `agent.py` — Python stdlib only, plus the `gh` and
-`claude` CLIs on your PATH. The full roadmap lives in
+Two files: `agent.py` (the pipeline) and `web.py` (the webhook, sign-in, the API and the
+portal in `ui/`) — Python stdlib only, plus the `gh`, `openssl` and `claude` CLIs on your
+PATH. The full roadmap lives in
 [ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
 
 ## Quick start
 
 ```bash
-cp .env.example .env            # WEBHOOK_SECRET, ALLOWLIST
-cp repos.example.json repos.json
+cp .env.example .env            # WEBHOOK_SECRET, APP_ID, APP_KEY
 python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 ```
 
@@ -49,12 +49,11 @@ python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
 
 ### This repo is the orchestrator, never the target
 
-Rookery never runs inside the repo it is working on. `repos.json` maps each
-target repo to a local clone:
-
-```json
-{ "owner/pilot-repo": { "path": "C:/src/pilot-repo", "base": "main" } }
-```
+Rookery never runs inside the repo it is working on. It works on every repo
+the GitHub App is installed on: at startup it lists them, clones each into
+`work/repos/<owner>_<repo>` and uses its default branch as the base. Adding a repo
+to the installation makes it live, and removing it deletes the clone, with no
+restart needed. There is no repo list to maintain.
 
 Each issue gets its own `git worktree` under `work/<owner>_<repo>/issue-<n>` on
 branch `feature/issue-<n>`, so two repos can share an issue number without
@@ -108,11 +107,11 @@ To split models by role, add `"model": "opus"` to a role in `AGENTS`.
 
 ## Setup
 
-1. Fill in `.env` and `repos.json`.
-2. Clone each target repo to the `path` you gave it.
-3. In **each** target repo: *Settings → Webhooks →* add
-   `https://smee.io/<your-channel>`, content type `application/json`, the same
-   secret, events **Issues** and **Issue comments**.
+1. Fill in `.env`.
+2. Install the GitHub App on the target repos.
+3. Point the App's webhook (App settings → *Webhook URL*) at
+   `https://smee.io/<your-channel>`, with the same secret. There is no per-repo
+   webhook.
 4. Branch-protect `main`. The code refuses to push there; protection is the
    backstop, not the primary guard.
 5. Run the server and point smee at it:
@@ -122,7 +121,7 @@ To split models by role, add `"model": "opus"` to a role in `AGENTS`.
    npx smee-client --url https://smee.io/<your-channel> --target http://127.0.0.1:8787/
    ```
 
-Labels are created on first start.
+Labels are created when a repo is onboarded.
 
 ## Using it
 
@@ -138,9 +137,13 @@ Add the `claude:trigger` label to an issue, then follow the `claude:*` label:
 | `claude:done` | draft PR is open, review clean |
 | `claude:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
 
-Only logins in `ALLOWLIST` can move an issue along, and approval is a regex
+Only people with write access to the repo can move an issue along, and approval is a regex
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
 `git push` and `gh`; it never publishes.
+
+Each repo gets 10 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
+override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
+new call. Hitting either comments on the issue and sets `claude:error`.
 
 ## Testing without a webhook
 
@@ -154,11 +157,33 @@ python agent.py owner/repo 12 use sqlite   # anything else is fed back as a repl
 python test_agent.py                       # the gates, no network
 ```
 
+## The portal
+
+`python agent.py` also serves the landing page at `PUBLIC_URL` (default
+`http://127.0.0.1:8787/`) and a small control plane at `PUBLIC_URL/portal.html`. Sign in with GitHub — the App's own OAuth, so set `CLIENT_ID` /
+`CLIENT_SECRET` from the App's settings and add `PUBLIC_URL/auth/callback` as its callback
+URL. You see the repos of your own installations of the App, and for each:
+
+- today's runs and dollars against the caps;
+- every run (plan, reply, implementation), and where it is or where it stopped —
+  *"Failed at task 9 of 12"* — read from the run log in `rookery.db`, not the journal;
+- a run's log step by step: tasks, each `claude` call with its status and cost, commits,
+  push, PR, the error;
+- **Cancel** on a running job (write access needed): the `claude` call is killed and the
+  issue gets the error comment and `claude:error`, like any failure. `approve` resumes it.
+
+There is no approve button. Approval stays an `approve` comment on the issue.
+
+Sessions are server-side and last 8 hours. Your GitHub token is used once at sign-in to
+list your installations and is not kept. Over the internet, put it behind a TLS reverse
+proxy and set `PUBLIC_URL=https://…` (that also turns on the `Secure` cookie flag).
+
+`REPOS_ONLY=owner/a,owner/b` limits an instance to those repos — for a local copy next to
+a server on the same App.
+
 ## Not built yet
 
-Phases 2–5 of the plan: the bug shortcut path, a GitHub App (`repos.json` covers
-routing, but each repo still needs its webhook wired by hand), OpenSpec, and
-VPS + queue + alerting.
+Phase 6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): a second harness.
 
-One worker, one job at a time — deliberately. A long implementation blocks every
-other issue.
+One worker per repo: repos run in parallel, but within a repo it is one job at a
+time — deliberately. A long implementation blocks the other issues of *that* repo.

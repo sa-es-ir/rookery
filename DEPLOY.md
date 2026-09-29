@@ -9,12 +9,10 @@ user it runs as.
 
 ## 0. Before you start
 
-- A GitHub PAT **belonging to a machine account, not to you** (step 5 explains why) —
-  classic with scopes **`repo`** and **`read:org`** (add **`workflow`** only if a task
-  might edit `.github/workflows/*`). `read:org` is not optional even for a personal repo —
-  `gh auth login --with-token` validates it and answers
-  `error validating token: missing required scope 'read:org'` without it. Fine-grained
-  equivalent: Contents RW, Issues RW, Pull requests RW, Metadata R.
+- A **GitHub App** (step 5): permissions Contents RW, Issues RW, Pull requests RW,
+  Metadata R; events Issues + Issue comment; installed on the target repo. Its App ID,
+  private key `.pem` and webhook secret are all the GitHub credentials the box gets —
+  no PAT, no `gh auth login`.
 - The **target** repo the agent will work on. Never this one.
 - **Check the CPU first — see [AVX2](#avx2-the-two-hour-one) below.** A VPS with a generic
   `qemu64` CPU model cannot run current Claude Code at all.
@@ -51,14 +49,17 @@ under uid 0, which is what `agent.py` uses.
 ## 3. Copy the files — your machine
 
 ```bash
-scp agent.py test_agent.py root@SERVER_IP:/opt/rookery/
+scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
 scp -r agents root@SERVER_IP:/opt/rookery/
+ssh root@SERVER_IP mkdir -p /opt/rookery/ui
+scp ui/index.html ui/portal.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
+scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
 ```
 
-Skipped on purpose: `repos.json` (paths are machine-specific — written in step 8),
-`work/`, `ui/`, `.git`.
+Skipped on purpose: `work/` (clones are made on the server — step 8), `ui/index2.html` and
+`ui/tui/` (the server only serves files directly in `ui/`), `.git`.
 
 The credentials copy saves you the interactive login for first light only — the token it
 carries rotates, and your laptop refreshing it revokes the server's copy mid-run (see
@@ -69,7 +70,7 @@ server once it works, ideally on an account of its own rather than sharing your 
 
 ```bash
 chown -R rookery:rookery /opt/rookery /home/rookery
-chmod 600 /home/rookery/.claude/.credentials.json
+chmod 600 /home/rookery/.claude/.credentials.json /opt/rookery/app.pem /opt/rookery/.env
 ```
 
 `chown` all of `/home/rookery`, not just the two directories — anything root creates
@@ -78,31 +79,45 @@ clone.
 
 Everything from here runs as `rookery`.
 
-## 5. GitHub auth — server, rookery
+## 5. GitHub auth — the App, not a login
+
+GitHub → Settings → Developer settings → **GitHub Apps → New**: webhook URL
+`https://HOSTNAME/` (nginx, step 10), content type JSON, a fresh secret; the permissions
+and events from step 0. **Callback URL** `https://HOSTNAME/auth/callback` for portal
+sign-in (add `http://127.0.0.1:8787/auth/callback` too to test the portal locally).
+**Setup URL** (under *Post installation*) `https://HOSTNAME/auth/login` with *Redirect on
+update* ticked, and *Request user authorization (OAuth) during installation* **unticked** —
+it would send GitHub to the callback without our `state` and the sign-in would fail. After
+an install or a repo change the user lands back in the portal with the new list.
+Generate a private key and a client secret, then **Install** it on the target repo.
+
+`/opt/rookery/.env` gets these values (the secret replaces any old per-repo one):
 
 ```bash
-su - rookery
-read -rs TOKEN          # no prompt, no echo — paste the token at the blank line, press Enter
-echo "$TOKEN" | gh auth login --with-token
-unset TOKEN
-gh auth setup-git          # so raw `git push` from the worktree authenticates
-gh auth status
-gh api user --jq .login    # this is ME — filtered out of approvals so the bot can't approve itself
+APP_ID=1234567
+APP_KEY=/opt/rookery/app.pem
+WEBHOOK_SECRET=<the App's webhook secret>
+CLIENT_ID=<the App's client id>
+CLIENT_SECRET=<the App's client secret>
+PUBLIC_URL=https://HOSTNAME
 ```
 
-`read -rs` is silent by design; a terminal sitting there with no prompt is waiting for the
-paste, not hung. Keep it on its own line and keep the token out of the command — a literal
-`echo "ghp_..." | gh auth login` lands the secret in `~/.bash_history`.
+`PUBLIC_URL` being `https://` sets the `Secure` flag on the session cookie.
 
-Write on the target repo is required whether it is public or private: the agent pushes
-`feature/issue-<n>` to the repo itself and opens the PR there, never a fork.
+Per job, `agent.py` signs a JWT with the key (`openssl`), exchanges it for a one-hour
+installation token, and hands that to `gh` and `git` through `env=` — never
+`os.environ`, so the `claude` subprocess cannot read it. Comments, pushes and PRs all
+come from `<slug>[bot]`. `ME` in `agent.py` is that login: if your slug is not
+`rookery-gha`, change it there.
 
-**Use a PAT from a separate machine account, not your own login.** `ME` is filtered out of
-`enqueue()` so the bot cannot answer or approve itself — so if `ME` is *you*, every comment
-you write is discarded and the agent cannot hear you at all
-(see [the gotcha](#the-bot-ignores-my-comments)). Create e.g. `you-rookery`, invite it to
-the target repo with **Write**, accept the invite, and use its PAT here. Your own login goes
-in `ALLOWLIST`, never here.
+Do **not** run `gh auth login` on the box. Left logged in, `~/.config/gh/hosts.yml` is a
+long-lived personal token the agent could read; `gh auth status` should say
+"not logged in". Who may approve is not configured here: anyone with write, maintain or
+admin on the issue's repo can, looked up per comment.
+
+Known ceiling: the agent runs as the same user that can read `app.pem`, and the key
+outranks any token minted from it. The deny rules stop `gh` and `git push`, not
+`openssl` + `curl`. Closing that needs the sandbox, not this file.
 
 ## 6. Git identity — server, rookery
 
@@ -137,28 +152,43 @@ JSON with a `"result"` field means the whole chain works — this is the exact c
 `/exit`. That writes `~/.claude.json`, the onboarding flag the credentials file does not
 cover.
 
-## 8. Target repo and config — server, rookery
+## 8. Target repos — GitHub, not the server
+
+There is no repo list to write. At startup `sync()` asks the App for every repository it
+is installed on, clones each one over https into `$WORKSPACE/repos/<owner>_<repo>`
+(`WORKSPACE` defaults to `/opt/rookery/work`), creates the `claude:*` labels, and takes
+the base branch from the repo's `default_branch`. After that, `installation` and
+`installation_repositories` events keep the list current — no restart:
+
+- **Add a repo** — App settings → *Install App* → the gear on your account →
+  *Repository access*. With *Only select repositories*, pick it there; with
+  *All repositories*, a new repo is added the moment it is created. The journal shows
+  `OWNER/REPO live, base main`.
+- **Remove a repo** — deselect it (or uninstall the App). Rookery stops accepting its
+  events at once, then deletes the clone and every worktree — unless a worktree branch has
+  commits that are not on GitHub, in which case it logs `NOT removed — unpushed commits`
+  and keeps everything. Push or delete that branch by hand, then remove the directories.
+- **A PR closes** (merged or not) — the issue's worktree is removed, with the same
+  unpushed-commits check.
+
+A repo with no commits yet has no base to branch from: give it a first commit (a README)
+before triggering an issue there.
+
+For one-off `gh` calls as the App (there is no `gh` login on the box):
 
 ```bash
-gh repo clone OWNER/REPO /home/rookery/repos/REPO
-
-cat > /opt/rookery/repos.json <<'EOF'
-{
-  "OWNER/REPO": { "path": "/home/rookery/repos/REPO", "base": "main" }
-}
-EOF
-
-gh repo view OWNER/REPO --json nameWithOwner --jq .nameWithOwner   # must equal the key, exactly
-git -C /home/rookery/repos/REPO symbolic-ref --short HEAD          # must equal "base"
+tok() { (cd /opt/rookery && python3 -c "import agent; print(agent.token('$1'))"); }
+GH_TOKEN=$(tok OWNER/REPO) gh issue list --repo OWNER/REPO
 ```
 
-**The key is case-sensitive.** `enqueue()` tests `repo not in REPOS` against the webhook's
-`full_name`, so a key of `sa-es-ir/llama` silently drops every event for
-`sa-es-ir/Llama`. CLI dry runs still pass, because `gh` is case-insensitive — which is
-exactly why this hides.
+Check `/opt/rookery/.env`: note `WEBHOOK_SECRET` for step 10. Optional: `RUN_CAP` (default
+10 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
+`$WORKSPACE/rookery.db`:
 
-Check `/opt/rookery/.env`: `ALLOWLIST` holds the logins allowed to comment `approve`, and
-note `WEBHOOK_SECRET` for step 10.
+```bash
+python3 -c "import agent; print(agent.usage('OWNER/REPO'))"   # (runs, usd) today, from /opt/rookery
+touch /opt/rookery/PAUSED     # stop every new claude call, all repos; rm it to resume
+```
 
 ## 9. Test before any webhook — server, rookery
 
@@ -172,22 +202,11 @@ python3 agent.py OWNER/REPO 12 approve   # task loop -> push -> draft PR
 Same `handle()` as the webhook; only the transport differs. If these pass, the agent is
 deployed and only delivery is left.
 
-## 10. Listen — server, root then rookery
+## 10. Listen — server, root
 
-`agent.py` binds loopback by default, which GitHub cannot reach. Set `HOST=` (empty =
-all interfaces) in `/opt/rookery/.env`:
-
-```bash
-echo 'HOST=' >> /opt/rookery/.env
-```
-
-If you deployed before `HOST` existed, re-copy `agent.py` too — otherwise the bind stays
-hardcoded and the new `.env` line does nothing:
-
-```bash
-scp agent.py root@SERVER_IP:/opt/rookery/          # your machine
-chown rookery:rookery /opt/rookery/agent.py        # server, root
-```
+`agent.py` binds `127.0.0.1:8787` by default and stays there: nginx on port 80 fronts it,
+and Cloudflare fronts nginx. Leave `HOST` unset — `HOST=` (empty) binds all interfaces
+and exposes the plain `http.server` on 8787.
 
 Run it under systemd from the start — the unit file and `systemctl` need **root**, the
 process itself runs as `rookery` via `User=`:
@@ -206,20 +225,21 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable --now rookery
-journalctl -u rookery -n 20 --no-pager     # want: listening on *:8787 for OWNER/REPO
+journalctl -u rookery -n 20 --no-pager     # want: listening on 127.0.0.1:8787 for OWNER/REPO ... UI at https://HOSTNAME/
 ```
 
 Every later change to `agent.py` or `.env` needs both halves — copy it up, then restart,
 as **root** (`rookery` is not a sudoer):
 
 ```bash
-scp agent.py root@SERVER_IP:/opt/rookery/        # your machine
-chown rookery:rookery /opt/rookery/agent.py      # server, root
-systemctl restart rookery                        # server, root
+scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
+chown rookery:rookery /opt/rookery/agent.py /opt/rookery/web.py  # server, root
+systemctl restart rookery                                        # server, root
 ```
 
 Editing the file alone changes nothing — the running process keeps the old code, and
-module-level values like `ME` and `REPOS` are read once at startup.
+module-level values like `ME` are read once at startup. (`REPOS` is rebuilt from the
+App at every start and kept current by events after that.)
 
 Kill any foreground `python3 agent.py` or `tmux` session first, or the unit dies on
 `Address already in use`. `systemctl is-active rookery` and a `pid=` in
@@ -231,61 +251,77 @@ from a leftover manual run — a port probe cannot, both answer identically.
 supply: systemd does not read `.bashrc`, and without `~/.local/bin` first it would find
 the system `claude`.
 
-### Prove it is reachable before touching GitHub
+### nginx on port 80 — server, root
 
-From your own machine, **not** the server — the point is to cross the provider firewall:
+Cloudflare DNS: an A record `HOSTNAME` → `SERVER_IP`, **Proxied**, SSL/TLS mode
+**Flexible** (browser → Cloudflare is HTTPS, Cloudflare → server is plain http on 80).
 
 ```bash
-curl.exe -sv -m 10 http://SERVER_IP:8787/ -X POST -d '{}'    # PowerShell: curl.exe, not curl
+apt install -y nginx
+rm /etc/nginx/sites-enabled/default
+tee /etc/nginx/sites-available/rookery >/dev/null <<'EOF'
+# Cloudflare (SSL mode Flexible) -> here over http. No https redirect: it would loop.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size 26m;           # GitHub webhooks go up to 25 MB; nginx's default is 1 MB
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+ln -s /etc/nginx/sites-available/rookery /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
 ```
 
-Read the outcome, each one means something different:
+**Never add an https redirect on port 80 while SSL mode is Flexible** — Cloudflare sends
+every request to the origin as http, so it loops. Flexible leaves the Cloudflare → server
+hop in cleartext (cookies, the OAuth code, webhook payloads); moving to Full (strict) with
+a Cloudflare Origin Certificate is in [ai-plans/phase5-deploy.md](ai-plans/phase5-deploy.md).
+
+### Prove it is reachable before touching GitHub
+
+From your own machine. In PowerShell use `curl.exe` — bare `curl` is `Invoke-WebRequest`:
+
+```bash
+curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/                    # 200, landing page
+curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/portal.html         # 200
+curl.exe -s -o NUL -w "%{http_code}\n" -X POST -d '{}' https://HOSTNAME/    # 401 = HMAC rejected it: correct
+curl.exe -s -m 5 http://SERVER_IP:8787/                                     # must fail: 8787 is loopback only
+```
 
 | Result | Meaning |
 |---|---|
-| `HTTP/1.0 401 Unauthorized` | **Working.** The HMAC rejected an unsigned body — exactly right. |
-| `Connection refused` | Reached the host, nothing listening. The service is down or still on `127.0.0.1`. |
-| Hangs, then times out | A firewall is dropping. `ufw` is inactive on a fresh 24.04, so look at the provider's cloud firewall panel for an inbound TCP 8787 rule. |
-
-In Windows PowerShell, bare `curl` is an alias for `Invoke-WebRequest` and answers
-`A parameter cannot be found that matches parameter name 'X'`. Use `curl.exe`.
+| `401` on the POST | **Working.** The HMAC rejected an unsigned body — exactly right. |
+| `502` | nginx is up, the app is not (down, or still in its ~20 s startup `sync()`). |
+| Cloudflare `521` / `522` | Cloudflare cannot reach port 80: nginx is down, or something else holds 80. |
 
 ## 11. Deliver — GitHub
 
-GitHub → target repo → **Settings → Webhooks → Add webhook**:
+Nothing per repo: the App's own webhook (step 5) delivers every installed repo's events.
+**Delete any old per-repo webhook** pointing at the same URL — its secret no longer
+matches, so it only adds red `401`s.
 
-| Field | Value |
-|---|---|
-| Payload URL | `http://SERVER_IP:8787/` |
-| Content type | `application/json` |
-| Secret | `WEBHOOK_SECRET` from `.env` |
-| Events | *Let me select* → **Issues** + **Issue comments** |
+App settings → **Advanced → Recent Deliveries** should show green `204`s (a `ping`
+redelivered after the restart is a quick check); a red `401` means the App's secret does
+not match `WEBHOOK_SECRET` in `.env`; a `403` with a Cloudflare page means **Security →
+Bots → Bot Fight Mode** is blocking GitHub — turn it off.
 
-Or in one command, as `rookery`:
-
-```bash
-gh api repos/OWNER/REPO/hooks -f name=web -F active=true \
-  -f 'events[]=issues' -f 'events[]=issue_comment' \
-  -f config[url]=http://SERVER_IP:8787/ -f config[content_type]=json \
-  -f config[secret]="$WEBHOOK_SECRET"
-```
-
-GitHub sends a `ping` on save. **Recent Deliveries** should show a green `204`; a red
-`401` there means the secret does not match `.env`.
+Portal: `https://HOSTNAME/` → *Open portal* → *Sign in with GitHub* → back on
+`/portal.html` with your repos listed.
 
 Now label a **fresh** issue `claude:trigger` — `enqueue()` ignores any issue that already
 carries a `claude:*` phase label, so the issues you exercised by CLI in step 9 will not
 re-fire (see the gotchas). `job: start` in `journalctl -u rookery -f` means the chain is
 live end to end.
 
-HTTP is cleartext — the HMAC authenticates the payload, it does not encrypt it. Put Caddy
-in front once this handles a real repo.
-
-Prefer no open port? Leave `HOST` unset and tunnel instead, as a second unit:
-
-```bash
-npx smee-client --url https://smee.io/<channel> --target http://127.0.0.1:8787/
-```
+Port 80 answers anyone, not only Cloudflare: restricting it to Cloudflare's IP ranges
+(nginx `allow`/`deny` or `ufw`) is not done yet.
 
 ---
 
@@ -331,28 +367,15 @@ whether it was acted on or dropped.
 `enqueue()` drops an `issue_comment` unless all three hold — check them in this order:
 
 ```bash
-gh api user --jq .login                                  # server, rookery: this is ME
-journalctl -u rookery --no-pager | grep 'listening on'   # prints "(bot user: ...)" at startup
-grep ALLOWLIST /opt/rookery/.env                         # must contain YOUR login, lowercase
-gh issue view N --repo OWNER/REPO --json labels          # must carry some claude:* phase label
+journalctl -u rookery --no-pager | grep 'listening on'   # "(bot user: ...)" must be the App's, not you
+journalctl -u rookery --no-pager | grep 'permission lookup'   # a failed write-access check denies
+GH_TOKEN=$(tok OWNER/REPO) gh api repos/OWNER/REPO/collaborators/YOU/permission -q .permission  # admin or write
+GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # some claude:* phase label
 ```
 
-Nearly always it is the first: `gh` on the server was authenticated with your own PAT, so
-`ME` is your login and the `user != ME` guard eats your comments. Fix it with a machine
-account (step 5), then **restart the service** — `ME` is read once at startup and stays
-stale otherwise. Switching the token without restarting looks identical to not switching it.
-
-Ruling the webhook in or out needs your *own* account, not the bot's — listing hooks
-requires repo **admin**, so as `rookery` it answers `404` and suggests `gh auth refresh -s
-admin:repo_hook`. Ignore that; the scope would not help (the bot has Write, not admin) and
-the agent never needs it. Run this where you are authenticated as the repo owner:
-
-```bash
-gh api repos/OWNER/REPO/hooks --jq '.[] | {id, url: .config.url, events, active}'
-```
-
-Want `issue_comment` in `events`. A hook subscribed to `issues` only still fires `job:
-start` on a label, which makes the agent look alive while every comment is silently lost.
+Then the App itself: its **Issue comment** event must be ticked (App settings →
+Permissions & events). With only **Issues**, a label still fires `job: start`, which
+makes the agent look alive while every comment is silently lost.
 
 Do not "fix" this by dropping the `ME` check. The bot comments after every planning round;
 without the filter its own comment re-enters `enqueue()` and loops forever, and it can
@@ -434,13 +457,22 @@ look — but a geo-block is a fast 403, never a hang.
 
 ### Smaller ones
 
-- `ghp_xxx` in a guide is a placeholder. `gh auth login --with-token` answers
-  `HTTP 401: Bad credentials` if you paste it literally.
-- `git clone` prompting for a username means `gh auth setup-git` did not run as this user.
-  `gh repo clone` works regardless.
+- `git fetch` prompting for a username, or `Repository not found` on a private repo, means
+  the clone's origin is ssh or the App is not installed on that repo.
+- A repo that left the installation while the service was down keeps its clone: removal
+  is event-driven only. Delete `$WORKSPACE/repos/<owner>_<repo>` and
+  `$WORKSPACE/<owner>_<repo>` by hand.
+- `sign failed` / `Could not open file` from `openssl` at the first job: `APP_KEY` points at
+  a missing or unreadable `.pem` — it must be owned by `rookery`.
 - With NodeSource Node, the npm package installs under `/usr/lib/node_modules`, not
   `/usr/local/lib/node_modules` — deleting the wrong tree looks like a failed reinstall.
 - A phase label left over from a crashed run blocks re-triggering:
   `gh issue edit N --repo OWNER/REPO --remove-label claude:planning`.
 - Re-commenting `approve` after a failure resumes at the first unticked task; everything
   finished before it is already committed.
+- A restart is deaf for the ~20s startup `sync()` takes: a comment in that window gets a
+  `502` in Recent Deliveries and GitHub does not retry it. Hit **Redeliver** — dedupe on
+  `X-GitHub-Delivery` only drops ids the server actually received.
+- `hit its daily cap` as the error comment: the repo used `RUN_CAP` claude calls or
+  `USD_CAP` dollars today (UTC). Wait for 00:00 UTC or raise the cap in `.env` and restart,
+  then comment `approve` again.

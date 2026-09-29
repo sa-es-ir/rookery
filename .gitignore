@@ -2,3 +2,5 @@
 repos.json
 work/
 __pycache__/
+*.pem
+.playwright-mcp/
