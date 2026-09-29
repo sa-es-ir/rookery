@@ -42,6 +42,9 @@
 .repos .use{margin-left:auto;flex:none;color:var(--fog);font-size:11px}
 .repos .use.hot{color:#ffb3a5}
 .side .none{font-size:13px;color:var(--fog);padding:0 12px;font-weight:300}
+.repos .none a{display:inline;padding:0;font:inherit;color:var(--ash);text-decoration:underline;
+  text-decoration-color:rgb(7,122,199);text-underline-offset:3px;white-space:normal}
+.repos .none a:hover{background:none;color:#fff}
 .side .bottom{margin-top:auto;border-top:1px solid var(--smoke);padding-top:16px;display:flex;
   align-items:center;gap:10px;font-size:13px;color:var(--fog)}
 .side .bottom b{font-weight:400;color:var(--ash)}
@@ -240,8 +243,12 @@ async function repos(){
         h('span', {class: 'dot', 'data-repo': r.repo}), h('span', {class: 'name'}, r.repo),
         h('span', {class: 'use' + (hot ? ' hot' : '')}, r.runs + '/' + r.run_cap));
     }));
-  if (!d.repos.length) nav.append(h('p', {class: 'none'},
-    'No repos yet. Rookery shows the repos of your own installations of the App.'));
+  // GitHub sends the browser back through /auth/login after an install (the App's Setup URL),
+  // which re-reads the user's installations; "refresh" is the same trip by hand.
+  const install = 'https://github.com/apps/' + state.me.app + '/installations/new';
+  nav.append(h('p', {class: 'none'}, ...(d.repos.length ? [] : ['No repos yet. ']),
+    h('a', {href: install}, d.repos.length ? 'Add or remove repos' : 'Install Rookery on a repo'),
+    ' · ', h('a', {href: '/auth/login'}, 'refresh')));
 }
 
 function pick(repo){ state.repo = repo; state.run = null; show(); }

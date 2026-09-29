@@ -8,7 +8,9 @@ so test_agent.py drives it without a socket.
 Who sees what: at login, the user's GitHub token lists the repos of *their*
 installations of the App; the session keeps that list and the token is dropped.
 A repo is visible while it is on that list and in agent.REPOS.
-ponytail: the list is fixed for the session (8h); sign in again to refresh it.
+The list is fixed for the session; signing in again refreshes it (GitHub skips the
+consent screen once authorised). The App's Setup URL points at /auth/login, so installing
+it or changing its repos lands back here signed in with the new list.
 """
 import hashlib
 import hmac
@@ -120,6 +122,9 @@ def callback(q, jar):
              for i in agent.api_all("/user/installations", tok, "installations")
              for r in agent.api_all(f"/user/installations/{i['id']}/repositories", tok, "repositories")}
     log(f"{who} signed in ({len(repos)} repos in their installations)")
+    if old := jar.get("rookery_session"):   # a refresh replaces the session, it doesn't add one
+        with closing(agent.db()) as con, con:
+            con.execute("DELETE FROM sessions WHERE id = ?", (digest(old.value),))
     return 302, [("Location", "/portal.html"), cookie("rookery_session", new_session(who, repos), TTL),
                  cookie("rookery_state", "", 0)], b""
 
@@ -203,7 +208,7 @@ def route(method, url, headers, body=b""):
                 con.execute("DELETE FROM sessions WHERE id = ?", (digest(s["sid"]),))
             return 204, [cookie("rookery_session", "", 0)], b""
         if method == "GET" and path == "/api/me":
-            return js(200, {"login": s["login"], "csrf": s["csrf"]})
+            return js(200, {"login": s["login"], "csrf": s["csrf"], "app": agent.ME.removesuffix("[bot]")})
         if method == "GET" and path == "/api/repos":
             return js(200, repos(s))
         if method == "GET" and path == "/api/runs":

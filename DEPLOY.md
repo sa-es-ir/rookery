@@ -85,6 +85,10 @@ GitHub → Settings → Developer settings → **GitHub Apps → New**: webhook 
 `https://HOSTNAME/` (nginx, step 10), content type JSON, a fresh secret; the permissions
 and events from step 0. **Callback URL** `https://HOSTNAME/auth/callback` for portal
 sign-in (add `http://127.0.0.1:8787/auth/callback` too to test the portal locally).
+**Setup URL** (under *Post installation*) `https://HOSTNAME/auth/login` with *Redirect on
+update* ticked, and *Request user authorization (OAuth) during installation* **unticked** —
+it would send GitHub to the callback without our `state` and the sign-in would fail. After
+an install or a repo change the user lands back in the portal with the new list.
 Generate a private key and a client secret, then **Install** it on the target repo.
 
 `/opt/rookery/.env` gets these values (the secret replaces any old per-repo one):

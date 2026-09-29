@@ -412,6 +412,25 @@ me = body(req("GET", "/api/me", sid=sid))
 assert me["login"] == "alice" and me["csrf"]
 assert [r["repo"] for r in body(req("GET", "/api/repos", sid=sid))["repos"]] == ["o/r"], \
     "installations ∩ REPOS: o/other is not alice's, o/not-served is not served"
+assert me["app"] == agent.ME.removesuffix("[bot]"), "the portal links to the App's install page"
+
+# signing in again (the App's Setup URL after an install, or "refresh") re-reads the list
+# and replaces the session rather than adding one
+fake_repos = fake_api
+agent.REPOS["o/new"] = "main"   # alice just installed the App on it
+agent.api = lambda m, p, b: ({"repositories": [{"full_name": "o/r"}, {"full_name": "o/new"}]}
+                             if p.startswith("/user/installations/7/") else fake_repos(m, p, b))
+st = urllib.parse.parse_qs(urllib.parse.urlsplit(dict(req("GET", "/auth/login")[1])["Location"]).query)["state"][0]
+hdrs = req("GET", f"/auth/callback?code=c&state={st}", cookie=f"rookery_state={st}; rookery_session={sid}")[1]
+old, sid = sid, next(v.split(";")[0].split("=", 1)[1] for k, v in hdrs
+                     if k == "Set-Cookie" and v.startswith("rookery_session="))
+assert req("GET", "/api/me", sid=old)[0] == 401, "the old session is gone"
+assert [r["repo"] for r in body(req("GET", "/api/repos", sid=sid))["repos"]] == ["o/new", "o/r"]
+with agent.closing(agent.db()) as con:
+    assert con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+agent.api = fake_api
+del agent.REPOS["o/new"]
+me = body(req("GET", "/api/me", sid=sid))
 
 # runs: only visible repos', each summarised from its steps
 for repo in ("o/r", "o/other"):

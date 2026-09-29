@@ -95,7 +95,9 @@ calls, and the job fails through the normal path with a "Cancelled … by @login
 **Portal auth.** GitHub OAuth through the App (`CLIENT_ID`/`CLIENT_SECRET`, callback
 `PUBLIC_URL/auth/callback`, a `state` cookie). The user's token lists their installations'
 repos once at login and is dropped; the session row (keyed by sha256 of the cookie, 8h)
-keeps that list. Visible = that list ∩ `REPOS`. POSTs need the session's `X-CSRF-Token`.
+keeps that list. Visible = that list ∩ `REPOS`. Signing in again replaces the session with a
+fresh list; the App's Setup URL is `/auth/login`, so an install does that by itself. POSTs
+need the session's `X-CSRF-Token`.
 Cancel needs `can_write()`, the same check as `approve`. `REPOS_ONLY` limits an instance.
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
