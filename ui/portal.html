@@ -266,7 +266,7 @@ async function list(){
       h('span', {class: 'lbl ' + (LBL[r.status] || '')}, where(r)),
       r.status === 'failed' && r.error && h('div', {class: 'why'}, r.error.split('\n')[0]),
       r.act === 'implement' && h('div', {class: 'bar'}, h('i', {style: 'width:' + progress(r) + '%'}))))
-    : [h('p', {class: 'empty'}, 'No runs yet. Label an issue claude:trigger to start one.')]));
+    : [h('p', {class: 'empty'}, 'No runs yet. Label an issue rookery:trigger to start one.')]));
 }
 
 /* --- one run, step by step --- */
@@ -310,7 +310,7 @@ async function one(){
 }
 
 async function stop(r){
-  if (!confirm('Cancel run ' + r.id + ' on ' + r.repo + '#' + r.n + '?\n\nThe running claude call is killed, the issue gets an error comment and claude:error. Commenting approve resumes at the first unticked task.')) return;
+  if (!confirm('Cancel run ' + r.id + ' on ' + r.repo + '#' + r.n + '?\n\nThe running claude call is killed, the issue gets an error comment and rookery:error. Commenting approve resumes at the first unticked task.')) return;
   try {
     await call('/api/runs/' + r.id + '/cancel', {method: 'POST'});
     toast('Cancelling run ' + r.id + '…');

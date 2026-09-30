@@ -197,28 +197,28 @@ footer .links a:hover{color:#fff}
       anything else, and you can stop it by removing a label.</p>
   </div>
   <ol class="rail">
-    <li class="gate"><span class="knot"></span><span class="lbl live">claude:trigger</span>
+    <li class="gate"><span class="knot"></span><span class="lbl live">rookery:trigger</span>
       <h3>You start it</h3>
       <p>Nothing runs until someone puts the label on. There is no polling and no autonomous pickup.</p>
       <span class="you">requires you</span></li>
-    <li><span class="knot"></span><span class="lbl">claude:planning</span>
+    <li><span class="knot"></span><span class="lbl">rookery:planning</span>
       <h3>planmaker reads the repo</h3>
       <p>It writes <code class="mono">plan.md</code>, <code class="mono">tasks.md</code> and
         <code class="mono">decisions.md</code> into the target repo and touches nothing else.</p></li>
-    <li><span class="knot"></span><span class="lbl">claude:awaiting-input</span>
+    <li><span class="knot"></span><span class="lbl">rookery:awaiting-input</span>
       <h3>It asks when it has to</h3>
       <p>An open question comes back as an issue comment. Reply and planning resumes in the
         same session with your answer folded in.</p></li>
-    <li class="gate"><span class="knot"></span><span class="lbl live">claude:awaiting-approval</span>
+    <li class="gate"><span class="knot"></span><span class="lbl live">rookery:awaiting-approval</span>
       <h3>You approve it</h3>
       <p>The plan is posted for review. Comment <code class="mono">approve</code> to start the
         work — matched as text, from a login on your allowlist.</p>
       <span class="you">requires you</span></li>
-    <li><span class="knot"></span><span class="lbl">claude:implementing</span>
+    <li><span class="knot"></span><span class="lbl">rookery:implementing</span>
       <h3>One task, then the next</h3>
       <p>A fresh session per task. Rookery ticks the checkbox, commits, and moves on. Fifteen
         tasks is the ceiling; the loop stops rather than wandering.</p></li>
-    <li><span class="knot"></span><span class="lbl">claude:reviewing</span>
+    <li><span class="knot"></span><span class="lbl">rookery:reviewing</span>
       <h3>A second agent reads the diff</h3>
       <p>Advisory, and it runs once. The branch is pushed and the draft PR opened either way,
         so work is never stranded on someone's laptop.</p></li>
@@ -300,12 +300,12 @@ footer .links a:hover{color:#fff}
 // The hero runs the real loop on a timer: labels advance, checkboxes tick.
 // ponytail: a script, not a state machine — it is a demo, not the product.
 const PHASES = [
-  {label:'claude:trigger',           cls:'live', hold:1400, foot:'labelled by @sa-es-ir'},
-  {label:'claude:planning',          cls:'',     hold:2200, foot:'agent-plans/3/plan.md'},
-  {label:'claude:awaiting-approval', cls:'live', hold:2400, foot:'waiting for approve'},
-  {label:'claude:implementing',      cls:'',     hold:0,    foot:'agent-plans/3/tasks.md'},
-  {label:'claude:reviewing',         cls:'',     hold:1800, foot:'reviewer reading the diff'},
-  {label:'claude:done',              cls:'ok',   hold:3000, foot:'draft PR #14 opened'},
+  {label:'rookery:trigger',           cls:'live', hold:1400, foot:'labelled by @sa-es-ir'},
+  {label:'rookery:planning',          cls:'',     hold:2200, foot:'agent-plans/3/plan.md'},
+  {label:'rookery:awaiting-approval', cls:'live', hold:2400, foot:'waiting for approve'},
+  {label:'rookery:implementing',      cls:'',     hold:0,    foot:'agent-plans/3/tasks.md'},
+  {label:'rookery:reviewing',         cls:'',     hold:1800, foot:'reviewer reading the diff'},
+  {label:'rookery:done',              cls:'ok',   hold:3000, foot:'draft PR #14 opened'},
 ];
 const labels = document.getElementById('labels');
 const foot = document.getElementById('foot');
@@ -323,7 +323,7 @@ async function loop(){
     items.forEach(li => li.className = '');
     for (const p of PHASES){
       show(p);
-      if (p.label === 'claude:implementing'){
+      if (p.label === 'rookery:implementing'){
         for (const li of items){
           li.className = 'on'; await wait(900);
           li.className = 'done'; await wait(300);

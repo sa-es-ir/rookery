@@ -16,12 +16,12 @@
 
 ---
 
-Rookery watches your repos for a `claude:trigger` label. When one lands it plans
+Rookery watches your repos for a `rookery:trigger` label. When one lands it plans
 the issue, asks its questions as issue comments, waits for a human `approve`,
 then implements the plan task by task on a branch and opens a draft PR.
 
 ```
-claude:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
+rookery:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
 Two files: `agent.py` (the pipeline) and `web.py` (the webhook, sign-in, the API and the
@@ -81,7 +81,7 @@ Fresh sessions per task keep context — and cost — flat no matter how large t
 issue is. `decisions.md` is the only memory that crosses between them.
 
 - More than **15 tasks** is an error: split the issue.
-- A failed task stops at `claude:error` with everything before it already
+- A failed task stops at `rookery:error` with everything before it already
   committed. Fix the plan or the code, comment `approve` again, and the loop
   resumes at that same task.
 
@@ -100,7 +100,7 @@ is already the right shape for them.
 The reviewer is **advisory**. Its findings go into the PR body under
 `## Review`, and the draft PR opens whatever the verdict — work is never left
 stranded in a local worktree. A `changes-needed` verdict only lands
-`claude:error` so somebody looks. Blocking and self-fixing variants are specced
+`rookery:error` so somebody looks. Blocking and self-fixing variants are specced
 but deliberately unbuilt.
 
 To split models by role, add `"model": "opus"` to a role in `AGENTS`.
@@ -125,17 +125,17 @@ Labels are created when a repo is onboarded.
 
 ## Using it
 
-Add the `claude:trigger` label to an issue, then follow the `claude:*` label:
+Add the `rookery:trigger` label to an issue, then follow the `rookery:*` label:
 
 | Label | Meaning |
 | --- | --- |
-| `claude:planning` | writing the plan |
-| `claude:awaiting-input` | a question is in the comments — answer it |
-| `claude:awaiting-approval` | comment `approve` / `lgtm` / `go ahead` |
-| `claude:implementing` | working through `tasks.md` |
-| `claude:reviewing` | the reviewer is reading the finished diff |
-| `claude:done` | draft PR is open, review clean |
-| `claude:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
+| `rookery:planning` | writing the plan |
+| `rookery:awaiting-input` | a question is in the comments — answer it |
+| `rookery:awaiting-approval` | comment `approve` / `lgtm` / `go ahead` |
+| `rookery:implementing` | working through `tasks.md` |
+| `rookery:reviewing` | the reviewer is reading the finished diff |
+| `rookery:done` | draft PR is open, review clean |
+| `rookery:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
 
 Only people with write access to the repo can move an issue along, and approval is a regex
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
@@ -143,7 +143,7 @@ Only people with write access to the repo can move an issue along, and approval 
 
 Each repo gets 10 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
 override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
-new call. Hitting either comments on the issue and sets `claude:error`.
+new call. Hitting either comments on the issue and sets `rookery:error`.
 
 ## Testing without a webhook
 
@@ -170,7 +170,7 @@ URL. You see the repos of your own installations of the App, and for each:
 - a run's log step by step: tasks, each `claude` call with its status and cost, commits,
   push, PR, the error;
 - **Cancel** on a running job (write access needed): the `claude` call is killed and the
-  issue gets the error comment and `claude:error`, like any failure. `approve` resumes it.
+  issue gets the error comment and `rookery:error`, like any failure. `approve` resumes it.
 
 There is no approve button. Approval stays an `approve` comment on the issue.
 

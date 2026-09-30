@@ -62,9 +62,9 @@ HOST = os.environ.get("HOST", "127.0.0.1")  # "" = all interfaces, for a public 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(threadName)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.info
 
-TRIGGER = "claude:trigger"
-PHASES = ["claude:planning", "claude:awaiting-input", "claude:awaiting-approval",
-          "claude:implementing", "claude:reviewing", "claude:done", "claude:error"]
+TRIGGER = "rookery:trigger"
+PHASES = ["rookery:planning", "rookery:awaiting-input", "rookery:awaiting-approval",
+          "rookery:implementing", "rookery:reviewing", "rookery:done", "rookery:error"]
 APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
 MARKER = re.compile(r"^STATUS:[ \t]*(\S+)[ \t]*$", re.M)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
@@ -529,19 +529,19 @@ def keep_plans_only(c, wt):
 
 
 def plan(c, title, body, resume):
-    set_phase(c, "claude:planning")
+    set_phase(c, "rookery:planning")
     prompt = (REPLY.format(n=c.n, body=body, d=pdir(c.n)) if resume
               else PLAN.format(n=c.n, repo=c.repo, title=title, body=body,
                                d=pdir(c.n), max=MAX_TASKS))
     status, msg = claude(c, prompt, resume=resume, agent="planmaker")
     keep_plans_only(c, worktree(c))
     comment(c, msg)
-    set_phase(c, "claude:awaiting-input" if status == "questions" else "claude:awaiting-approval")
+    set_phase(c, "rookery:awaiting-input" if status == "questions" else "rookery:awaiting-approval")
 
 
 def implement(c):
     """One fresh session per unticked task. Re-running resumes where it stopped."""
-    set_phase(c, "claude:implementing")
+    set_phase(c, "rookery:implementing")
     wt, done = worktree(c), []
     for _ in range(MAX_TASKS + 1):
         tasks = read_tasks(wt, c.n)
@@ -571,7 +571,7 @@ def implement(c):
     branch = f"feature/issue-{c.n}"
     assert branch != c.base
 
-    set_phase(c, "claude:reviewing")
+    set_phase(c, "rookery:reviewing")
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
                              key="review", agent="reviewer")
 
@@ -593,7 +593,7 @@ def implement(c):
     ok = verdict == "review-ok"
     comment(c, f"Draft PR: {url}" if ok else
             f"Draft PR: {url}\n\nThe reviewer wants changes — see **Review** in the PR body.")
-    set_phase(c, "claude:done" if ok else "claude:error")
+    set_phase(c, "rookery:done" if ok else "rookery:error")
 
 
 # --- repos: onboarding and retention ----------------------------------------
@@ -620,6 +620,9 @@ def onboard(repo, base=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         sh("git", "clone", "-q", f"https://github.com/{repo}.git", str(path), env=auth(repo))
     for l in PHASES + [TRIGGER]:
+        # ponytail: one-time claude:* -> rookery:* rename, keeps the label on in-flight issues;
+        # delete once every repo has restarted on this code
+        gh(repo, "label", "edit", l.replace("rookery:", "claude:"), "--name", l, check=False)
         gh(repo, "label", "create", l, "--color", "5319e7", check=False)
     REPOS[repo] = base
     log(f"{repo} live, base {base}")
@@ -681,10 +684,10 @@ def handle(job):
         else:
             phase = labels_of(c.repo, c.n)
             # approving again after an error resumes at the first unticked task
-            if APPROVE.match(job["body"]) and phase & {"claude:awaiting-approval", "claude:error"}:
+            if APPROVE.match(job["body"]) and phase & {"rookery:awaiting-approval", "rookery:error"}:
                 begin(c, "implement")
                 implement(c)
-            elif phase & {"claude:awaiting-input", "claude:awaiting-approval"}:
+            elif phase & {"rookery:awaiting-input", "rookery:awaiting-approval"}:
                 begin(c, "reply")
                 plan(c, None, job["body"], resume=True)
         finish(c.repo, "ok")
@@ -696,7 +699,7 @@ def handle(job):
         step(c.repo, "error", message=msg[-2000:])
         try:
             comment(c, f"Agent error:\n\n```\n{msg}\n```")
-            set_phase(c, "claude:error")
+            set_phase(c, "rookery:error")
         finally:
             finish(c.repo, "cancelled" if cancelled else "failed")
 

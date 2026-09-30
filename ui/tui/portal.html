@@ -181,7 +181,7 @@ function agents(){
 $('#runList').append(...RUNS.map(r => el('div','run',
   '<span class="where">' + r.repo + ' #' + r.n + '</span>' +
   '<span class="what">' + r.title + '</span>' +
-  '<span class="lbl ' + r.cls + '">claude:' + r.phase + '</span>' +
+  '<span class="lbl ' + r.cls + '">rookery:' + r.phase + '</span>' +
   '<span class="prog">' + meter(r.done, r.total) + '</span>')));
 
 function counts(){

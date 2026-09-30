@@ -51,17 +51,17 @@ worktrees (`offboard()`). Both refuse — log and skip — when `unpushed()` fin
 with commits on no remote-tracking ref. The push goes to a URL, which updates no such
 ref, so `implement()` records `refs/remotes/origin/<branch>` itself right after it.
 
-**State lives on GitHub and in the target repo, not here.** The `claude:*` labels _are_ the
+**State lives on GitHub and in the target repo, not here.** The `rookery:*` labels _are_ the
 state machine (`PHASES`), advanced only via `set_phase()`, which removes stale phase labels.
 Per-issue files live in `agent-plans/<n>/` inside the target repo — `plan.md`, `tasks.md`,
 `decisions.md` — and are committed and pushed with the change so they land in the PR. Nothing
 local persists between runs: Claude session ids are `uuid5(NS, "repo#n/key")`, so re-running
 the same issue resumes the same session.
 
-Flow: label `claude:trigger` → `plan()` (`claude:planning`) → either `claude:awaiting-input`
-(a reply re-enters `plan(resume=True)`, same session) or `claude:awaiting-approval` → an
-`approve` comment from someone with write access → `implement()` → `claude:reviewing` → `claude:done` /
-`claude:error`.
+Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rookery:awaiting-input`
+(a reply re-enters `plan(resume=True)`, same session) or `rookery:awaiting-approval` → an
+`approve` comment from someone with write access → `implement()` → `rookery:reviewing` → `rookery:done` /
+`rookery:error`.
 
 **Named roles are `AGENTS`, passed as `--agents`/`--agent`.** `planmaker` runs `plan()`,
 `reviewer` runs the review pass; implementation tasks deliberately run as _no_ agent — the
@@ -120,7 +120,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   `USD_CAP` dollars per repo per UTC day (defaults 10 and $20), plus the operator's `PAUSED`
   file next to `agent.py`. Every call — failed ones too — is recorded with its
   `total_cost_usd` in `$WORKSPACE/rookery.db`, one sqlite3 connection per call, so a restart
-  keeps the day's count. A cap raises like any other error (comment + `claude:error`); mid
+  keeps the day's count. A cap raises like any other error (comment + `rookery:error`); mid
   implementation that means the current task is committed and the next one never starts.
   Caps are per tenant; `MAX_TASKS` is per issue — keep them independent.
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
@@ -145,7 +145,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   then delete.
 - **The review is advisory and runs once**, after the task loop and before the push. The
   branch is pushed and the draft PR opened either way, so work is never stranded in a local
-  worktree; `changes-needed` only sets `claude:error`. Escalating it to a blocking gate or a
+  worktree; `changes-needed` only sets `rookery:error`. Escalating it to a blocking gate or a
   fix loop is specced in the plan doc — a fix loop needs its own bound, because a reviewer
   that appends tasks breaks "every tick strictly reduces the open count".
 - **`STATUS:` is parsed, never inferred.** `MARKER` requires the marker alone on its line; a
@@ -162,7 +162,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **Retention never deletes unpushed commits.** `drop_worktree()`/`offboard()` check
   `unpushed()` first and keep everything if it finds any. `worker()` catches everything
   `handle()` lets out, so one bad job cannot kill the loop.
-- Every exception in `handle()` becomes an issue comment plus `claude:error` — the loop never
+- Every exception in `handle()` becomes an issue comment plus `rookery:error` — the loop never
   dies silently.
 
 ## Style

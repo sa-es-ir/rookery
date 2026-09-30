@@ -234,7 +234,7 @@ assert not agent.can_write("o/other", "alice"), "admin on one repo is nothing on
 assert not agent.can_write("o/r", "nobody"), "a failed lookup denies"
 
 agent.REPOS = {"o/r": "main", "o/other": "main"}
-agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
 for repo, user in [("o/r", "alice"), ("o/other", "alice"), ("o/r", "carol"), ("o/r", agent.ME)]:
     agent.enqueue("issue_comment", {"action": "created", "repository": {"full_name": repo},
                                     "issue": {"number": 9}, "comment": {"user": {"login": user}, "body": "approve"}})
@@ -297,7 +297,7 @@ git("init", "-q", "-b", "main"), git("config", "user.email", "t@t"), git("config
 (wt / agent.pdir(5) / "tasks.md").write_text("- [ ] one\n- [ ] two\n- [ ] three\n", encoding="utf-8")
 git("add", "-A"), git("commit", "-qm", "plan")
 agent.worktree = lambda c: wt
-agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
 agent.set_phase = lambda c, phase: agent.step(c.repo, "phase", label=phase)
 posted = []
 agent.comment = lambda c, body: posted.append(body)
@@ -315,7 +315,7 @@ assert [j[1:] for j in jobs] == [("o/r", 5, "implement", "failed")], jobs
 assert [w for w, _ in steps] == ["phase", "task", "claude", "tick", "commit", "task", "claude", "error", "phase"], steps
 assert steps[5][1] == {"i": 2, "of": 3, "text": "two"}, "the task it failed at, and of how many"
 assert "task 2 (two) reported failed" in steps[7][1]["message"] and posted, "error logged and commented"
-assert steps[8][1] == {"label": "claude:error"}
+assert steps[8][1] == {"label": "rookery:error"}
 assert not agent.active, "a finished job is no longer active"
 agent.step("o/r", "claude", key="x")            # outside a job: nothing is written
 with agent.closing(agent.db()) as con:
@@ -498,7 +498,7 @@ srv.shutdown()
 import sys  # noqa: E402
 
 agent.sh, agent.WORKSPACE, agent.REPOS = real_sh, Path(tempfile.mkdtemp()), {"o/r": "main"}
-agent.labels_of = lambda repo, n: {"claude:awaiting-approval"}
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
 posted.clear()
 def slow_implement(c):
     agent.step(c.repo, "task", i=1, of=2, text="slow")
@@ -522,7 +522,7 @@ th.join(10)
 assert not th.is_alive() and time.time() - t0 < 10, "the running process was killed, not waited out"
 assert body(req("GET", f"/api/runs/{job}", sid=bob))["status"] == "cancelled"
 assert posted == ["Agent error:\n\n```\nCancelled from the Rookery UI by @bob.\n```"], posted
-assert [s["label"] for s in body(req("GET", f"/api/runs/{job}", sid=bob))["steps"] if s["what"] == "phase"]     == ["claude:error"]
+assert [s["label"] for s in body(req("GET", f"/api/runs/{job}", sid=bob))["steps"] if s["what"] == "phase"]     == ["rookery:error"]
 assert req("POST", f"/api/runs/{job}/cancel", sid=bob, csrf=csrf(bob))[0] == 409, "no longer running"
 agent.begin(agent.Ctx("o/r", 6, Path("."), "main"), "implement")   # cancelled between tasks:
 assert agent.cancel("o/r", agent.active["o/r"]["job"], "bob")        # nothing to kill, but

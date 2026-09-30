@@ -156,7 +156,7 @@ cover.
 
 There is no repo list to write. At startup `sync()` asks the App for every repository it
 is installed on, clones each one over https into `$WORKSPACE/repos/<owner>_<repo>`
-(`WORKSPACE` defaults to `/opt/rookery/work`), creates the `claude:*` labels, and takes
+(`WORKSPACE` defaults to `/opt/rookery/work`), creates the `rookery:*` labels, and takes
 the base branch from the repo's `default_branch`. After that, `installation` and
 `installation_repositories` events keep the list current — no restart:
 
@@ -195,7 +195,7 @@ touch /opt/rookery/PAUSED     # stop every new claude call, all repos; rm it to 
 ```bash
 cd /opt/rookery
 python3 test_agent.py                    # no network, pure asserts
-python3 agent.py OWNER/REPO 12           # plan issue 12 -> posts a comment, sets claude:awaiting-approval
+python3 agent.py OWNER/REPO 12           # plan issue 12 -> posts a comment, sets rookery:awaiting-approval
 python3 agent.py OWNER/REPO 12 approve   # task loop -> push -> draft PR
 ```
 
@@ -315,8 +315,8 @@ Bots → Bot Fight Mode** is blocking GitHub — turn it off.
 Portal: `https://HOSTNAME/` → *Open portal* → *Sign in with GitHub* → back on
 `/portal.html` with your repos listed.
 
-Now label a **fresh** issue `claude:trigger` — `enqueue()` ignores any issue that already
-carries a `claude:*` phase label, so the issues you exercised by CLI in step 9 will not
+Now label a **fresh** issue `rookery:trigger` — `enqueue()` ignores any issue that already
+carries a `rookery:*` phase label, so the issues you exercised by CLI in step 9 will not
 re-fire (see the gotchas). `job: start` in `journalctl -u rookery -f` means the chain is
 live end to end.
 
@@ -370,7 +370,7 @@ whether it was acted on or dropped.
 journalctl -u rookery --no-pager | grep 'listening on'   # "(bot user: ...)" must be the App's, not you
 journalctl -u rookery --no-pager | grep 'permission lookup'   # a failed write-access check denies
 GH_TOKEN=$(tok OWNER/REPO) gh api repos/OWNER/REPO/collaborators/YOU/permission -q .permission  # admin or write
-GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # some claude:* phase label
+GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # some rookery:* phase label
 ```
 
 Then the App itself: its **Issue comment** event must be ticked (App settings →
@@ -388,15 +388,15 @@ comment must **begin** with one of those words. `approve` and `Approve, ship it`
 `I approve it` does not, and neither does `approves it` — the `\b` requires the word to
 end there.
 
-It does not fail loudly, which is the confusing part. On `claude:awaiting-approval` a
+It does not fail loudly, which is the confusing part. On `rookery:awaiting-approval` a
 non-matching comment falls through to the `elif` and is fed back as developer feedback —
 another planning round, another comment, no implementation. It looks like the agent
 ignored you when it actually re-planned.
 
-### `claude:error` also means "the reviewer wants changes"
+### `rookery:error` also means "the reviewer wants changes"
 
 A run that ends `claude review -> changes-needed` pushes the branch, opens the draft PR,
-and *then* sets `claude:error`. Nothing crashed — the label is overloaded, because the
+and *then* sets `rookery:error`. Nothing crashed — the label is overloaded, because the
 review is advisory and only flags.
 
 Tell the two apart by the comment on the issue, not the label: a real failure posts
@@ -422,7 +422,7 @@ claude            # /login — prints a URL, authorize it in a browser, paste th
 timeout 120 claude -p 'say ok' --output-format json </dev/null    # the step 7 gate again
 ```
 
-Then comment `approve` on the issue: it is on `claude:error` with every task before the
+Then comment `approve` on the issue: it is on `rookery:error` with every task before the
 failing one already committed, so the loop resumes at the first unticked box.
 
 The credentials copy is a convenience for first light. If the revocation keeps recurring,
@@ -438,7 +438,7 @@ p = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
                    encoding="utf-8", timeout=1800, stdin=subprocess.DEVNULL)
 ```
 
-A `TimeoutExpired` becomes an issue comment plus `claude:error` through `handle()`,
+A `TimeoutExpired` becomes an issue comment plus `rookery:error` through `handle()`,
 instead of a run that never returns.
 
 ### Debugging a hang, in order
@@ -467,7 +467,7 @@ look — but a geo-block is a fast 403, never a hang.
 - With NodeSource Node, the npm package installs under `/usr/lib/node_modules`, not
   `/usr/local/lib/node_modules` — deleting the wrong tree looks like a failed reinstall.
 - A phase label left over from a crashed run blocks re-triggering:
-  `gh issue edit N --repo OWNER/REPO --remove-label claude:planning`.
+  `gh issue edit N --repo OWNER/REPO --remove-label rookery:planning`.
 - Re-commenting `approve` after a failure resumes at the first unticked task; everything
   finished before it is already committed.
 - A restart is deaf for the ~20s startup `sync()` takes: a comment in that window gets a

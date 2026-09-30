@@ -202,8 +202,8 @@ main>.top .right{margin-left:auto;display:flex;gap:10px;align-items:center}
 .runs .head,.run{display:grid;gap:12px;align-items:center;padding:11px 12px;
   grid-template-columns:1fr auto}
 /* columns sized off the widest cell in each: "sa-es-ir/rookery #3",
-   "claude:awaiting-approval" (24ch + the pill's padding), "########.. 12/12" */
-@media(min-width:820px){.runs .head,.run{grid-template-columns:21ch 1fr 26ch 17ch}}
+   "rookery:awaiting-approval" (25ch + the pill's padding), "########.. 12/12" */
+@media(min-width:820px){.runs .head,.run{grid-template-columns:21ch 1fr 27ch 17ch}}
 .runs .head{font-size:11px;color:var(--fog);letter-spacing:.08em;text-transform:uppercase;
   border-bottom:1px solid var(--smoke)}
 .run{border-bottom:1px dashed var(--smoke);font-size:13px}
