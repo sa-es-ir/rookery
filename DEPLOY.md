@@ -14,8 +14,17 @@ user it runs as.
   private key `.pem` and webhook secret are all the GitHub credentials the box gets —
   no PAT, no `gh auth login`.
 - The **target** repo the agent will work on. Never this one.
-- **Check the CPU first — see [AVX2](#avx2-the-two-hour-one) below.** A VPS with a generic
-  `qemu64` CPU model cannot run current Claude Code at all.
+- **Check the CPU before you pick the server — see [AVX2](#avx2-the-two-hour-one) below.**
+  A VPS with a generic `qemu64` CPU model (`/proc/cpuinfo` says `Common KVM processor`)
+  cannot run current Claude Code at all, and is stuck on the 4.6 models. On a candidate
+  box, before anything else:
+
+  ```bash
+  grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -cE '^(avx2|sse4_2)$'   # want 2
+  ```
+
+  `0` means ask the provider for `host-passthrough` or pick another server now — it is
+  a hypervisor setting, not something to fix after the deploy.
 
 ## 1. Packages — server, root
 
@@ -329,7 +338,7 @@ Port 80 answers anyone, not only Cloudflare: restricting it to Cloudflare's IP r
 
 ### AVX2 (the two-hour one)
 
-Claude Code **≥ 2.1.120** ships a 215MB Bun/JavaScriptCore binary (`bin/claude.exe`, an
+Claude Code **≥ 2.1.113** ships a Bun/JavaScriptCore binary (215–240MB) (`bin/claude.exe`, an
 ELF despite the name) that assumes a modern x86-64 baseline. On a VPS whose CPU model is
 a generic `qemu64`, it does not fail — it **spins at 100% CPU forever**.
 `claude --version` answers instantly because it exits before JIT warmup, while
@@ -349,11 +358,28 @@ Fixes, best first:
 1. Ask the host to set the VM's CPU model to `host-passthrough`. This is hypervisor-side;
    you cannot change it from inside the guest.
 2. Move to a provider that exposes AVX2 (Hetzner, Vultr, DigitalOcean, Scaleway).
-3. Pin **2.1.110**, the last release with `bin: cli.js`, which runs on Node's V8 and does
-   not care. `2.1.120` is the first with the binary.
+3. Pin **2.1.110** (2.1.112 is the last release with `bin: cli.js`, which runs on Node's
+   V8 and does not care; `2.1.113` is the first with the binary — checked with
+   `npm view @anthropic-ai/claude-code@<v> bin`).
 
 With (3), a bare `npm install -g @anthropic-ai/claude-code` silently reinstalls the broken
-build and puts you right back here. Keep the pin.
+build and puts you right back here. Keep the pin. (Without `--prefix ~/.local` it fails
+anyway: npm's default prefix is `/usr`, which `rookery` cannot write.)
+
+**(3) costs you the current models.** The pinned CLI resolves `opus`/`sonnet` to
+`claude-opus-4-6`/`claude-sonnet-4-6`. A full id on the command line
+(`--model claude-sonnet-5-5`) works on it, but a full id in an agent's `model:`
+frontmatter is silently ignored — the call falls back to the default model — so the
+`planmaker`/`reviewer` roles cannot be moved to a newer model without code changes.
+Only (1) or (2) gets you the latest CLI and models with no code change.
+
+Rolling back after a bad upgrade — no service restart needed, each call spawns a fresh
+`claude`:
+
+```bash
+npm install -g --prefix ~/.local @anthropic-ai/claude-code@2.1.110   # server, rookery
+timeout 90 claude -p 'reply with ok' --output-format json </dev/null
+```
 
 ### The bot ignores my comments
 
