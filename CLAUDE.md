@@ -174,7 +174,7 @@ their wording as code. `sh()` raises on non-zero; pass `check=False` for the cas
 
 Phases 1–5 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
 without a restart, approval and caps per repo, parallel repos, portal/API/run log) are
-built and deployed (https://rookery.codesimple.dev, see [DEPLOY.md](DEPLOY.md)); phase 6 is
+built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 is
 not built.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
