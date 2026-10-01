@@ -112,6 +112,10 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   byte by offset so task text is never disturbed. The TASK prompt tells the agent not to commit;
   `--disallowed-tools Bash(git push:*) Bash(gh:*)` enforces it (deny rules beat
   `bypassPermissions`). The agent never publishes.
+- **No MCP in any `claude` call: `--strict-mcp-config`, no `--mcp-config`.** Without it
+  the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
+  connectors of the account the CLI is logged in with reach every tenant's agent
+  (spike S4e in `ai-plans/skills-and-workflows.md`).
 - **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
