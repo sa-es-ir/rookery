@@ -354,6 +354,9 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
     cmd = ["claude", "-p", prompt, "--output-format", "json",
            "--permission-mode", "bypassPermissions",
+           # no MCP at all: without this the target repo's .mcp.json spawns its servers,
+           # and the CLI login's claude.ai connectors reach every tenant's agent
+           "--strict-mcp-config",
            # guardrail: the agent never publishes. Deny rules beat bypassPermissions.
            "--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)"]
     if agent:

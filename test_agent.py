@@ -268,9 +268,13 @@ agent.PAUSED.unlink()
 
 # claude(): the cap is checked before the call, and every call is recorded, failed ones too
 agent.worktree = lambda c: agent.WORKSPACE
-agent.sh = lambda *a, **k: json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
+argv = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
 c = agent.Ctx("o/r", 9, agent.WORKSPACE, "main")
 assert agent.claude(c, "p", key="task-0") == ("task-done", "done")
+# no MCP: neither the target repo's .mcp.json nor the login account's connectors
+assert "--strict-mcp-config" in argv[0] and "--mcp-config" not in argv[0], argv
+assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")
 agent.sh = boom
