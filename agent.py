@@ -10,6 +10,7 @@ session ids are derived from repo#issue/key, so no session state is persisted.
 import base64
 import calendar
 import collections
+import io
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.request
@@ -70,6 +72,11 @@ MARKER = re.compile(r"^STATUS:[ \t]*(\S+)[ \t]*$", re.M)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
+# CLAUDE.md goes to the CLI as one argv entry, and Linux caps one at 128 KB
+CLAUDE_MD_MAX = 64 * 1024
+SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+# a repo skill's frontmatter may say no more than this — `hooks:` would run shell here
+SKILL_KEYS = re.compile(r"(name|description|allowed-tools)[ \t]*:")
 
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
@@ -113,9 +120,10 @@ def sh(*args, cwd=None, check=True, env=None, input=None, track=None):
         a = active.get(track)
         if a and a["cancel"]:
             raise RuntimeError(f"Cancelled from the Rookery UI by @{a['cancel']}.")
-        # own process group on POSIX, so kill() takes claude's children with it
+        # own process group on POSIX, so kill() takes claude's children with it.
+        # Never the parent's stdin: `claude -p` reads it even with the prompt in argv.
         p = subprocess.Popen(args, cwd=cwd, env=env, text=True, encoding="utf-8",
-                             stdin=subprocess.PIPE if input is not None else None,
+                             stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=bool(track))
         if a:
             a["proc"] = p
@@ -290,6 +298,9 @@ def finish(repo, status):
     if a := active.pop(repo, None):
         with closing(db()) as con, con:
             con.execute("UPDATE jobs SET ended = ?, status = ? WHERE id = ?", (time.time(), status, a["job"]))
+        if a.get("plugin"):
+            # never fails the job over cleanup; main() clears whatever this leaves
+            shutil.rmtree(a["plugin"], ignore_errors=True)
 
 
 def cancel(repo, job, by):
@@ -349,16 +360,73 @@ def worktree(c):
     return wt
 
 
+def pin(c):
+    """Read what steers the agent — root CLAUDE.md and .claude/skills — from a freshly
+    fetched origin/<base>, once at job start, for every call in the job. Not from the
+    worktree: those are the files a task agent edits mid-run. A change to any of it
+    steers the bot only after a human merges it. A bad input fails the job here."""
+    sh("git", "fetch", "origin", c.base, cwd=c.path, env=auth(c.repo))
+    sha = sh("git", "rev-parse", f"origin/{c.base}", cwd=c.path)
+    oid = lambda path: sh("git", "rev-parse", "--verify", "--quiet", f"{sha}:{path}", cwd=c.path, check=False)
+    md = sh("git", "cat-file", "blob", o, cwd=c.path) if (o := oid("CLAUDE.md")) else ""
+    if len(md.encode()) > CLAUDE_MD_MAX:
+        raise RuntimeError(f"CLAUDE.md on {c.base} is {len(md.encode()) // 1024} KB; Rookery passes it to "
+                           f"the agent in one argument, which is capped at {CLAUDE_MD_MAX // 1024} KB. "
+                           "Shorten it on the base branch, then comment again.")
+    a = active[c.repo]
+    a["claude_md"] = md
+    # one plugin per job (the CLI loads exactly one per --plugin-dir), so its skills are `rk:<name>`
+    a["plugin"] = plug = WORKSPACE / "plugins" / c.repo.replace("/", "_") / f"job-{a['job']}"
+    (plug / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (plug / ".claude-plugin" / "plugin.json").write_text('{"name": "rk"}', encoding="utf-8")
+    skills = plug / "skills"
+    skills.mkdir(exist_ok=True)
+    if oid(".claude/skills"):
+        tar = subprocess.run(["git", "archive", f"{sha}:.claude/skills"], cwd=c.path,
+                             capture_output=True, check=True).stdout
+        with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+            t.extractall(skills, filter="data")   # "data": no link or path out of skills/
+    names = sorted(d.name for d in skills.iterdir() if d.is_dir())
+    for name in names:
+        where = f".claude/skills/{name} on {c.base}"
+        if not SKILL_NAME.fullmatch(name):
+            raise RuntimeError(f"{where}: a skill name must match `{SKILL_NAME.pattern}`.")
+        p = skills / name / "SKILL.md"
+        fm = re.match(r"\s*---[ \t]*\r?\n(.*?)\r?\n---", p.read_text(encoding="utf-8-sig"), re.S) \
+            if p.exists() else None
+        for line in fm.group(1).splitlines() if fm else []:
+            # top-level keys only: indented lines, `- ` items and comments belong to one above
+            if line.strip() and not line[0].isspace() and not line.startswith(("#", "- ")) \
+                    and line != "-" and not SKILL_KEYS.match(line):
+                raise RuntimeError(f"{where}: SKILL.md frontmatter `{line.split(':')[0].strip()}` is not "
+                                   "allowed — only name, description and allowed-tools.")
+    step(c.repo, "base", branch=c.base, sha=sha, skills=names)
+    log(f"#{c.n} pinned origin/{c.base} at {sha[:12]}: {len(md)} chars of CLAUDE.md, skills {names}")
+
+
 def claude(c, prompt, key="plan", resume=False, agent=None):
     """One session per key: planning is one long thread, each task is its own."""
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
+    a = active.get(c.repo) or {}
     cmd = ["claude", "-p", prompt, "--output-format", "json",
            "--permission-mode", "bypassPermissions",
+           # none of the target repo's own settings: its hooks would run on this box, and
+           # its skills and CLAUDE.md would come from the worktree — pin() reads them from base
+           "--setting-sources", "user",
            # no MCP at all: without this the target repo's .mcp.json spawns its servers,
            # and the CLI login's claude.ai connectors reach every tenant's agent
-           "--strict-mcp-config",
-           # guardrail: the agent never publishes. Deny rules beat bypassPermissions.
-           "--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)"]
+           "--strict-mcp-config"]
+    if a.get("plugin"):
+        cmd.append(f"--plugin-dir={a['plugin']}")
+    if a.get("claude_md"):
+        # `=`: a value that starts with "-" stays a value. The header is the CLI's own for a
+        # discovered CLAUDE.md: without it haiku dropped a format rule 2/9, with it 0/5 (S8).
+        cmd.append("--append-system-prompt=Codebase and user instructions are shown below. Be sure to "
+                   "adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default "
+                   "behavior and you MUST follow them exactly as written.\n\n"
+                   f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}")
+    # guardrail: the agent never publishes. Deny rules beat bypassPermissions.
+    cmd += ["--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)"]
     if agent:
         # an agent's `tools` list is a role hint, not a boundary — the deny
         # rules above and the checks in plan() are what actually enforce.
@@ -683,15 +751,18 @@ def handle(job):
     try:
         if job["kind"] == "start":
             begin(c, "plan", job["title"])
+            pin(c)
             plan(c, job["title"], job["body"], resume=False)
         else:
             phase = labels_of(c.repo, c.n)
             # approving again after an error resumes at the first unticked task
             if APPROVE.match(job["body"]) and phase & {"rookery:awaiting-approval", "rookery:error"}:
                 begin(c, "implement")
+                pin(c)
                 implement(c)
             elif phase & {"rookery:awaiting-input", "rookery:awaiting-approval"}:
                 begin(c, "reply")
+                pin(c)
                 plan(c, None, job["body"], resume=True)
         finish(c.repo, "ok")
     except Exception as e:
@@ -801,6 +872,7 @@ def main():
     # a job still "running" in the log died with the previous process
     with closing(db()) as con, con:
         con.execute("UPDATE jobs SET status = 'interrupted', ended = ? WHERE status = 'running'", (time.time(),))
+    shutil.rmtree(WORKSPACE / "plugins", ignore_errors=True)   # and so did its per-job plugin dirs
     import web
     web.serve()
 

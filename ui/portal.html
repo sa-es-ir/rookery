@@ -273,6 +273,8 @@ async function list(){
 function stepView(s){
   const t = {
     phase: () => ['Label ', h('span', {class: 'lbl'}, s.label)],
+    base: () => ['Read CLAUDE.md and skills from ', h('span', {class: 'mono'}, s.branch),
+      h('small', null, s.sha.slice(0, 12) + (s.skills.length ? ' · ' + s.skills.join(', ') : ''))],
     task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
     claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
     tick: () => ['Ticked task ' + s.i + ' in tasks.md'],

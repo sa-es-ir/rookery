@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 
-os.environ.update(WEBHOOK_SECRET="s3cr3t")
+os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="")  # before import: .env only fills unset keys
 import agent  # noqa: E402
 
 real_sh, real_handle = agent.sh, agent.handle
@@ -274,6 +274,9 @@ c = agent.Ctx("o/r", 9, agent.WORKSPACE, "main")
 assert agent.claude(c, "p", key="task-0") == ("task-done", "done")
 # no MCP: neither the target repo's .mcp.json nor the login account's connectors
 assert "--strict-mcp-config" in argv[0] and "--mcp-config" not in argv[0], argv
+# none of the target repo's settings: its hooks would run here, its skills/CLAUDE.md come from base
+assert argv[0][argv[0].index("--setting-sources") + 1] == "user", argv
+assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system-prompt"))], "outside a job: none"
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")
@@ -291,7 +294,67 @@ try:
 except RuntimeError as e:
     assert "daily cap" in str(e)
 
+# never the parent's stdin: `claude -p` reads it even with the prompt in argv
+import sys  # noqa: E402
+
+agent.sh = real_sh
+assert agent.sh(sys.executable, "-c", "import sys; print(len(sys.stdin.read()))") == "0"
+
+# pin(): CLAUDE.md and skills come from a freshly fetched origin/<base>, never the worktree
+agent.WORKSPACE = Path(tempfile.mkdtemp())
+git = lambda cwd, *a: subprocess.run(("git",) + a, cwd=cwd, capture_output=True, check=True, text=True).stdout
+origin, up, clone = agent.WORKSPACE / "origin.git", agent.WORKSPACE / "up", agent.clone_dir("o/r")
+git(agent.WORKSPACE, "init", "-q", "--bare", "-b", "main", str(origin))
+git(agent.WORKSPACE, "clone", "-q", str(origin), str(up))          # a maintainer, merging to base
+git(up, "config", "user.email", "t@t"), git(up, "config", "user.name", "t")
+git(up, "commit", "-q", "--allow-empty", "-m", "base"), git(up, "push", "-q", "origin", "main")
+git(agent.WORKSPACE, "clone", "-q", str(origin), str(clone))       # Rookery's clone: about to go stale
+def merge(files):
+    for name, text in files.items():
+        (up / name).parent.mkdir(parents=True, exist_ok=True)
+        (up / name).write_text(text, encoding="utf-8")
+    git(up, "add", "-A"), git(up, "commit", "-qm", "x"), git(up, "push", "-q", "origin", "main")
+merge({"CLAUDE.md": "Use tabs.\n", ".claude/skills/verify/run.sh": "make test\n",
+       ".claude/skills/verify/SKILL.md": "---\nname: verify\ndescription: >\n  run the checks\n"
+                                         "allowed-tools:\n- Bash\n---\nRun the tests.\n"})
+(clone / "CLAUDE.md").write_text("from the worktree\n", encoding="utf-8")
+pc = agent.Ctx("o/r", 3, clone, "main")
+agent.begin(pc, "plan", "t")
+agent.pin(pc)
+a = agent.active["o/r"]
+assert a["claude_md"] == "Use tabs.", a["claude_md"]
+assert (a["plugin"] / "skills" / "verify" / "run.sh").read_text(encoding="utf-8") == "make test\n"
+assert json.loads((a["plugin"] / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")) == {"name": "rk"}
+argv[:] = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: task-done"})
+agent.claude(pc, "p", key="task-0")
+agent.sh = real_sh
+assert f"--plugin-dir={a['plugin']}" in argv[0], argv
+assert [x for x in argv[0] if x.startswith("--append-system-prompt=") and x.endswith("\n\nUse tabs.")], argv
+plugin = a["plugin"]
+agent.finish("o/r", "ok")
+assert not plugin.exists(), "the plugin dir is gone after the job"
+with agent.closing(agent.db()) as con:
+    based = json.loads(con.execute("SELECT detail FROM steps WHERE what = 'base'").fetchone()[0])
+assert based["sha"] == git(up, "rev-parse", "HEAD").strip() and based["skills"] == ["verify"], "base_sha logged"
+def pin_error(files):
+    merge(files)
+    agent.begin(pc, "plan", "t")
+    try:
+        agent.pin(pc)
+    except RuntimeError as e:
+        return str(e)
+    finally:
+        agent.finish("o/r", "failed")
+assert "64 KB" in pin_error({"CLAUDE.md": "x" * (64 * 1024 + 1)}), "an oversized CLAUDE.md fails at start"
+assert "`hooks`" in pin_error({"CLAUDE.md": "ok\n", ".claude/skills/verify/SKILL.md":
+                               "---\nname: verify\nhooks:\n  PreToolUse: []\n---\n"}), "skill hooks rejected"
+assert "must match" in pin_error({".claude/skills/verify/SKILL.md": "---\nname: verify\n---\n",
+                                  ".claude/skills/Bad_Name/SKILL.md": "---\nname: x\n---\n"})
+assert not list((agent.WORKSPACE / "plugins").rglob("job-*")), "a failed job's plugin dir is gone too"
+
 # run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
+real_pin, agent.pin = agent.pin, lambda c: None   # pin() is tested above
 agent.sh, agent.WORKSPACE = real_sh, Path(tempfile.mkdtemp())
 wt = agent.WORKSPACE / "wt"
 wt.mkdir()

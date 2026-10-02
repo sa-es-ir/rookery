@@ -116,6 +116,13 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
   connectors of the account the CLI is logged in with reach every tenant's agent
   (spike S4e in `ai-plans/skills-and-workflows.md`).
+- **What steers the agent is read from base, once per job, never the worktree.** Every
+  plan/reply/implement job runs `pin()` first: `git fetch origin <base>`, then root
+  `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job) and `.claude/skills`
+  (→ a per-job `--plugin-dir`, skills `rk:<name>`, removed by `finish()`, cleared at startup)
+  at that sha, logged as the `base` step. `--setting-sources user` keeps the CLI from loading
+  them, or the repo's hooks, from the worktree the agent edits. A skill's frontmatter may
+  only carry `name`, `description`, `allowed-tools`: `hooks:` would run shell on the box.
 - **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
@@ -178,7 +185,7 @@ their wording as code. `sh()` raises on non-zero; pass `check=False` for the cas
 
 Phases 1–5 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
 without a restart, approval and caps per repo, parallel repos, portal/API/run log) are
-built and deployed (https://rookery.codesimple.dev, see [DEPLOY.md](DEPLOY.md)); phase 6 is
+built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 is
 not built.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
