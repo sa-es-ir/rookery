@@ -474,6 +474,25 @@ hook marker never appeared across all three calls; each job's `plugins/…/job-<
 gone after it finished. The server had still been running pre-PR-#7 code, so
 `--strict-mcp-config` went live in this same deploy.
 
+**S9, RTK hook** (2 October 2026, production box, as `rookery` in `/tmp/spike-rtk`,
+removed; haiku, about $0.12). RTK 0.50.0 (musl) installed as an operator-level
+`PreToolUse` hook in `~rookery/.claude/settings.json` (DEPLOY.md §7), with the exact
+`claude()` flags:
+
+| Check | Result |
+|---|---|
+| Hook fires under `--setting-sources user --strict-mcp-config -p` | **Yes.** `ls`, `git status`, `git log` were rewritten, 78% fewer tokens |
+| A failing test's assertion message still reaches the agent (`unittest`, `npm test`) | **Yes**, verbatim |
+| `git push`, `gh`, and `git status; gh …` / `… && git push` with the exclusions set | **All denied** |
+| `git push` with **no** exclusions and today's deny rules | **Ran.** It became `rtk git push` and missed `Bash(git push:*)`; only the missing remote stopped it |
+| Same, plus `Bash(rtk git push:*) Bash(rtk gh:*)` | **Denied** |
+
+So deny rules match the command after the hook rewrites it. `claude()` now denies the
+`rtk` forms too, and the RTK config excludes `git push` and `gh`: two independent guards.
+Caveman and codebase-memory MCP were considered and **not** installed. Caveman would
+shorten the plan, comments and PR text that tenants read. codebase-memory keeps one index
+shared by every tenant, which needs a spike with a per-tenant store first.
+
 ---
 
 ## 9. Open decisions

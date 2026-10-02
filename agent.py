@@ -425,8 +425,10 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
                    "adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default "
                    "behavior and you MUST follow them exactly as written.\n\n"
                    f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}")
-    # guardrail: the agent never publishes. Deny rules beat bypassPermissions.
-    cmd += ["--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)"]
+    # guardrail: the agent never publishes. Deny rules beat bypassPermissions. They match the
+    # command after hooks rewrite it, so the operator's RTK hook (DEPLOY.md §7) turning
+    # `git push` into `rtk git push` would slip past the first two without the rtk forms.
+    cmd += ["--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"]
     if agent:
         # an agent's `tools` list is a role hint, not a boundary — the deny
         # rules above and the checks in plan() are what actually enforce.

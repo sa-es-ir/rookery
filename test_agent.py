@@ -278,6 +278,8 @@ assert "--strict-mcp-config" in argv[0] and "--mcp-config" not in argv[0], argv
 assert argv[0][argv[0].index("--setting-sources") + 1] == "user", argv
 assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system-prompt"))], "outside a job: none"
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
+# deny rules see the hook-rewritten command: the RTK forms must be denied too
+assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")
 agent.sh = boom

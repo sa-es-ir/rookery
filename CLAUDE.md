@@ -111,7 +111,9 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The orchestrator ticks checkboxes and commits; the agent never does.** `tick()` rewrites one
   byte by offset so task text is never disturbed. The TASK prompt tells the agent not to commit;
   `--disallowed-tools Bash(git push:*) Bash(gh:*)` enforces it (deny rules beat
-  `bypassPermissions`). The agent never publishes.
+  `bypassPermissions`). The agent never publishes. Deny rules match the command *after*
+  `PreToolUse` hooks rewrite it, so the server's RTK hook needs the `rtk git push` / `rtk gh`
+  forms denied too — keep all four, and add the rewritten form of any new rule.
 - **No MCP in any `claude` call: `--strict-mcp-config`, no `--mcp-config`.** Without it
   the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
   connectors of the account the CLI is logged in with reach every tenant's agent
