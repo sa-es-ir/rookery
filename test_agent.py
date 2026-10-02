@@ -80,7 +80,7 @@ assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", Non
 assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
 # the catalog: every skill passes the same allowlist a repo's does
 cat = sorted(p.name for p in (agent.HERE / "skills").iterdir() if p.is_dir())
-assert cat == ["changelog", "repo-recon", "security-review", "systematic-debugging", "test-driven-development",
+assert cat == ["changelog", "repo-recon", "security-review", "systematic-debugging",
                "verification-before-completion"]
 for name in cat:
     assert agent.frontmatter(agent.HERE / "skills" / name / "SKILL.md", agent.SKILL_KEYS, name)["name"] == name
@@ -382,7 +382,7 @@ assert (sk / "verify" / "SKILL.md").read_text(encoding="utf-8").endswith("from .
 assert not (sk / "verify" / "run.sh").exists(), "the winner's files only, never a merge of two skills"
 assert (sk / "repo-recon" / "SKILL.md").read_text(encoding="utf-8").endswith("the repo's own\n"), "repo beats catalog"
 assert (sk / "systematic-debugging" / "find-polluter.sh").exists(), "an enabled catalog skill, files and all"
-assert not (sk / "test-driven-development").exists(), "a catalog skill nobody enabled stays out"
+assert not (sk / "changelog").exists(), "a catalog skill nobody enabled stays out"
 assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "reviewer.md"]
 assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
 argv[:] = []
@@ -850,11 +850,11 @@ assert code == 422 and "ghost" in json.loads(out)["error"], "the check's own wor
 assert len(proposed) == 1
 cat = {s["name"]: s for s in body(req("GET", "/api/skills", sid=sid))["skills"]}
 assert sorted(cat) == ["changelog", "repo-recon", "security-review", "systematic-debugging",
-                       "test-driven-development", "verification-before-completion"], cat
+                       "verification-before-completion"], cat
 assert cat["security-review"]["slot"] == "check" and cat["changelog"]["source"] == "ours"
 assert cat["repo-recon"]["slot"] == "plan" and cat["repo-recon"]["source"] == "ours"
 assert cat["systematic-debugging"]["source"] == "obra/superpowers@8ca22db", "\"same\" repeats the row above"
-assert cat["test-driven-development"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")
+assert cat["systematic-debugging"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")
 assert all(s["description"] for s in cat.values())
 
 # POSTs need the session's CSRF token; logout ends the session server-side
@@ -873,6 +873,13 @@ assert b'class="hero"' in req("GET", "/")[2]   # / is the landing page; the port
 assert req("GET", "/styles.css")[0] == 200
 for bad in ("/agent.py", "/../agent.py", "/%2e%2e/agent.py", "/.env", "/ui/portal.html", "/..\\agent.py"):
     assert req("GET", bad)[0] == 404, bad
+# docs: flat docs/*.md as markdown, and every page ui/docs.html lists exists
+assert req("GET", "/docs/overview.md")[0] == 200 and b"# Overview" in req("GET", "/docs/overview.md")[2]
+for bad in ("/docs/../agent.py", "/docs/%2e%2e/CLAUDE.md", "/docs/nope.md", "/docs/overview.html", "/docs/"):
+    assert req("GET", bad)[0] == 404, bad
+import re  # noqa: E402
+for name in re.findall(r'\["([\w-]+)", "', (agent.HERE / "ui" / "docs.html").read_text(encoding="utf-8")):
+    assert req("GET", f"/docs/{name}.md")[0] == 200, name
 
 
 # the webhook over a real socket: HMAC first, 204 before any work, then enqueue

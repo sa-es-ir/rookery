@@ -40,6 +40,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", f"http://127.0.0.1:{agent.PORT}").rstr
 SECURE = PUBLIC_URL.startswith("https://")  # the Secure cookie flag; off only over plain http
 TTL = 8 * 3600  # a session, and GitHub's own lifetime for a user token
 UI = agent.HERE / "ui"
+DOCS = agent.HERE / "docs"  # product docs as markdown, rendered by ui/docs.html; flat like ui/
 MAX_BODY = 26 * 1024 * 1024  # GitHub caps a webhook payload at 25 MB
 HEADERS = [("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"),
            ("Referrer-Policy", "same-origin")]
@@ -300,6 +301,9 @@ def route(method, url, headers, body=b""):
             return js(202, {"cancelled": r["id"]})
         return js(404, {"error": "no such endpoint"})
 
+    if method == "GET" and (m := re.fullmatch(r"/docs/([\w-]+\.md)", path)) and (DOCS / m.group(1)).is_file():
+        return 200, [("Content-Type", "text/markdown; charset=utf-8"), ("Cache-Control", "no-cache")], \
+            (DOCS / m.group(1)).read_bytes()
     if method == "GET":
         name = "index.html" if path == "/" else path[1:]
         # a flat whitelist of ui/ files: no subdirectories, so no way out of ui/

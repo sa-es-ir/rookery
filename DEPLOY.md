@@ -59,9 +59,9 @@ under uid 0, which is what `agent.py` uses.
 
 ```bash
 scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
-scp -r agents skills root@SERVER_IP:/opt/rookery/
+scp -r agents skills docs root@SERVER_IP:/opt/rookery/
 ssh root@SERVER_IP mkdir -p /opt/rookery/ui
-scp ui/index.html ui/portal.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
 scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
@@ -276,8 +276,8 @@ as **root** (`rookery` is not a sudoer):
 
 ```bash
 scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
-scp -r agents skills root@SERVER_IP:/opt/rookery/                # your machine, when they changed
-scp ui/index.html ui/portal.html ui/styles.css root@SERVER_IP:/opt/rookery/ui/   # likewise
+scp -r agents skills docs root@SERVER_IP:/opt/rookery/           # your machine, when they changed
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css root@SERVER_IP:/opt/rookery/ui/   # likewise
 chown -R rookery:rookery /opt/rookery                            # server, root
 systemctl restart rookery                                        # server, root
 ```

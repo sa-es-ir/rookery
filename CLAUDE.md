@@ -26,7 +26,8 @@ _before_ `import agent` for that reason — keep that ordering if you add tests.
 Two files. `agent.py` is the pipeline; `web.py` is everything HTTP on one
 `ThreadingHTTPServer`: the webhook (`Handler.do_POST` on `/`, verifies the HMAC, drops a
 repeated `X-GitHub-Delivery` via `fresh()`, never blocks on a job), GitHub sign-in, the JSON
-API and the static `ui/` files. `route()` is the whole non-webhook app as a function of
+API, the static `ui/` files and the product docs (`docs/*.md` at `/docs/<name>.md`, rendered
+by `ui/docs.html`, written in STE-style English). `route()` is the whole non-webhook app as a function of
 (method, url, headers), which is how `test_agent.py` drives it. `agent.py`'s `__main__`
 re-imports itself as `agent` before `main()`, so `web.py`'s `import agent` is the same
 module, not a second copy. The webhook hands jobs to `submit()`, which puts each on its repo's

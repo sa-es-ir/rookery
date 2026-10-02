@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rookery — Docs</title>
+<meta name="description" content="How Rookery works: setup, the issue workflow, configuration and limits.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="rookery.png">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* nav — same bar as index.html */
+.nav{height:66px;border-bottom:1px solid var(--smoke);position:sticky;top:0;background:var(--void);z-index:30}
+.nav .wrap{height:100%;display:flex;align-items:center;gap:32px}
+.nav nav{display:none;gap:28px;margin-left:24px}
+.nav nav a{font-size:14px;color:var(--ash)}
+.nav nav a:hover,.nav nav a.on{color:#fff}
+.nav .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+@media(min-width:900px){.nav nav{display:flex}}
+@media(max-width:560px){.nav .frost{display:none}}
+
+.docs{display:grid;gap:40px;padding:48px 24px 96px}
+@media(min-width:900px){.docs{grid-template-columns:220px minmax(0,760px);gap:64px}}
+.toc{display:flex;flex-wrap:wrap;gap:8px;align-self:start}
+.toc a{font-size:14px;color:var(--fog);padding:6px 12px;border-radius:8px}
+.toc a:hover{color:#fff}
+.toc a.on{color:#fff;background:var(--surface)}
+@media(min-width:900px){.toc{flex-direction:column;position:sticky;top:106px}}
+
+/* the rendered markdown */
+.md{min-width:0;font-weight:300}
+.md h1{font-size:48px;line-height:.94;letter-spacing:-.86px;margin-bottom:32px}
+.md h2{font-size:24px;line-height:1.2;letter-spacing:-.17px;margin:48px 0 16px}
+.md h3{font-size:18px;font-weight:400;margin:32px 0 12px}
+.md p,.md ul,.md ol,.md pre,.md .tbl{margin:0 0 16px}
+.md ul,.md ol{padding-left:22px}
+.md ul{list-style:disc}
+.md ol{list-style:decimal}
+.md li{margin:4px 0}
+.md li::marker{color:var(--fog)}
+.md b{font-weight:500;color:#fff}
+.md a{color:#fff;text-decoration:underline;text-decoration-color:#077ac7;text-underline-offset:3px}
+.md a:hover{text-decoration-color:rgb(107,33,239)}
+.md code{font:400 13px var(--mono);letter-spacing:0;color:#fff;background:var(--shell);padding:1px 6px;border-radius:6px}
+.md pre{background:var(--surface);border-radius:12px;padding:18px 20px;overflow-x:auto}
+.md pre code{background:none;padding:0;color:var(--ash);line-height:1.6}
+.md .tbl{overflow-x:auto}
+.md table{border-collapse:collapse;width:100%;font-size:14px}
+.md th{text-align:left;font-weight:400;color:#fff;border-bottom:1px solid var(--smoke);padding:10px 12px}
+@media(min-width:600px){.md td code{white-space:nowrap}}
+@media(max-width:599px){.md td code{overflow-wrap:anywhere}}
+.md td{border-bottom:1px solid var(--smoke);padding:10px 12px;vertical-align:top}
+@media(max-width:600px){.md h1{font-size:36px}}
+</style>
+
+<header class="nav"><div class="wrap">
+  <a class="logo" href="index.html"><span class="mark"><img src="rookery.png" alt=""></span>rookery</a>
+  <nav>
+    <a href="index.html#how">How it works</a>
+    <a href="index.html#invariants">Guarantees</a>
+    <a href="index.html#refusals">What it won't do</a>
+    <a class="on" href="docs.html">Docs</a>
+  </nav>
+  <div class="right">
+    <a class="frost" href="https://github.com/sa-es-ir/rookery">GitHub</a>
+    <a class="cta" href="portal.html">Open portal</a>
+  </div>
+</div></header>
+
+<main class="wrap docs">
+  <nav class="toc" id="toc" aria-label="Docs pages"></nav>
+  <article class="md" id="page"></article>
+</main>
+
+<script>
+// Pages live in docs/<name>.md and are served by web.py at /docs/<name>.md.
+const PAGES = [["overview", "Overview"], ["getting-started", "Getting started"], ["workflow", "Workflow"],
+  ["configuration", "Configuration"], ["safety", "Safety and limits"]];
+
+// ponytail: a small markdown subset (headings, lists, tables, code, bold/italic, links) — the docs use no more.
+// Every bit of source text goes through esc() before it becomes markup.
+const esc = s => s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+// x.md is another docs page; http(s) and same-site paths pass; anything else (javascript:) goes nowhere
+const href = u => /^[\w-]+\.md$/.test(u) ? "#" + u.slice(0, -3) : /^(https?:\/\/|\/)/.test(u) ? u : "#";
+const inline = s => s.split(/(`[^`]+`)/).map(p => /^`[^`]+`$/.test(p) ? `<code>${esc(p.slice(1, -1))}</code>`
+  : esc(p).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*([^*\s][^*]*)\*/g, "<i>$1</i>")
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, u) => `<a href="${href(u)}">${t}</a>`)).join("");
+const LI = /^\s*([-*]|\d+\.) (.*)/, BLOCK = /^(```|#{1,3} |\|)/;
+
+function md(src) {
+  const L = src.replace(/\r/g, "").split("\n"), out = [];
+  for (let i = 0; i < L.length;) {
+    const l = L[i];
+    if (l.startsWith("```")) {
+      const b = [];
+      for (i++; i < L.length && !L[i].startsWith("```");) b.push(L[i++]);
+      i++;
+      out.push(`<pre><code>${esc(b.join("\n"))}</code></pre>`);
+    } else if (/^#{1,3} /.test(l)) {
+      const n = l.indexOf(" ");
+      out.push(`<h${n}>${inline(l.slice(n + 1))}</h${n}>`);
+      i++;
+    } else if (l.startsWith("|")) {
+      const rows = [], cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => inline(c.trim()));
+      while (i < L.length && L[i].startsWith("|")) rows.push(L[i++]);
+      out.push(`<div class="tbl"><table><thead><tr>${cells(rows[0]).map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>`
+        + rows.slice(2).map(r => `<tr>${cells(r).map(c => `<td>${c}</td>`).join("")}</tr>`).join("") + "</tbody></table></div>");
+    } else if (LI.test(l)) {
+      const tag = /^\s*\d/.test(l) ? "ol" : "ul", items = [];
+      while (i < L.length && LI.test(L[i])) items.push(L[i++].match(LI)[2]);
+      out.push(`<${tag}>${items.map(t => `<li>${inline(t)}</li>`).join("")}</${tag}>`);
+    } else if (!l.trim()) {
+      i++;
+    } else {
+      const p = [];
+      while (i < L.length && L[i].trim() && !BLOCK.test(L[i]) && !LI.test(L[i])) p.push(L[i++]);
+      out.push(`<p>${inline(p.join(" "))}</p>`);
+    }
+  }
+  return out.join("");
+}
+
+const toc = document.getElementById("toc"), page = document.getElementById("page");
+for (const [name, title] of PAGES) {
+  const a = document.createElement("a");
+  a.href = "#" + name; a.textContent = title; a.dataset.name = name;
+  toc.append(a);
+}
+
+async function show() {
+  const name = PAGES.some(([n]) => n === location.hash.slice(1)) ? location.hash.slice(1) : PAGES[0][0];
+  for (const a of toc.children) a.classList.toggle("on", a.dataset.name === name);
+  const r = await fetch(`/docs/${name}.md`);
+  page.innerHTML = r.ok ? md(await r.text()) : "<p>This page is not available.</p>";
+  document.title = `Rookery — ${PAGES.find(([n]) => n === name)[1]}`;
+  scrollTo(0, 0);
+}
+addEventListener("hashchange", show);
+show();
+</script>
