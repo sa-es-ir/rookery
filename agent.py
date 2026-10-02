@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import threading
 import time
@@ -92,6 +93,11 @@ WORKFLOW = {"plan": {"agent": "planmaker", "skills": [], "instructions": ""},
 STEP = {"agent": None, "mode": None, "skills": [], "instructions": ""}
 # mode -> the STATUS values a step in it may reply; anything else fails the job
 MODES = {"check": ("check-ok", "changes-needed"), "write": ("step-done", "failed")}
+# <owner>/.rookery: that owner's defaults — workflow.json, agents/, skills/ at its root — between
+# a repo's own config and the built-in. Read only while the App is installed on it (it is in REPOS).
+ORG = ".rookery"
+# what the portal may change, under config_dir(): a PR touching anything else is not the portal's
+CONFIG_FILE = re.compile(r"workflow\.json|agents/[a-z0-9][a-z0-9-]*\.md")
 
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
@@ -409,10 +415,11 @@ def parse_agent(p, where):
     return meta
 
 
-def workflow(text, where):
-    """.rookery/workflow.json -> every slot with every key, WORKFLOW filling what the file
-    leaves out, plus its `after` steps. An invalid file fails the job: silently running the
-    default is worse."""
+def workflow(text, where, under=None):
+    """.rookery/workflow.json -> every slot with every key, `under` (the owner's workflow, else
+    WORKFLOW) filling what the file leaves out, plus its `after` steps — `under`'s unless the
+    file has its own. An invalid file fails the job: silently running the default is worse."""
+    under = under or {**WORKFLOW, "after": []}
     try:
         given = json.loads(text) if text else {}
     except ValueError as e:
@@ -437,8 +444,9 @@ def workflow(text, where):
                 raise RuntimeError(f"{where}: `{name}` in `{slot}` — a name must match `{NAME.pattern}`.")
         return s
 
-    wf = {slot: one(slot, given.get(slot, {}), default) for slot, default in WORKFLOW.items()}
-    wf["after"] = [one(f"after[{i}]", s, STEP) for i, s in enumerate(given.get("after", []))]
+    wf = {slot: one(slot, given.get(slot, {}), under[slot]) for slot in WORKFLOW}
+    wf["after"] = [one(f"after[{i}]", s, STEP) for i, s in enumerate(given["after"])] \
+        if "after" in given else under["after"]
     # a step's commit subject and PR section carry its agent's name: two would collide
     if len(names := [s["agent"] for s in wf["after"]]) > len(set(names)):
         raise RuntimeError(f"{where}: `after` names an agent twice; each step needs its own.")
@@ -467,21 +475,58 @@ def pin(c):
     a["plugin"] = plug   # set first, so finish() removes it whatever steer() gets to
     a.update(steer(c.repo, c.path, c.base, plug))
     step(c.repo, "base", branch=c.base, sha=a["sha"], skills=sorted(a["sources"]), sources=a["sources"],
-         agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"))
+         agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
+         **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}))
     log(f"#{c.n} pinned origin/{c.base} at {a['sha'][:12]}: {len(a['claude_md'])} chars of CLAUDE.md, "
         f"skills {a['sources']}")
 
 
-def steer(repo, path, base, plug):
+def oid(cwd, sha, p):
+    """The object at sha:p, "" when there is none."""
+    return sh("git", "rev-parse", "--verify", "--quiet", f"{sha}:{p}", cwd=cwd, check=False)
+
+
+def blob(cwd, sha, p):
+    return sh("git", "cat-file", "blob", o, cwd=cwd) if (o := oid(cwd, sha, p)) else ""
+
+
+def untar(cwd, sha, src, dest, keep):
+    """src at sha into dest, the members keep() takes -> their names."""
+    tar = subprocess.run(["git", "archive", f"{sha}:{src}"], cwd=cwd, capture_output=True, check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+        # "data": no link or path out of dest
+        t.extractall(dest, filter="data", members=(got := [m for m in t if keep(m)]))
+    return [m.name for m in got]
+
+
+def org_of(repo):
+    """repo's owner's .rookery repo, when the App is installed on it: (name, clone, sha) of a
+    freshly fetched base — else None, and no owner defaults apply."""
+    org = repo.split("/")[0] + "/" + ORG
+    if org not in REPOS:
+        return None
+    if not REPOS[org] or not clone_dir(org).exists():   # never run without them, even once
+        raise RuntimeError(f"Rookery is still cloning {org}, which holds this owner's defaults. "
+                           "Try again in a minute.")
+    fetch(org, clone_dir(org), REPOS[org])
+    return org, clone_dir(org), sh("git", "rev-parse", f"origin/{REPOS[org]}", cwd=clone_dir(org))
+
+
+def steer(repo, path, base, plug, sha=None):
     """pin()'s work, minus the job: fetch base, validate everything that steers the agent,
     assemble the plugin at `plug`. The portal's workflow view calls this too, so the page
-    and the next run cannot disagree. Raises on the first bad input."""
-    fetch(repo, path, base)
-    sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
-    oid = lambda p: sh("git", "rev-parse", "--verify", "--quiet", f"{sha}:{p}", cwd=path, check=False)
-    blob = lambda p: sh("git", "cat-file", "blob", o, cwd=path) if (o := oid(p)) else ""
-    md = blob("CLAUDE.md")
-    wf = workflow(blob(".rookery/workflow.json"), f".rookery/workflow.json on {base}")
+    and the next run cannot disagree; propose() calls it at an unpushed `sha`, so a config
+    PR that would fail the next job at start is never opened. Raises on the first bad input.
+
+    Precedence, first wins: the repo's own (.rookery/, .claude/skills), its owner's
+    <owner>/.rookery (org_of()), then Rookery's built-in agents, catalog and WORKFLOW."""
+    if not sha:
+        fetch(repo, path, base)
+        sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
+    org = org_of(repo)
+    md = blob(path, sha, "CLAUDE.md")
+    owf = workflow(blob(org[1], org[2], "workflow.json"), f"workflow.json in {org[0]}") if org else None
+    wf = workflow(blob(path, sha, ".rookery/workflow.json"), f".rookery/workflow.json on {base}", owf)
     for slot, s in slots(wf):
         if (size := len((md + s["instructions"]).encode())) > CLAUDE_MD_MAX:
             also = f" plus the `{slot}` instructions in .rookery/workflow.json" if s["instructions"] else ""
@@ -495,51 +540,109 @@ def steer(repo, path, base, plug):
     skills = plug / "skills"
     skills.mkdir(exist_ok=True)
 
-    def untar(src, dest, keep):
-        """src at sha into dest, the members keep() takes -> their names."""
-        tar = subprocess.run(["git", "archive", f"{sha}:{src}"], cwd=path, capture_output=True, check=True).stdout
-        with tarfile.open(fileobj=io.BytesIO(tar)) as t:
-            # "data": no link or path out of dest
-            t.extractall(dest, filter="data", members=(got := [m for m in t if keep(m)]))
-        return [m.name for m in got]
-
-    # built-in agents, then .rookery/agents on base: the same name replaces the built-in role
+    # built-in agents, then the owner's, then .rookery/agents on base: a later one of the same
+    # name replaces the role. Top-level *.md only: the CLI reads nothing else from agents/.
     shutil.copytree(HERE / "agents", plug / "agents")
     by = {p.stem: "built-in" for p in (plug / "agents").glob("*.md")}
-    if oid(".rookery/agents"):
-        # top-level *.md only: the CLI reads nothing else from agents/, so nothing else gets in
-        top = lambda m: m.isfile() and "/" not in m.name and m.name.endswith(".md")
-        by.update((Path(f).stem, ".rookery/agents") for f in untar(".rookery/agents", plug / "agents", top))
-    # the first source to bring a name wins: .rookery/skills, .claude/skills, then the catalog
+    top = lambda m: m.isfile() and "/" not in m.name and m.name.endswith(".md")
+    for cwd, at, src, label in ([(org[1], org[2], "agents", org[0])] if org else []) \
+            + [(path, sha, ".rookery/agents", ".rookery/agents")]:
+        if oid(cwd, at, src):
+            by.update((Path(f).stem, label) for f in untar(cwd, at, src, plug / "agents", top))
+    # the first source to bring a name wins: .rookery/skills, .claude/skills, the owner's, the catalog
     won = {}
-    for src in (".rookery/skills", ".claude/skills"):
-        if oid(src):
-            untar(src, skills, lambda m: m.name.split("/")[0] not in won)
+    for cwd, at, src, label in [(path, sha, s, s) for s in (".rookery/skills", ".claude/skills")] \
+            + ([(org[1], org[2], "skills", org[0])] if org else []):
+        if oid(cwd, at, src):
+            untar(cwd, at, src, skills, lambda m: m.name.split("/")[0] not in won)
             for d in skills.iterdir():
                 if d.is_dir():
-                    won.setdefault(d.name, src)
+                    won.setdefault(d.name, label)
     # the catalog only as far as this repo enabled it; names are NAME-checked, so no `..`
     for name in sorted({k for _, s in slots(wf) for k in s["skills"]} - won.keys()):
         if (HERE / "skills" / name).is_dir():
             shutil.copytree(HERE / "skills" / name, skills / name)
             won[name] = "catalog"
+    # where a file came from, for the error that names it
+    at = lambda src, sub, f: (f"{sub}/{f} in {src}" if org and src == org[0] else f"{src}/{f} on {base}")
     described = {}
     for name, src in sorted(won.items()):
-        where = f"{src}/{name} on {base}" if src != "catalog" else f"catalog skill {name}"
+        where = at(src, "skills", name) if src != "catalog" else f"catalog skill {name}"
         if not NAME.fullmatch(name):
             raise RuntimeError(f"{where}: a skill name must match `{NAME.pattern}`.")
         described[name] = frontmatter(skills / name / "SKILL.md", SKILL_KEYS, where).get("description", "")
-    agents = {p.stem: parse_agent(p, f"{by[p.stem]}/{p.name} on {base}" if by[p.stem] != "built-in"
+    agents = {p.stem: parse_agent(p, at(by[p.stem], "agents", p.name) if by[p.stem] != "built-in"
                                   else f"agent {p.stem}") for p in sorted((plug / "agents").glob("*.md"))}
     # --agent with a name that does not exist is silently ignored (S2a): never pass one
     for slot, s in slots(wf):
         for kind, names, have in (("agent", [s["agent"]] if s["agent"] else [], agents),
                                   ("skill", s["skills"], won)):
             if missing := [x for x in names if x not in have]:
-                raise RuntimeError(f".rookery/workflow.json on {base}: `{slot}` names the {kind} "
-                                   f"`{missing[0]}`, and there is no {kind} by that name.")
+                src = f"workflow.json in {org[0]}" if owf and dict(slots(owf)).get(slot) == s \
+                    else f".rookery/workflow.json on {base}"
+                raise RuntimeError(f"{src}: `{slot}` names the {kind} `{missing[0]}`, and there is no "
+                                   f"{kind} by that name.")
     return {"sha": sha, "claude_md": md, "workflow": wf, "agents": agents, "agent_sources": by,
-            "sources": won, "skills": described}
+            "sources": won, "skills": described, "org": org and {"repo": org[0], "sha": org[2]},
+            "org_workflow": owf}
+
+
+def config_dir(repo):
+    """Where repo keeps its own config: .rookery/, or the root of an owner's .rookery repo,
+    whose root is the owner's defaults (org_of())."""
+    return "" if repo.split("/")[1] == ORG else ".rookery/"
+
+
+def config_files(repo):
+    """repo's config files on origin/<base> as of its last fetch, CONFIG_FILE path -> text:
+    what the portal's editor starts from, read even when the config does not validate."""
+    path, d, at = clone_dir(repo), config_dir(repo), f"origin/{REPOS[repo]}"
+    agents = sh("git", "ls-tree", "--name-only", f"{at}:{d}agents", cwd=path, check=False).splitlines()
+    # not blob(): sh() strips, and an editor saving the file untouched must save the same bytes
+    raw = lambda f: subprocess.run(["git", "cat-file", "blob", f"{at}:{d}{f}"], cwd=path,
+                                   capture_output=True).stdout.decode("utf-8", "replace")
+    return {f: t for f in ["workflow.json"] + [f"agents/{a}" for a in agents]
+            if CONFIG_FILE.fullmatch(f) and (t := raw(f))}
+
+
+def propose(repo, files, by):
+    """Open a pull request on repo that sets `files` (CONFIG_FILE path -> text, None deletes)
+    in its config_dir(), on a freshly fetched base. The portal's only way to change what steers
+    Rookery: a human merges it, so pin()'s "from reviewed base" holds. The commit is built in a
+    throwaway index, so neither the clone's checkout nor a worktree is touched, and steer() runs
+    at it first: a PR that would fail the next job at start is never opened. -> the PR's URL."""
+    base, path, d = REPOS[repo], clone_dir(repo), config_dir(repo)
+    if not files or not all(isinstance(f, str) and CONFIG_FILE.fullmatch(f) for f in files):
+        raise ValueError(f"only workflow.json and agents/<name>.md under {d or 'the repo root'} can change here")
+    fetch(repo, path, base)
+    head = sh("git", "rev-parse", f"origin/{base}", cwd=path)
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        sh("git", "read-tree", head, cwd=path, env=env)
+        for f, text in files.items():
+            if text is None:
+                sh("git", "update-index", "--force-remove", d + f, cwd=path, env=env)
+                continue
+            # through a file, byte for byte: a text-mode pipe would turn \n into \r\n on Windows
+            (Path(tmp) / "blob").write_bytes(text.encode())
+            o = sh("git", "hash-object", "-w", "--no-filters", str(Path(tmp) / "blob"), cwd=path)
+            sh("git", "update-index", "--add", "--cacheinfo", f"100644,{o},{d + f}", cwd=path, env=env)
+        tree = sh("git", "write-tree", cwd=path, env=env)
+        if tree == sh("git", "rev-parse", f"{head}^{{tree}}", cwd=path):
+            raise ValueError(f"that is already what {base} has")
+        names = ", ".join(d + f for f in files)
+        commit = sh("git", "commit-tree", tree, "-p", head, "-m", f"Rookery config: {names}",
+                    "-m", f"Proposed from the Rookery portal by @{by}.", cwd=path)
+        steer(repo, path, base, Path(tmp) / "plugin", sha=commit)
+    branch = f"rookery/config-{uuid.uuid4().hex[:8]}"
+    # like implement()'s push: to a URL, so it carries the App's token whatever origin is
+    sh("git", "push", f"https://github.com/{repo}.git", f"{commit}:refs/heads/{branch}", cwd=path, env=auth(repo))
+    log(f"{repo} config PR from {branch} for {by}: {names}")
+    return gh(repo, "pr", "create", "--base", base, "--head", branch, "--title", f"Rookery config: {names}",
+              "--body-file", "-", input=CONFIG_WARNING + f"Proposed from the Rookery portal by @{by}. Rookery "
+              f"checked it against `{base}` the way a job checks at start; it changes nothing until "
+              "someone merges it.\n\n" + "\n".join(f"- {'deletes' if t is None else 'sets'} `{d + f}`"
+                                                    for f, t in files.items()))
 
 
 def claude(c, prompt, key="plan", resume=False, slot="task"):

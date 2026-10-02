@@ -202,12 +202,20 @@ def workflow(s, repo):
         try:
             got = agent.steer(repo, path, base, Path(plug))
         except Exception as e:   # whatever would fail the next job at start
-            return {**out, "error": str(e)}
+            got = {"error": str(e)}
+    # the editor's starting point, even (above all) when the config does not validate
+    out["config"] = {"dir": agent.config_dir(repo), "files": agent.config_files(repo)}
+    if "error" in got:
+        return {**out, "error": got["error"]}
     model = lambda a: got["agents"][a].get("model") if a else "sonnet"   # claude()'s choice, same rule
-    return {**out, "sha": got["sha"], "claude_md": len(got["claude_md"].encode()),
-            "slots": {k: {**got["workflow"][k], "model": model(got["workflow"][k]["agent"]),
-                          "custom": got["workflow"][k] != v} for k, v in agent.WORKFLOW.items()},
-            "after": [{**v, "model": model(v["agent"]), "custom": True} for v in got["workflow"]["after"]],
+    wf, owf = got["workflow"], got["org_workflow"] or {**agent.WORKFLOW, "after": []}
+    # which layer set it: the repo's own workflow.json, its owner's .rookery, or the built-in
+    origin = lambda mine, owners, builtin: "repo" if mine != owners else "org" if owners != builtin else "built-in"
+    return {**out, "sha": got["sha"], "claude_md": len(got["claude_md"].encode()), "org": got["org"],
+            "slots": {k: {**wf[k], "model": model(wf[k]["agent"]), "from": origin(wf[k], owf[k], v)}
+                      for k, v in agent.WORKFLOW.items()},
+            "after": [{**v, "model": model(v["agent"]), "from": origin(wf["after"], owf["after"], [])}
+                      for v in wf["after"]],
             "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n]}
                        for n, m in got["agents"].items()},
             "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
@@ -256,6 +264,23 @@ def route(method, url, headers, body=b""):
         if method == "GET" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/workflow", path)):
             w = workflow(s, m.group(1))
             return js(200, w) if w else js(404, {"error": "no such repo"})
+        if method == "POST" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/config", path)):
+            repo = m.group(1)
+            if repo not in visible(s):
+                return js(404, {"error": "no such repo"})
+            # what steers a repo is changed only by a PR its writers merge; proposing one needs write too
+            if not agent.can_write(repo, s["login"]):
+                return js(403, {"error": f"changing the config needs write access to {repo}"})
+            try:
+                files = json.loads(body)["files"]
+                if not isinstance(files, dict) or not all(isinstance(t, (str, type(None))) for t in files.values()):
+                    raise TypeError
+            except (ValueError, KeyError, TypeError):
+                return js(400, {"error": 'expected {"files": {"<path>": "<text>" or null}}'})
+            try:
+                return js(201, {"url": agent.propose(repo, files, s["login"])})
+            except Exception as e:   # the check the next job would fail, or git/gh saying no
+                return js(422, {"error": str(e)})
         if method == "GET" and path == "/api/skills":
             return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":

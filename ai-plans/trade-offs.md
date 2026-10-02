@@ -145,3 +145,54 @@ a tunnel, Caddy or certbot as the least moving parts.
 - **Revisit when:** §8 is done, or anyone outside the invite list signs in. The upgrade is a
   Cloudflare Origin Certificate on nginx plus Full (strict), already written up in
   phase5-deploy.md.
+
+## 10. Owner defaults have no `CLAUDE.md`, and `after` is replaced whole
+
+**Decided 2 October 2026** (Phase C, skills-and-workflows.md §1.2).
+
+`<owner>/.rookery` supplies `workflow.json`, `agents/` and `skills/`. A root `CLAUDE.md` there
+is not read, and a repo that sets `after` replaces the owner's steps rather than adding to
+them.
+
+- **Gained:** one rule for a slot (key by key) and one for `after` (whole list), and no
+  second text competing with the repo's own `CLAUDE.md` inside the 64 KB argument.
+- **Given up:** an owner cannot push house rules into every repo's system prompt except
+  through `instructions` per slot, and a repo that wants the owner's security check plus
+  one of its own has to repeat the owner's step.
+- **Revisit when:** an owner asks for shared conventions across repos, or for `after` steps
+  every repo must keep. The first is an owner `CLAUDE.md` appended before the repo's under
+  the same cap; the second needs a merge rule (append, dedupe by agent).
+
+## 11. Owner defaults need the App on `<owner>/.rookery`, and silently don't apply without it
+
+**Decided 2 October 2026** (Phase C).
+
+`org_of()` uses the owner repo only while it is in `REPOS`: installed, and let in by
+`REPOS_ONLY`. That also makes it a normal target repo, with its clone and labels.
+
+- **Gained:** the same clone, fetch, token and pinning as every other input, and no second
+  way to read GitHub.
+- **Given up:** an owner who creates `<owner>/.rookery` but doesn't add it to the
+  installation gets no defaults and no error. The Workflow view shows it (no "Owner
+  defaults" fact, no owner badge), but a run doesn't. A local instance with `REPOS_ONLY`
+  ignores the owner's defaults unless it lists that repo too.
+- **Revisit when:** someone is confused by it. A check for the repo via the installation
+  token, warning in the Workflow view when it exists but isn't installed, closes it.
+
+## 12. The portal edits only `workflow.json` and agents, and one PR per submit
+
+**Decided 2 October 2026** (Phase C, skills-and-workflows.md §6).
+
+`CONFIG_FILE` allows `workflow.json` and `agents/<name>.md`. Skills, `CLAUDE.md` and
+`.claude/` are edited on GitHub as before. Every "Open pull request" opens a new PR on a new
+`rookery/config-<hex>` branch; nothing updates an open one. The catalog's "Add to …" covers
+plan/task/review skills; a check/write skill needs an `after` step written by hand.
+
+- **Gained:** a small, allowlisted write surface whose every file `steer()` already knows
+  how to validate, and no branch state to track between submits.
+- **Given up:** two edits a minute apart are two PRs, and an abandoned one stays open until
+  someone closes it (its branch too). Overriding a built-in role starts from a blank
+  template, not the built-in persona.
+- **Revisit when:** tenants open several config PRs in a row, or ask to edit skills here.
+  Reusing the user's open `rookery/config-*` PR, and serving the built-in persona text to
+  the editor, are the next steps.

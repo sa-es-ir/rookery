@@ -121,6 +121,10 @@ is editing, so a change takes effect only once a human merges it:
 - `.rookery/agents/<name>.md` are the repo's own agents, in the same format as
   `agents/*.md`. One named `planmaker` or `reviewer` replaces that role. Frontmatter
   may carry only `name`, `description`, `tools`, `model` and `skills`.
+- **Owner defaults:** an `<owner>/.rookery` repo with the App installed on it holds
+  `workflow.json`, `agents/` and `skills/` at its root, for every repo of that owner.
+  A repo's own config wins over it, key by key in a slot; a repo's own `after` replaces
+  the owner's whole list. It is read from its own base branch, like the rest.
 
 ```json
 {
@@ -218,8 +222,13 @@ URL. You see the repos of your own installations of the App, and for each:
 - **Workflow**: the pipeline the repo's next issue gets — agent, model, skills and
   instructions per slot, read from `.rookery/workflow.json` on base just now and checked
   the way a job checks it, so a broken config shows the error the job would fail with.
-  Read-only: change it by merging to base.
+  **Propose a change** edits `.rookery/workflow.json` and `.rookery/agents/*.md` (on
+  `<owner>/.rookery`: the root's, the owner defaults) and opens a pull request from the
+  App, after running the same checks on it. Write access needed; nothing changes until
+  someone merges it.
 - **Skills** (sidebar): the built-in catalog, with each skill's slot and pinned source.
+  With a repo picked, a plan/task/review skill has **Add to …**, which puts it in that
+  slot in the editor.
 
 There is no approve button. Approval stays an `approve` comment on the issue.
 

@@ -86,6 +86,23 @@ logs the winner in `sources`. `.rookery/agents/*.md` (top level only) join the b
 `agents/` in the plugin, and one with a built-in's name replaces that role; the `base` step
 logs the repo's agents in `agents`.
 
+**Owner defaults.** `<owner>/.rookery` (`ORG`), when it is in `REPOS` (the App is installed
+on it, and `REPOS_ONLY` lets it in), is a layer between the repo and the built-in:
+`org_of()` fetches its base, and `steer()` reads `workflow.json`, `agents/` and `skills/` from
+its root at that sha. Its `workflow.json` is `workflow()`'s `under`, so a repo's file falls
+back to it key by key, and a repo's own `after` replaces the owner's list whole. Agents:
+built-in < owner < `.rookery/agents`; skills: `.rookery/skills` > `.claude/skills` > owner >
+catalog. Listed but not yet cloned fails the job ("still cloning"), never runs without it.
+The `base` step logs `org` as `<owner>/.rookery@<sha>`. No owner-level `CLAUDE.md`.
+
+**Config edits from the portal.** `POST /api/repos/<owner>/<repo>/config` (`can_write()`)
+→ `propose()`: `CONFIG_FILE` paths (`workflow.json`, `agents/<name>.md`) under
+`config_dir()` — `.rookery/`, or the root of `<owner>/.rookery` — are committed off a freshly
+fetched base in a throwaway `GIT_INDEX_FILE` (the clone's checkout and worktrees untouched),
+`steer(sha=commit)` validates that commit exactly as a job would, and only then is it pushed
+to `rookery/config-<hex>` by URL and a PR opened. `config_files()` is the editor's starting
+point, returned by the workflow GET even when the config does not validate.
+
 **`after` steps.** `workflow.json`'s `after` is up to `MAX_STEPS = 5` steps, each an `agent`,
 a `mode` (`check` or `write`, `MODES`), `skills` and `instructions`; `claude(slot=)` takes the
 step dict itself. `after_steps()` runs them in order between the task loop and the review
@@ -177,7 +194,11 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   replayable: session rows are keyed by the cookie's sha256, and no token is stored.
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
   regex on issue comments. Visibility comes from the user's own installations; anything
-  that steers a repo (cancel) needs `can_write()`. Someone else's run is a 404, not a 403.
+  that steers a repo (cancel, a config PR) needs `can_write()`. Someone else's run or repo
+  is a 404, not a 403.
+- **The portal writes config only by opening a PR**, never to base or to any branch
+  `pin()` reads. `propose()` refuses any path off `CONFIG_FILE`, and a change that fails
+  `steer()` never leaves the box. Merging stays a human's act on GitHub.
 - **User-written text is never `innerHTML`** in `ui/portal.html` — issue titles and errors
   go in through `textContent` (`h()`).
 - **The push goes to `https://github.com/<repo>.git`**, not `origin`, so it carries the
