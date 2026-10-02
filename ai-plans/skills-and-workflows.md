@@ -10,11 +10,11 @@ Lets a tenant change *how* Rookery works on their repo without weakening
 3. **Workflows.** The order those agents run in. The default is today's
    pipeline: planmaker → approve → tasks → reviewer → PR.
 
-**Status:** planned. No code yet. The spikes have run (§8), on the server's
-pinned CLI 2.1.110, on 1 October 2026, including S4e (`.mcp.json`). S4e found
-a live leak worth fixing before anything else (§9.0). **Decided:** tenant configuration lives in the repo under
-`.rookery/` (§1.2), and org defaults wait for Phase C. The decisions still open
-are in §9.
+**Status:** spikes done (§8, CLI 2.1.110 on the server, 1 October 2026).
+`--strict-mcp-config` is merged (PR #7, §9.0). A0 is built and in PR #8, not yet
+deployed (§9.1). Phases A–C are not started. **Decided:** tenant configuration
+lives in the repo under `.rookery/` (§1.2), and org defaults wait for Phase C.
+The decisions still open are §9.2, §9.3 and §9.5.
 
 ---
 
@@ -467,17 +467,15 @@ Without the header it is slightly weaker than native; `claude()` sends the heade
 
 ## 9. Open decisions
 
-0. **Ship `--strict-mcp-config` now, ahead of A0?** Recommended. It is one
-   flag in `claude()`. It stops the operator's claude.ai connectors from
-   reaching every tenant's agent, and stops a repo's `.mcp.json` from spawning
-   (S4e-E). Nothing Rookery does uses MCP. Restricting the CLI login account's
-   connectors is a separate backstop, not a replacement.
-1. **Turn off native project settings (`--setting-sources user`)?**
-   Recommended. It closes "the agent edits its own instructions mid-run" and
-   pins every steering input to reviewed base (§1.3). It is not a sandbox: repo
-   code still runs whenever the tests do. The cost is losing nested `CLAUDE.md`
-   files. It ships alone as A0, its own PR and deploy, because it changes
-   production behaviour today.
+0. ~~Ship `--strict-mcp-config` now, ahead of A0?~~ **Done: merged in PR #7.**
+   It stops the operator's claude.ai connectors from reaching every tenant's
+   agent, and stops a repo's `.mcp.json` from spawning (S4e-E). Restricting the
+   CLI login account's connectors is a separate backstop, not a replacement.
+1. ~~Turn off native project settings (`--setting-sources user`)?~~ **Done:
+   built as A0 (PR #8), deploy pending.** It closes "the agent edits its own
+   instructions mid-run" and pins every steering input to reviewed base (§1.3).
+   It is not a sandbox: repo code still runs whenever the tests do. The cost is
+   losing nested `CLAUDE.md` files.
 2. **Caps. Decide before Phase B.** Raise the `RUN_CAP` default (one env var,
    cheapest), or switch to calls per issue? Plan + 6 tasks + review is already
    8 of 10.
@@ -491,8 +489,8 @@ Without the header it is slightly weaker than native; `claude()` sends the heade
 | Phase | Ships | Test asserts |
 |---|---|---|
 | 0 | ~~Spikes~~ done (§8) | n/a |
-| 0.5 | `--strict-mcp-config` in `claude()` (§9.0), its own tiny PR and deploy | the flag is in every `claude` argv |
-| A0 | **Built, not deployed** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D; the second flag may already be live via §9.0), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
+| 0.5 | ~~`--strict-mcp-config` in `claude()` (§9.0)~~ **merged, PR #7** | the flag is in every `claude` argv |
+| A0 | **Built, PR #8, not deployed** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
 | A | Catalog in `skills/`, `.rookery/workflow.json` (slots, skills, `instructions`), skills named in slot prompts, agents moved to the plugin as `rk:<name>`, run-log fields, portal Workflow view and catalog | a bad config, a bad name or an unknown agent fails at start; unknown frontmatter keys rejected; only `skills/` + `agents/` assembled; the workflow API 404s an unseen repo and uses the job's validator |
 | B | `.rookery/agents/`, `after` steps (check/write), `MAX_STEPS`, PR sections, config-change warning | a check step's edits reverted; write-step resume via commit subject; STATUS set enforced per mode |
 | C | Portal editing via PR, agent editor, org defaults | edits need `can_write()`; nothing written except through a PR |

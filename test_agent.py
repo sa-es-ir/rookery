@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 
-os.environ.update(WEBHOOK_SECRET="s3cr3t")
+os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="")  # before import: .env only fills unset keys
 import agent  # noqa: E402
 
 real_sh, real_handle = agent.sh, agent.handle
