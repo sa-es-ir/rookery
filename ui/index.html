@@ -76,20 +76,7 @@
 .sec-head h2{font-size:clamp(32px,5vw,48px);line-height:.94;letter-spacing:-.86px;margin-top:12px}
 .sec-head p{margin-top:20px;color:var(--fog);font-size:17px;font-weight:300}
 
-/* how it works — the phase rail. ordered because the phases genuinely are. */
-.rail{display:grid;gap:0}
-.rail li{position:relative;padding:0 0 40px 40px}
-.rail li::before{content:"";position:absolute;left:5px;top:18px;bottom:-2px;width:1px;
-  background:linear-gradient(180deg,rgb(7,122,199),rgb(107,33,239))}
-.rail li:last-child{padding-bottom:0}
-.rail li:last-child::before{display:none}
-.rail .knot{position:absolute;left:0;top:6px;width:11px;height:11px;border-radius:9999px;
-  background:var(--void);border:1px solid rgb(107,33,239)}
-.rail li.gate .knot{background:var(--ember);border-color:transparent;box-shadow:0 0 12px rgba(255,73,44,.6)}
-.rail h3{font-size:20px;font-weight:400;margin:12px 0 8px}
-.rail p{color:var(--ash);font-weight:300;font-size:15px;max-width:62ch}
-.rail .you{display:inline-block;margin-top:10px;font-size:12px;font-family:var(--mono);
-  color:rgb(253,137,37);letter-spacing:0}
+/* how it works — the run as a flow diagram (.flow in styles.css, shared with the portal) */
 @media(min-width:980px){
   .rail-grid{display:grid;grid-template-columns:.85fr 1.15fr;gap:64px;align-items:start}
   .rail-grid .sec-head{margin-bottom:0;position:sticky;top:110px}
@@ -147,6 +134,7 @@ footer .links a:hover{color:#fff}
     <a href="#how">How it works</a>
     <a href="#invariants">Guarantees</a>
     <a href="#refusals">What it won't do</a>
+    <a href="docs.html">Docs</a>
   </nav>
   <div class="right">
     <a class="frost" href="https://github.com/sa-es-ir/rookery">GitHub</a>
@@ -191,38 +179,63 @@ footer .links a:hover{color:#fff}
 <section class="sec" id="how"><div class="wrap rail-grid">
   <div class="sec-head">
     <div class="eyebrow">The loop</div>
-    <h2>Six labels, one of them yours</h2>
+    <h2>Every step is a label, two of them yours</h2>
     <p>State lives on GitHub, not in a database here. The labels on the issue
-      <em>are</em> the state machine — you can read where a run stands without opening
-      anything else, and you can stop it by removing a label.</p>
+      <em>are</em> the state machine — you can read where a run stands from the issue
+      alone. Nothing moves past a gate until you do.</p>
   </div>
-  <ol class="rail">
-    <li class="gate"><span class="knot"></span><span class="lbl live">rookery:trigger</span>
-      <h3>You start it</h3>
-      <p>Nothing runs until someone puts the label on. There is no polling and no autonomous pickup.</p>
-      <span class="you">requires you</span></li>
-    <li><span class="knot"></span><span class="lbl">rookery:planning</span>
-      <h3>planmaker reads the repo</h3>
-      <p>It writes <code class="mono">plan.md</code>, <code class="mono">tasks.md</code> and
-        <code class="mono">decisions.md</code> into the target repo and touches nothing else.</p></li>
-    <li><span class="knot"></span><span class="lbl">rookery:awaiting-input</span>
-      <h3>It asks when it has to</h3>
-      <p>An open question comes back as an issue comment. Reply and planning resumes in the
-        same session with your answer folded in.</p></li>
-    <li class="gate"><span class="knot"></span><span class="lbl live">rookery:awaiting-approval</span>
-      <h3>You approve it</h3>
-      <p>The plan is posted for review. Comment <code class="mono">approve</code> to start the
-        work — matched as text, from a login on your allowlist.</p>
-      <span class="you">requires you</span></li>
-    <li><span class="knot"></span><span class="lbl">rookery:implementing</span>
-      <h3>One task, then the next</h3>
-      <p>A fresh session per task. Rookery ticks the checkbox, commits, and moves on. Fifteen
-        tasks is the ceiling; the loop stops rather than wandering.</p></li>
-    <li><span class="knot"></span><span class="lbl">rookery:reviewing</span>
-      <h3>A second agent reads the diff</h3>
-      <p>Advisory, and it runs once. The branch is pushed and the draft PR opened either way,
-        so work is never stranded on someone's laptop.</p></li>
-  </ol>
+  <div>
+    <div class="legend" aria-hidden="true">
+      <span><i class="you"></i>you</span><span><i></i>agent</span>
+      <span><i class="bot"></i>rookery</span><span><i class="loop"></i>repeats</span>
+    </div>
+    <div class="flow">
+      <div class="node you">
+        <header><span class="kind">you</span><h3>Label the issue</h3><span class="lbl live">rookery:trigger</span></header>
+        <p class="note">Nothing runs until someone with write access adds the label. No polling, no autonomous pickup.</p>
+      </div>
+      <div class="wire">webhook</div>
+      <div class="node">
+        <header><span class="kind">agent</span><h3>Plan</h3><span class="lbl">rookery:planning</span></header>
+        <div class="who"><b>rk:planmaker</b> · opus</div>
+        <p class="note">Reads the repo and writes <code>plan.md</code>, <code>tasks.md</code> and
+          <code>decisions.md</code> into <code>agent-plans/&lt;n&gt;/</code>. Anything else it touches is reverted.</p>
+        <p class="again">a question → <span class="lbl">rookery:awaiting-input</span> → your reply → plans again, same session</p>
+        <span class="back"></span>
+      </div>
+      <div class="wire">STATUS: plan-ready</div>
+      <div class="node you">
+        <header><span class="kind">you</span><h3>Approve the plan</h3><span class="lbl live">rookery:awaiting-approval</span></header>
+        <p class="note">Comment <code>approve</code>, matched as text, from someone with write access on that repo —
+          never a model's judgement, never the bot. Any other reply goes back to Plan.</p>
+      </div>
+      <div class="wire">approve</div>
+      <div class="node">
+        <header><span class="kind">agent</span><h3>Work the tasks</h3><span class="lbl">rookery:implementing</span></header>
+        <div class="who">no agent · sonnet</div>
+        <p class="note">A fresh session per task, so issue 300 costs what issue 3 did.
+          <code>decisions.md</code> is the only memory that crosses between tasks.</p>
+        <p class="again">next unticked task → <code>task-done</code> → Rookery ticks and commits · at most 15</p>
+        <span class="back"></span>
+      </div>
+      <div class="wire">every box ticked</div>
+      <div class="node">
+        <header><span class="kind">agent</span><h3>Review the diff</h3><span class="lbl">rookery:reviewing</span></header>
+        <div class="who"><b>rk:reviewer</b> · opus</div>
+        <p class="note">Reads the whole change once. Advisory: its verdict flags the run, it never blocks the push.</p>
+      </div>
+      <div class="wire">either verdict</div>
+      <div class="node bot">
+        <header><span class="kind">rookery</span><h3>Push and open a draft PR</h3></header>
+        <p class="note">To <code>feature/issue-&lt;n&gt;</code>, with the plan inside. The agent never pushes, and nothing merges.</p>
+      </div>
+      <div class="wire split"></div>
+      <div class="fork">
+        <div class="node bot"><span class="lbl ok">rookery:done</span><p class="note">review-ok</p></div>
+        <div class="node bot"><span class="lbl err">rookery:error</span><p class="note">changes-needed, or a failure at any step. <code>approve</code> again resumes at the first unticked task.</p></div>
+      </div>
+    </div>
+  </div>
 </div></section>
 
 <section class="sec" id="invariants"><div class="wrap">
@@ -243,8 +256,8 @@ footer .links a:hover{color:#fff}
         The orchestrator ticks the checkbox and writes the commit, so history stays legible.</p></div>
     <div class="card"><div class="eyebrow">Approval</div>
       <h3>Your approval is read, not judged</h3>
-      <p>The word is matched against a pattern and the author against your allowlist.
-        No model decides whether you meant yes, and the bot is filtered out so it can't approve itself.</p></div>
+      <p>The word is matched against a pattern, and the author must have write access on that
+        repository. No model decides whether you meant yes, and the bot is filtered out so it can't approve itself.</p></div>
     <div class="card"><div class="eyebrow">Review</div>
       <h3>The plan ships inside the PR</h3>
       <p>Plan, tasks and decisions are committed to the branch. A reviewer sees what was
@@ -254,9 +267,10 @@ footer .links a:hover{color:#fff}
       <p>Each issue gets its own branch and its own checkout, so two repositories can share an
         issue number and never meet.</p></div>
     <div class="card"><div class="eyebrow">Throughput</div>
-      <h3>One job at a time, on purpose</h3>
-      <p>A single worker drains the queue. A long implementation blocks the others — a
-        deliberate trade for a machine you can reason about.</p></div>
+      <h3>Repos in parallel, one job per repo</h3>
+      <p>Each repository drains its own queue, so a long run on one never blocks another.
+        Within a repo it is one job at a time, on purpose — two jobs on one issue would race
+        on its worktree and labels.</p></div>
   </div>
 </div></section>
 
@@ -292,6 +306,7 @@ footer .links a:hover{color:#fff}
   <div class="links">
     <a href="portal.html">Portal</a>
     <a href="#how">How it works</a>
+    <a href="docs.html">Docs</a>
     <a href="https://github.com/sa-es-ir/rookery">Source</a>
   </div>
 </div></footer>

@@ -12,10 +12,14 @@ Lets a tenant change *how* Rookery works on their repo without weakening
 
 **Status:** spikes done (§8, CLI 2.1.110 on the server, 1 October 2026).
 `--strict-mcp-config` (PR #7, §9.0) and A0 (PR #8, §9.1) are merged, and both
-were deployed together on 2 October 2026 and smoke-tested (§8). Phases A–C are
-not started. **Decided:** tenant configuration
+were deployed together on 2 October 2026 and smoke-tested (§8). Phase A is split:
+A1 (the backend) and A2 (the portal) were deployed together on 2 October 2026. B was
+deployed on 2 October 2026 and C on 2 October 2026; both were smoke-tested end to end on
+production the same day (§8), which found three bugs, fixed and deployed with it. **Decided:** tenant configuration
 lives in the repo under `.rookery/` (§1.2), and org defaults wait for Phase C.
-The decisions still open are §9.2, §9.3 and §9.5.
+The first catalog is 4 skills (§9.3), and task skills are off by default (§9.5).
+Both are recorded in [trade-offs.md](trade-offs.md). §9.2 is settled: the `RUN_CAP`
+default went from 10 to 30.
 
 ---
 
@@ -474,6 +478,60 @@ hook marker never appeared across all three calls; each job's `plugins/…/job-<
 gone after it finished. The server had still been running pre-PR-#7 code, so
 `--strict-mcp-config` went live in this same deploy.
 
+**S9, RTK hook** (2 October 2026, production box, as `rookery` in `/tmp/spike-rtk`,
+removed; haiku, about $0.12). RTK 0.50.0 (musl) installed as an operator-level
+`PreToolUse` hook in `~rookery/.claude/settings.json` (DEPLOY.md §7), with the exact
+`claude()` flags:
+
+| Check | Result |
+|---|---|
+| Hook fires under `--setting-sources user --strict-mcp-config -p` | **Yes.** `ls`, `git status`, `git log` were rewritten, 78% fewer tokens |
+| A failing test's assertion message still reaches the agent (`unittest`, `npm test`) | **Yes**, verbatim |
+| `git push`, `gh`, and `git status; gh …` / `… && git push` with the exclusions set | **All denied** |
+| `git push` with **no** exclusions and today's deny rules | **Ran.** It became `rtk git push` and missed `Bash(git push:*)`; only the missing remote stopped it |
+| Same, plus `Bash(rtk git push:*) Bash(rtk gh:*)` | **Denied** |
+
+So deny rules match the command after the hook rewrites it. `claude()` now denies the
+`rtk` forms too, and the RTK config excludes `git push` and `gh`: two independent guards.
+Caveman and codebase-memory MCP were considered and **not** installed. Caveman would
+shorten the plan, comments and PR text that tenants read. codebase-memory keeps one index
+shared by every tenant, which needs a spike with a per-tenant store first.
+
+**Smoke test of B and C** (2 October 2026, production, `rookery-throwaway-2` #6 → draft PR #9,
+#7 plan only, portal PR #8; about $1.30 across 20-odd calls). Base `main` carried
+`.rookery/workflow.json` with `after: [notary (write), gate (write), sentry (check)]` and a
+`.rookery/agents/reviewer.md` on haiku; `gate` failed until `smoke-retry.txt` existed in the
+worktree, and `sentry` left a file behind on purpose. `sa-es-ir/.rookery` held a root
+`workflow.json` whose plan `instructions` asked for a closing line.
+
+| Check | Result |
+|---|---|
+| Repo agents load, logged in the `base` step; one with a built-in's name replaces it | **Yes.** `agents: [gate, notary, reviewer, sentry]`; `review` ran as the repo's reviewer on haiku |
+| A write step commits `#<n> step <agent>`; a failed one raises with nothing pushed | **Yes** |
+| Approve again skips committed write steps | **Yes**, "notary already committed — skipping", then gate |
+| A check's edits reverted, logged and flagged | **Yes.** `reverted: [sentry-was-here.txt]`, "Changes wanted by sentry" |
+| PR body: config warning, `## <agent>`, `steps:` footer | **Yes**, PR #9 |
+| Owner defaults fill what the repo leaves out; `org` logged | **Yes.** #7's `plan.md` ended with the repo's codeword and the owner's line; `org: sa-es-ir/.rookery@dbd4de2` |
+| Owner repo added to the installation goes live without a restart | **Yes** |
+| Portal "Propose a change" | **Yes.** PR #8 from `rookery/config-<hex>`, one commit off fresh `main`, clone untouched; an unknown skill opened no PR and pushed no branch |
+
+Three bugs, fixed in the same deploy:
+
+1. **Approve again resumed the failed call's session**, and the agent repeated its old
+   verdict without looking: the gate kept "failing" with the file present, and a persona
+   change on base did not move the resumed reviewer. The review and `after` steps now pass
+   `per_job=True` to `claude()`, which adds the job id to the session id. Tasks and planning
+   still resume.
+2. **`**STATUS: review-ok**` was no marker**, so the job raised before the push and the branch
+   stayed on the box. Even opus, resuming haiku's session, copied the bold. `MARKER` now
+   tolerates `**` around the marker; a missing marker still raises.
+3. **Approve again after a run that opened the PR** would fail at `gh pr create`. Found by
+   reading, confirmed fixed live: the run's sections now go on the open PR as a comment.
+
+Left as is: a PR opened by a re-run carries only the sections of the steps that ran in that
+job (#9 has no task summary, no `## notary`/`## gate`, though their commits are there), and
+the issue comment after a re-run still says the sections are "in the PR body".
+
 ---
 
 ## 9. Open decisions
@@ -487,13 +545,16 @@ gone after it finished. The server had still been running pre-PR-#7 code, so
    instructions mid-run" and pins every steering input to reviewed base (§1.3).
    It is not a sandbox: repo code still runs whenever the tests do. The cost is
    losing nested `CLAUDE.md` files.
-2. **Caps. Decide before Phase B.** Raise the `RUN_CAP` default (one env var,
-   cheapest), or switch to calls per issue? Plan + 6 tasks + review is already
-   8 of 10.
-3. **First catalog cut.** The bold rows in §2.4.
+2. ~~Caps~~ **Decided: raise the `RUN_CAP` default from 10 to 30** (2 October
+   2026, with Phase B). One line; `USD_CAP` stays the spend bound, and per-issue
+   counting would need an issue column in `runs` for no new guarantee.
+3. ~~First catalog cut~~ **Decided: 4 skills.** `repo-recon`,
+   `verification-before-completion`, `systematic-debugging` and
+   `test-driven-development`. `security-review` and `changelog` wait for
+   Phase B's `after` steps (trade-offs.md §2).
 4. ~~Org-level `<owner>/.rookery` in Phase A?~~ **Decided: Phase C** (§1.2).
-5. **Default task skills.** Should `verification-before-completion` be on by
-   default for everyone?
+5. ~~Default task skills~~ **Decided: off by default.** A repo with no
+   `workflow.json` gets no task skills (trade-offs.md §1).
 
 ## 10. Phasing
 
@@ -502,6 +563,7 @@ gone after it finished. The server had still been running pre-PR-#7 code, so
 | 0 | ~~Spikes~~ done (§8) | n/a |
 | 0.5 | ~~`--strict-mcp-config` in `claude()` (§9.0)~~ **merged, PR #7** | the flag is in every `claude` argv |
 | A0 | **Done: PR #8, deployed and smoke-tested 2 October 2026** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
-| A | Catalog in `skills/`, `.rookery/workflow.json` (slots, skills, `instructions`), skills named in slot prompts, agents moved to the plugin as `rk:<name>`, run-log fields, portal Workflow view and catalog | a bad config, a bad name or an unknown agent fails at start; unknown frontmatter keys rejected; only `skills/` + `agents/` assembled; the workflow API 404s an unseen repo and uses the job's validator |
-| B | `.rookery/agents/`, `after` steps (check/write), `MAX_STEPS`, PR sections, config-change warning | a check step's edits reverted; write-step resume via commit subject; STATUS set enforced per mode |
-| C | Portal editing via PR, agent editor, org defaults | edits need `can_write()`; nothing written except through a PR |
+| A1 | **Deployed 2 October 2026, with A2.** Backend half of A: catalog in `skills/` (pinned to obra/superpowers@8ca22db, see `skills/README.md`), `.rookery/workflow.json` (plan/task/review: agent, skills, `instructions`), skills named in slot prompts, `instructions` after `CLAUDE.md` in `--append-system-prompt`, agents in the plugin as `rk:<name>`, `.rookery/skills` > `.claude/skills` > catalog, run-log fields, PR footer. `after` in the file is rejected until B. | a bad config, a bad name or an unknown skill/agent fails at start; unknown frontmatter keys rejected (skills and agents); only `skills/` + `agents/` assembled; precedence and the winner logged |
+| A2 | **Deployed 2 October 2026, with A1.** Portal half of A: Workflow view, skill catalog, `GET /api/repos/<owner>/<repo>/workflow`, `GET /api/skills` | the workflow API 404s an unseen repo and uses the job's validator |
+| B | **Deployed and smoke-tested 2 October 2026** (§8). `.rookery/agents/` (top-level `*.md`, same name replaces a built-in, logged in the `base` step), `after` steps (check/write) via `after_steps()`, `MAX_STEPS = 5`, `## <agent>` PR sections, `steps:` in the footer, config-change warning, the reviewer's leftovers reverted, Workflow view draws the steps. With it: `RUN_CAP` 30 (§9.2) and the `security-review` (check) and `changelog` (write) catalog skills | a check step's edits reverted; write-step resume via commit subject; STATUS set enforced per mode |
+| C | **Deployed and smoke-tested 2 October 2026** (§8). Owner defaults from `<owner>/.rookery` (root `workflow.json`, `agents/`, `skills/`; repo > owner > built-in, `org` in the `base` step) via `org_of()`; `propose()` + `POST /api/repos/<owner>/<repo>/config`: `.rookery/workflow.json` and `.rookery/agents/*.md` (the root's on `<owner>/.rookery`), committed in a throwaway index, checked by `steer(sha=)`, pushed to `rookery/config-<hex>`, PR opened; the portal's "Propose a change" editor (allowlist checked while typing) and the catalog's "Add to <slot>". Deferrals: trade-offs.md §10–12 | edits need `can_write()`; nothing written except through a PR; a change that fails the job's checks opens no PR; owner defaults fill what the repo leaves out, and an owner's error names the owner's file |

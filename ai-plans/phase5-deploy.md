@@ -221,6 +221,9 @@ Webhook URL back to `http://185.208.172.15:8787/`. `web.py` and `ui/` can stay; 
 
 ## Still open after this (not part of the deploy)
 
+The security items here are tracked, with what each costs and when to revisit it, in
+[trade-offs.md](trade-offs.md) §5–§9.
+
 Before the link goes to anyone else — carried since Phase 1 (`phase3-4-notes.md` "Next steps"):
 1. `gh auth logout` as `rookery` — the agent can read that token.
 2. SSH hardening: `PasswordAuthentication no`, `PermitRootLogin prohibit-password`. Root is

@@ -52,6 +52,54 @@ button{font:inherit}
 .lbl.ok{background:#fff;border-color:transparent;color:#48556a}
 .lbl.err{background:rgba(255,73,44,.16);border-color:var(--scorch);color:#ffb3a5}
 
+/* The run as a diagram: the landing page's loop and the portal's Workflow view draw the same
+   thing. A plain .node is a claude call, .you a human gate, .bot Rookery itself. A .wire is a
+   transition and its text the condition; .back draws a node's return loop; .fork is the end. */
+.legend{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;font-size:13px;color:var(--fog)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.legend i{width:14px;height:14px;border-radius:4px;background:var(--surface)}
+.legend .you,.flow .node.you{background:rgba(255,142,93,.05);box-shadow:rgba(253,137,37,.55) 0 0 0 1px inset}
+.legend .bot{background:transparent;box-shadow:rgba(255,255,255,.1) 0 0 0 1px inset}
+.legend .loop{width:12px;border:2px dashed rgb(107,33,239);border-left:0;border-radius:0 6px 6px 0;background:none}
+.flow{display:flex;flex-direction:column;max-width:720px;padding-right:40px}
+.flow .node{position:relative;background:var(--surface);border-radius:12px;padding:18px 22px;
+  display:flex;flex-direction:column;gap:8px}
+.flow .node.bot{background:transparent;box-shadow:rgba(255,255,255,.1) 0 0 0 1px inset}
+.flow .node header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.flow .node h3{font-size:17px;font-weight:400}
+.flow .node header .lbl{margin-left:auto}
+.flow .node > .lbl{align-self:flex-start}
+.flow .kind{font:400 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--fog)}
+.flow .you .kind{color:rgb(253,137,37)}
+.flow .who{font-size:14px;color:var(--fog)}
+.flow .who b{font-weight:400;color:#fff;font-family:var(--mono);font-size:13px;letter-spacing:0}
+.flow .note{font-size:14px;color:var(--ash);font-weight:300}
+.flow .note code,.flow .again code{font-family:var(--mono);font-size:12px;letter-spacing:0;color:#fff}
+.flow .again{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;padding-top:12px;
+  border-top:1px dashed var(--smoke);font-size:13px;color:var(--fog)}
+.flow .again::before{content:"\21BB";font-size:15px;color:#077ac7}
+.flow .back{position:absolute;right:-28px;top:20px;bottom:20px;width:20px;
+  border:2px dashed rgb(107,33,239);border-left:0;border-radius:0 12px 12px 0}
+.flow .back::after{content:"";position:absolute;left:-6px;top:-6px;
+  border:5px solid transparent;border-left:0;border-right:6px solid rgb(107,33,239)}
+.flow .wire{position:relative;min-height:44px;margin-left:30px;padding:8px 0 10px 18px;display:flex;align-items:center;
+  font:400 12px var(--mono);letter-spacing:0;color:var(--fog)}
+.flow .wire::before{content:"";position:absolute;left:0;top:0;bottom:6px;width:2px;background:var(--current)}
+.flow .wire::after{content:"";position:absolute;left:-4px;bottom:0;
+  border:5px solid transparent;border-bottom:0;border-top:6px solid rgb(107,33,239)}
+.flow .wire.split::before{bottom:0}
+.flow .wire.split::after{display:none}
+.flow .fork{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start;padding-top:22px}
+.flow .fork::before{content:"";position:absolute;top:0;left:30px;width:calc(50% + 8px);height:2px;background:rgb(107,33,239)}
+.flow .fork .node{padding:14px 18px;gap:6px}
+.flow .fork .node::before{content:"";position:absolute;left:30px;top:-22px;height:22px;width:2px;background:rgb(107,33,239)}
+.flow .fork .note{font-size:13px;color:var(--fog)}
+@media(max-width:600px){
+  .flow{padding-right:32px}
+  .flow .node{padding:16px 18px}
+  .flow .back{right:-24px;width:16px}
+}
+
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important}

@@ -20,6 +20,11 @@ assert not agent.APPROVE.match("approver should look first")
 m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
 assert m and m.group(1) == "questions"
 assert not agent.MARKER.search("the STATUS: plan-ready marker must be on its own line")
+for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-ok  "):   # prod: haiku bolds it
+    m = agent.MARKER.search(f"fine\n{line}\nmore")
+    assert m and m.group(1) == "review-ok", line
+    assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
+assert not agent.MARKER.search("**STATUS: review-ok** but see below")
 
 # webhook signature
 raw = b'{"action":"opened"}'
@@ -66,11 +71,19 @@ for at, _, _ in [t for t in after if not t[1]]:
 assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
 
 # the two named roles, and the review verdicts the orchestrator branches on
-roles = __import__("json").loads(agent.AGENTS)
+roles = {p.stem: agent.parse_agent(p, p.stem) for p in (agent.HERE / "agents").glob("*.md")}
 assert set(roles) == {"planmaker", "reviewer"}
-assert all(r["description"] and r["prompt"] for r in roles.values())
+assert all(r["description"] for r in roles.values())
 assert "Edit" not in roles["reviewer"]["tools"], "the reviewer reports, never fixes"
 assert all(r["model"] == "opus" for r in roles.values()), "roles think; tasks grind on sonnet"
+assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", None, "reviewer"}
+assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
+# the catalog: every skill passes the same allowlist a repo's does
+cat = sorted(p.name for p in (agent.HERE / "skills").iterdir() if p.is_dir())
+assert cat == ["changelog", "repo-recon", "security-review", "systematic-debugging",
+               "verification-before-completion"]
+for name in cat:
+    assert agent.frontmatter(agent.HERE / "skills" / name / "SKILL.md", agent.SKILL_KEYS, name)["name"] == name
 assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
 assert agent.MARKER.search("STATUS: changes-needed\nbug in foo.py").group(1) == "changes-needed"
 
@@ -278,6 +291,21 @@ assert "--strict-mcp-config" in argv[0] and "--mcp-config" not in argv[0], argv
 assert argv[0][argv[0].index("--setting-sources") + 1] == "user", argv
 assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system-prompt"))], "outside a job: none"
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
+# deny rules see the hook-rewritten command: the RTK forms must be denied too
+assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
+# a task resumes its session on approve-again; the review and after steps start one per job
+sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
+real_caps, agent.check_caps = agent.check_caps, lambda repo: None   # caps are tested above
+def sid(**k):
+    argv.clear(), agent.claude(sc, "p", key="review", **k)
+    return argv[0][argv[0].index("--session-id") + 1]
+agent.active["o/sid"] = {"job": 1, "cancel": None}
+assert sid() == sid(), "tasks keep resuming"
+first = sid(per_job=True)
+agent.active["o/sid"] = {"job": 2, "cancel": None}
+assert sid(per_job=True) not in (first, sid()), "a new job is a new session"
+del agent.active["o/sid"]
+agent.check_caps = real_caps
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")
 agent.sh = boom
@@ -312,7 +340,7 @@ git(agent.WORKSPACE, "clone", "-q", str(origin), str(clone))       # Rookery's c
 def merge(files):
     for name, text in files.items():
         (up / name).parent.mkdir(parents=True, exist_ok=True)
-        (up / name).write_text(text, encoding="utf-8")
+        (up / name).unlink() if text is None else (up / name).write_text(text, encoding="utf-8")
     git(up, "add", "-A"), git(up, "commit", "-qm", "x"), git(up, "push", "-q", "origin", "main")
 merge({"CLAUDE.md": "Use tabs.\n", ".claude/skills/verify/run.sh": "make test\n",
        ".claude/skills/verify/SKILL.md": "---\nname: verify\ndescription: >\n  run the checks\n"
@@ -337,8 +365,50 @@ assert not plugin.exists(), "the plugin dir is gone after the job"
 with agent.closing(agent.db()) as con:
     based = json.loads(con.execute("SELECT detail FROM steps WHERE what = 'base'").fetchone()[0])
 assert based["sha"] == git(up, "rev-parse", "HEAD").strip() and based["skills"] == ["verify"], "base_sha logged"
+assert based["sources"] == {"verify": ".claude/skills"}, "which source won"
+assert "--agents" not in argv[0] and "--model" in argv[0], "no workflow.json: tasks run as no agent"
+
+# .rookery/workflow.json on base: slots name skills and add instructions; agents are plugin agents
+merge({".rookery/workflow.json": json.dumps({
+           "plan": {"skills": ["repo-recon"], "instructions": "One migration per task."},
+           "task": {"skills": ["verify", "systematic-debugging"]}}),
+       ".rookery/skills/verify/SKILL.md": "---\nname: verify\n---\nfrom .rookery\n",
+       ".claude/skills/repo-recon/SKILL.md": "---\nname: repo-recon\n---\nthe repo's own\n"})
+agent.begin(pc, "plan", "t")
+agent.pin(pc)
+a = agent.active["o/r"]
+sk = a["plugin"] / "skills"
+assert (sk / "verify" / "SKILL.md").read_text(encoding="utf-8").endswith("from .rookery\n")
+assert not (sk / "verify" / "run.sh").exists(), "the winner's files only, never a merge of two skills"
+assert (sk / "repo-recon" / "SKILL.md").read_text(encoding="utf-8").endswith("the repo's own\n"), "repo beats catalog"
+assert (sk / "systematic-debugging" / "find-polluter.sh").exists(), "an enabled catalog skill, files and all"
+assert not (sk / "changelog").exists(), "a catalog skill nobody enabled stays out"
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "reviewer.md"]
+assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
+argv[:] = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: plan-ready"})
+agent.claude(pc, "p", key="plan", slot="plan")
+agent.claude(pc, "p", key="task-0", slot="task")
+agent.sh = real_sh
+plan_argv, task_argv = argv
+assert plan_argv[plan_argv.index("--agent") + 1] == "rk:planmaker" and "--model" not in plan_argv, plan_argv
+assert plan_argv[2] == "p\n\nUse the `rk:repo-recon` skill.", "an enabled skill is named, or it never fires"
+sysp = next(x for x in plan_argv if x.startswith("--append-system-prompt="))
+assert "Use tabs." in sysp and sysp.endswith("One migration per task."), "instructions follow the persona"
+assert task_argv[2].endswith("`rk:verify` skill.\n\nUse the `rk:systematic-debugging` skill.")
+assert "One migration" not in "".join(task_argv), "a slot's instructions are its own"
+job_id = a["job"]
+agent.finish("o/r", "ok")
+with agent.closing(agent.db()) as con:
+    logged = [json.loads(d) for w, d in con.execute("SELECT what, detail FROM steps WHERE job = ?", (job_id,))]
+assert logged[0]["sources"] == {"verify": ".rookery/skills", "repo-recon": ".claude/skills",
+                                "systematic-debugging": "catalog"}, logged[0]
+assert [(s["agent"], s["skills"], s["model"]) for s in logged[1:]] == [
+    ("planmaker", ["repo-recon"], "opus"), (None, ["verify", "systematic-debugging"], "sonnet")], logged
+
 def pin_error(files):
-    merge(files)
+    if files:
+        merge(files)
     agent.begin(pc, "plan", "t")
     try:
         agent.pin(pc)
@@ -346,12 +416,219 @@ def pin_error(files):
         return str(e)
     finally:
         agent.finish("o/r", "failed")
+wf_error = lambda wf: pin_error({".rookery/workflow.json": wf if isinstance(wf, str) else json.dumps(wf)})
+assert "not valid JSON" in wf_error("{"), "an invalid file fails, never falls back to the default"
+assert "top level" in wf_error({"before": []})
+assert "at most 5 steps" in wf_error({"after": [{"agent": f"a{i}", "mode": "check"} for i in range(6)]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer"}]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer", "mode": ["check"]}]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"mode": "write"}]})
+assert "`after[0]` is an object with only" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "x": 1}]})
+assert "names an agent twice" in wf_error({"after": [{"agent": "reviewer", "mode": "check"},
+                                                    {"agent": "reviewer", "mode": "write"}]})
+assert "`after[0]` names the agent `ghost`" in wf_error({"after": [{"agent": "ghost", "mode": "check"}]})
+assert "`after[0]` names the skill" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "skills": ["nope"]}]})
+assert "a list of names" in wf_error({"task": {"skills": "verify"}})
+assert "must match" in wf_error({"task": {"skills": ["../../etc"]}})
+assert "must match" in wf_error({"plan": {"agent": ""}})
+assert "no skill by that name" in wf_error({"task": {"skills": ["test-drivn-development"]}})
+assert "no agent by that name" in wf_error({"review": {"agent": "ghost"}}), "--agent would ignore it silently"
+assert "plus the `plan` instructions" in wf_error({"plan": {"instructions": "x" * (64 * 1024)}})
+merge({".rookery/workflow.json": "{}"})
 assert "64 KB" in pin_error({"CLAUDE.md": "x" * (64 * 1024 + 1)}), "an oversized CLAUDE.md fails at start"
-assert "`hooks`" in pin_error({"CLAUDE.md": "ok\n", ".claude/skills/verify/SKILL.md":
+assert "`hooks`" in pin_error({"CLAUDE.md": "ok\n", ".rookery/skills/verify/SKILL.md":
                                "---\nname: verify\nhooks:\n  PreToolUse: []\n---\n"}), "skill hooks rejected"
 assert "must match" in pin_error({".claude/skills/verify/SKILL.md": "---\nname: verify\n---\n",
                                   ".claude/skills/Bad_Name/SKILL.md": "---\nname: x\n---\n"})
 assert not list((agent.WORKSPACE / "plugins").rglob("job-*")), "a failed job's plugin dir is gone too"
+# frontmatter: an allowlist of top-level keys, however the YAML is laid out
+fm = agent.WORKSPACE / "x.md"
+def fm_error(text, keys=agent.SKILL_KEYS):
+    fm.write_text(text, encoding="utf-8")
+    try:
+        agent.parse_agent(fm, "x") if keys == agent.AGENT_KEYS else agent.frontmatter(fm, keys, "x")
+    except RuntimeError as e:
+        return str(e)
+assert "`hooks`" in fm_error("---\n  name: x\n  hooks:\n    Stop: []\n---\n"), "an indented top level is still top"
+assert "`mcpServers`" in fm_error("---\nname: x\nmcpServers: {}\n---\n", agent.AGENT_KEYS)
+assert "`permissionMode`" in fm_error("---\nname: x\npermissionMode: bypassPermissions\n---\n", agent.AGENT_KEYS)
+assert "`model`" in fm_error("---\nname: x\nmodel: gpt-5\n---\n", agent.AGENT_KEYS)
+assert "filename" in fm_error("---\nname: y\n---\n", agent.AGENT_KEYS)
+assert fm_error("---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n", agent.AGENT_KEYS) is None
+
+# .rookery/agents on base: added to the plugin, or replacing a built-in role by name
+merge({".claude/skills/Bad_Name/SKILL.md": None, ".rookery/skills/verify/SKILL.md": "---\nname: verify\n---\n"})
+assert "`hooks`" in pin_error({".rookery/agents/sec.md": "---\nname: sec\nhooks:\n  Stop: []\n---\n"}), \
+    "a repo agent is held to the same allowlist"
+assert "filename" in pin_error({".rookery/agents/sec.md": "---\nname: other\n---\n"})
+merge({".rookery/agents/sec.md": "---\nname: sec\nmodel: haiku\n---\nfind holes\n",
+       ".rookery/agents/docs.md": "---\nname: docs\n---\nwrite docs\n",
+       ".rookery/agents/reviewer.md": "---\nname: reviewer\nmodel: sonnet\n---\nthe repo's reviewer\n",
+       ".rookery/agents/notes.txt": "not an agent\n", ".rookery/agents/sub/x.md": "---\nname: x\n---\n",
+       ".rookery/workflow.json": json.dumps({"after": [
+           {"agent": "sec", "mode": "check", "skills": ["verify"], "instructions": "OWASP only."},
+           {"agent": "docs", "mode": "write"}]})})
+agent.RUN_CAP = 99
+agent.begin(pc, "implement")
+agent.pin(pc)
+a = agent.active["o/r"]
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md", "planmaker.md", "reviewer.md",
+                                                                        "sec.md"], "top-level *.md only"
+assert (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8").endswith("the repo's reviewer\n")
+assert a["agents"]["reviewer"]["model"] == "sonnet" and a["agent_sources"]["planmaker"] == "built-in"
+argv[:] = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: check-ok"})
+assert agent.claude(pc, "p", key="step-sec", slot=a["workflow"]["after"][0]) == ("check-ok", "")
+agent.sh = real_sh
+assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and argv[0][2] == "p\n\nUse the `rk:verify` skill."
+assert next(x for x in argv[0] if x.startswith("--append-system-prompt=")).endswith("OWASP only.")
+with agent.closing(agent.db()) as con:
+    based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'",
+                                   (a["job"],)).fetchone()[0])
+assert based["agents"] == ["docs", "reviewer", "sec"], "the repo's agents are logged"
+
+# after steps: between the task loop and the review; a check may not edit, a write is committed
+git(clone, "config", "user.email", "t@t"), git(clone, "config", "user.name", "t")
+wt = agent.wt_root("o/r") / "issue-3"
+git(clone, "fetch", "-q", "origin", "main"), git(clone, "worktree", "add", "-q", "-B", "feature/issue-3", str(wt), "origin/main")
+agent.worktree = lambda c: wt
+(wt / agent.pdir(3)).mkdir(parents=True)
+(wt / agent.pdir(3) / "tasks.md").write_text("- [x] one\n", encoding="utf-8")
+(wt / "CLAUDE.md").write_text("Use spaces.\n", encoding="utf-8")   # the branch changes what steers the agent
+git(wt, "add", "-A"), git(wt, "commit", "-qm", "#3 task 1: one")
+said, prs, phases, calls = [], [], [], []
+def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False):
+    calls.append(key)
+    assert per_job, "the review and after steps never resume an earlier job's session"
+    if key == "step-sec":
+        assert prompt.startswith("Check the finished work") and slot["agent"] == "sec"
+        (wt / "CLAUDE.md").write_text("tampered\n", encoding="utf-8")
+        (wt / "scratch.txt").write_text("x", encoding="utf-8")
+        return "check-ok", "no holes"
+    if key == "step-docs":
+        (wt / "docs.md").write_text("docs\n", encoding="utf-8")
+        return "step-done", "wrote docs"
+    (wt / "review.txt").write_text("x", encoding="utf-8")   # the reviewer is read-only too
+    return "review-ok", "fine"
+real_gh, real_claude = agent.gh, agent.claude
+agent.claude, agent.comment = fake_claude, lambda c, body: said.append(body)
+agent.set_phase = lambda c, phase: phases.append(phase)
+pr_open, pr_said = [], []
+def fake_gh(repo, *a, input=None, **k):
+    if a[:2] == ("pr", "view"):   # open once created: a second approve must not create again
+        return "https://github.com/o/r/pull/1" if pr_open else ""
+    if a[:2] == ("pr", "create"):
+        assert not pr_open, "gh refuses a second PR for the branch"
+        pr_open.append(1)
+        return prs.append(input) or "https://github.com/o/r/pull/1"
+    if a[:2] == ("pr", "comment"):
+        return pr_said.append((a[2], input)) or ""
+    return json.dumps({"title": "t"})
+agent.gh = fake_gh
+agent.sh = lambda *a, **k: "" if a[:2] == ("git", "push") else real_sh(*a, **k)
+agent.implement(pc)
+subjects = git(wt, "log", "--format=%s", "origin/main..HEAD").splitlines()
+assert subjects == ["#3 step docs", "#3 task 1: one"], subjects
+assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not (wt / "scratch.txt").exists(), \
+    "a check's edits are reverted"
+assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
+body_ = prs[0]
+assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
+assert "## sec · rk:verify\n\nno holes\n\n_Rookery reverted" in body_ and "## docs\n\nwrote docs" in body_
+assert body_.index("## sec") < body_.index("## docs") < body_.index("## Review")
+assert body_.endswith(" · steps: sec, docs"), body_[-80:]
+assert phases[-1] == "rookery:error" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
+# approve again: the committed write step is skipped, the check runs again
+calls.clear()
+agent.implement(pc)
+assert calls == ["step-sec", "review"], calls
+assert len(prs) == 1 and pr_said[0][0] == "https://github.com/o/r/pull/1" and "## sec" in pr_said[0][1], \
+    "the re-run's sections go on the open PR"
+# STATUS is held to the step's mode
+for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "failed")]:
+    agent.claude = lambda c, p, key="plan", resume=False, slot="task", **k: (status, "x")
+    try:
+        agent.after_steps(pc, wt, [{**agent.STEP, "agent": "z", "mode": mode}])
+        raise AssertionError(f"{mode} accepted {status}")
+    except RuntimeError as e:
+        assert "step z" in str(e), e
+agent.claude, agent.gh, agent.sh = real_claude, real_gh, real_sh
+agent.finish("o/r", "ok")
+
+# <owner>/.rookery: the owner's defaults, under the repo's own config and over the built-in
+oup = agent.WORKSPACE / "org-up"
+git(agent.WORKSPACE, "init", "-q", "--bare", "-b", "main", str(agent.WORKSPACE / "org.git"))
+git(agent.WORKSPACE, "clone", "-q", str(agent.WORKSPACE / "org.git"), str(oup))
+git(oup, "config", "user.email", "t@t"), git(oup, "config", "user.name", "t")
+def org_merge(files):
+    for name, text in files.items():
+        (oup / name).parent.mkdir(parents=True, exist_ok=True)
+        (oup / name).write_text(text, encoding="utf-8")
+    git(oup, "add", "-A"), git(oup, "commit", "-qm", "x"), git(oup, "push", "-q", "origin", "main")
+org_merge({"workflow.json": json.dumps({"plan": {"instructions": "Org rule."}, "review": {"agent": "auditor"},
+                                        "after": [{"agent": "auditor", "mode": "check"}]}),
+           "agents/auditor.md": "---\nname: auditor\nmodel: haiku\n---\naudit\n",
+           "agents/sec.md": "---\nname: sec\n---\nthe owner's sec\n",
+           "skills/house-style/SKILL.md": "---\nname: house-style\n---\nours\n",
+           "skills/verify/SKILL.md": "---\nname: verify\n---\nthe owner's verify\n"})
+agent.REPOS["o/.rookery"] = ""
+assert "still cloning o/.rookery" in pin_error({}), "never a run without the owner's defaults"
+git(agent.WORKSPACE, "clone", "-q", str(agent.WORKSPACE / "org.git"), str(agent.clone_dir("o/.rookery")))
+agent.REPOS["o/.rookery"] = "main"
+agent.begin(pc, "implement")
+agent.pin(pc)
+a = agent.active["o/r"]
+assert a["workflow"]["plan"]["instructions"] == "Org rule." and a["workflow"]["review"]["agent"] == "auditor", \
+    "a slot the repo leaves out comes from the owner"
+assert [s["agent"] for s in a["workflow"]["after"]] == ["sec", "docs"], "the repo's own `after` replaces the owner's"
+assert a["agent_sources"]["auditor"] == "o/.rookery" and a["agent_sources"]["sec"] == ".rookery/agents"
+assert (a["plugin"] / "agents" / "sec.md").read_text(encoding="utf-8").endswith("find holes\n"), "repo beats owner"
+assert a["sources"]["house-style"] == "o/.rookery" and a["sources"]["verify"] == ".rookery/skills"
+with agent.closing(agent.db()) as con:
+    based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'",
+                                   (a["job"],)).fetchone()[0])
+assert based["org"] == "o/.rookery@" + git(oup, "rev-parse", "HEAD").strip(), "the owner's sha is logged too"
+agent.finish("o/r", "ok")
+org_merge({"workflow.json": json.dumps({"plan": {"agent": "ghost"}})})
+assert pin_error({}).startswith("workflow.json in o/.rookery: `plan` names the agent `ghost`"), \
+    "read fresh, and the error names the owner's file"
+org_merge({"agents/auditor.md": "---\nname: auditor\nhooks: {}\n---\n", "workflow.json": "{}"})
+assert pin_error({}).startswith("agents/auditor.md in o/.rookery: frontmatter `hooks`")
+del agent.REPOS["o/.rookery"]
+
+# the portal changes config only through a PR: a commit built off to the side, checked by steer()
+assert agent.config_dir("o/r") == ".rookery/" and agent.config_dir("o/.rookery") == ""
+got = agent.config_files("o/r")
+assert sorted(got) == ["agents/docs.md", "agents/reviewer.md", "agents/sec.md", "workflow.json"], got
+assert got["agents/sec.md"] == "---\nname: sec\nmodel: haiku\n---\nfind holes\n", "byte for byte, not stripped"
+pushed, prs = [], []
+agent.sh = lambda *a, **k: pushed.append(a[-1]) or "" if a[:2] == ("git", "push") else real_sh(*a, **k)
+agent.gh = lambda repo, *a, input=None, **k: prs.append((a, input)) or "https://github.com/o/r/pull/9"
+before = git(clone, "status", "--porcelain"), git(clone, "rev-parse", "HEAD")
+def propose_error(files):
+    try:
+        agent.propose("o/r", files, "alice")
+    except (RuntimeError, ValueError) as e:
+        return str(e)
+assert "only workflow.json and agents/<name>.md" in propose_error({"CLAUDE.md": "x"})
+assert "only workflow.json" in propose_error({"agents/../../x.md": "x"})
+assert "no agent by that name" in propose_error({"agents/docs.md": None}), "the workflow still names docs"
+assert "`hooks`" in propose_error({"agents/qa.md": "---\nname: qa\nhooks: {}\n---\n"})
+assert "already what main has" in propose_error({"agents/sec.md": got["agents/sec.md"]})
+assert not pushed and not prs, "nothing that fails the check leaves the box"
+url = agent.propose("o/r", {"agents/qa.md": "---\nname: qa\n---\nTest it.\n", "agents/docs.md": None,
+                            "workflow.json": json.dumps({"after": [{"agent": "qa", "mode": "check"}]})}, "alice")
+assert url == "https://github.com/o/r/pull/9" and len(pushed) == 1, pushed
+commit, branch = pushed[0].split(":refs/heads/")
+assert branch.startswith("rookery/config-"), branch
+assert git(clone, "show", f"{commit}:.rookery/agents/qa.md") == "---\nname: qa\n---\nTest it.\n"
+assert "docs.md" not in git(clone, "ls-tree", "--name-only", f"{commit}:.rookery/agents")
+assert git(clone, "rev-parse", f"{commit}^").strip() == git(up, "rev-parse", "HEAD").strip(), "on a fresh base"
+assert (git(clone, "status", "--porcelain"), git(clone, "rev-parse", "HEAD")) == before, "the clone is untouched"
+args, pr_body = prs[0]
+assert args[:2] == ("pr", "create") and "--draft" not in args and args[args.index("--head") + 1] == branch
+assert pr_body.startswith(agent.CONFIG_WARNING) and "@alice" in pr_body and "- deletes `.rookery/agents/docs.md`" in pr_body
+agent.sh, agent.gh = real_sh, real_gh
 
 # run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
 real_pin, agent.pin = agent.pin, lambda c: None   # pin() is tested above
@@ -433,13 +710,13 @@ import web  # noqa: E402
 
 agent.WORKSPACE = Path(tempfile.mkdtemp())
 agent.REPOS = {"o/r": "main", "o/other": "main"}
-def req(method, url, sid=None, csrf=None, cookie=None):
+def req(method, url, sid=None, csrf=None, cookie=None, data=b""):
     h = {}
     if sid or cookie:
         h["Cookie"] = cookie or f"rookery_session={sid}"
     if csrf:
         h["X-CSRF-Token"] = csrf
-    return web.route(method, url, h)
+    return web.route(method, url, h, data)
 body = lambda r: json.loads(r[2])
 
 assert req("GET", "/api/repos")[0] == 401 and req("GET", "/api/runs/1")[0] == 401, "nothing without a session"
@@ -518,6 +795,68 @@ assert req("GET", f"/api/runs/{theirs}", sid=sid)[0] == 404, "another tenant's r
 one = body(req("GET", f"/api/runs/{mine}", sid=sid))
 assert one["title"] == "Add a thing" and [s["what"] for s in one["steps"]] == ["task", "claude", "error"]
 
+# workflow: agent.steer() — what pin() runs at job start — into a throwaway dir; an unseen repo is a 404
+assert req("GET", "/api/repos/o/other/workflow", sid=sid)[0] == 404, "another tenant's personas stay theirs"
+assert req("GET", "/api/repos/o/nope/workflow", sid=sid)[0] == 404
+assert "still cloning" in body(req("GET", "/api/repos/o/r/workflow", sid=sid))["error"]
+agent.clone_dir("o/r").mkdir(parents=True)
+real_steer, dirs = agent.steer, []
+def fake_steer(repo, path, base, plug):
+    dirs.append(plug)
+    wf = {**agent.WORKFLOW, "task": {**agent.WORKFLOW["task"], "skills": ["tdd"]},
+          "after": [{**agent.STEP, "agent": "sec", "mode": "check"}]}
+    owf = {**agent.WORKFLOW, "review": {**agent.WORKFLOW["review"], "instructions": "Owner's."}, "after": []}
+    return {"sha": "abc", "claude_md": "é", "workflow": wf, "sources": {"tdd": "catalog"},
+            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {},
+                                                        "sec": {"model": "haiku", "description": "holes"}},
+            "agent_sources": {"planmaker": "built-in", "reviewer": "built-in", "sec": ".rookery/agents"},
+            "org": {"repo": "o/.rookery", "sha": "def"}, "org_workflow": owf}
+agent.steer = fake_steer
+real_files, agent.config_files = agent.config_files, lambda repo: {"workflow.json": "{}\n"}
+w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
+assert w["sha"] == "abc" and w["claude_md"] == 2 and w["error"] is None, w
+assert [(k, v["agent"], v["model"], v["from"]) for k, v in w["slots"].items()] == [
+    ("plan", "planmaker", "opus", "built-in"), ("task", None, "sonnet", "repo"),
+    ("review", "reviewer", None, "repo")], "the repo's review is the built-in's, but over the owner's"
+assert w["org"] == {"repo": "o/.rookery", "sha": "def"}
+assert w["skills"] == {"tdd": {"source": "catalog", "description": "red, green"}}
+assert [(s["agent"], s["mode"], s["model"], s["from"]) for s in w["after"]] == [("sec", "check", "haiku", "repo")]
+assert w["agents"]["sec"] == {"description": "holes", "source": ".rookery/agents"}
+assert w["config"] == {"dir": ".rookery/", "files": {"workflow.json": "{}\n"}}, "what the editor starts from"
+assert not dirs[0].exists(), "the throwaway plugin dir is gone"
+agent.steer = lambda *a: (_ for _ in ()).throw(RuntimeError("`task` names the skill `x`"))
+w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
+assert w["error"] == "`task` names the skill `x`", "the error the next job would fail with"
+assert w["config"]["files"], "a broken config can still be edited"
+agent.steer, agent.config_files = real_steer, real_files
+
+# config edits: a PR through agent.propose(), only from a writer of that repo
+proposed = []
+agent.propose = lambda repo, files, by: proposed.append((repo, files, by)) or "https://github.com/o/r/pull/9"
+agent.can_write = lambda repo, user: user == "alice"
+edit = lambda repo, data, s=sid, c=None: req("POST", f"/api/repos/{repo}/config", sid=s, csrf=c or me["csrf"],
+                                             data=json.dumps(data).encode())
+assert req("POST", "/api/repos/o/r/config", sid=sid, data=b'{"files": {}}')[0] == 403, "no CSRF token"
+assert edit("o/other", {"files": {"workflow.json": "{}"}})[0] == 404, "another tenant's repo is no repo"
+assert edit("o/r", {"files": ["workflow.json"]})[0] == 400 and edit("o/r", {"files": {"x": 1}})[0] == 400
+code, _, out = edit("o/r", {"files": {"workflow.json": "{}", "agents/x.md": None}})
+assert code == 201 and json.loads(out)["url"].endswith("/pull/9")
+assert proposed == [("o/r", {"workflow.json": "{}", "agents/x.md": None}, "alice")]
+dave = web.new_session("dave", ["o/r"])
+assert edit("o/r", {"files": {"workflow.json": "{}"}}, dave, body(req("GET", "/api/me", sid=dave))["csrf"])[0] == 403, "seeing is not steering"
+agent.propose = lambda *a: (_ for _ in ()).throw(RuntimeError("`plan` names the agent `ghost`"))
+code, _, out = edit("o/r", {"files": {"workflow.json": "{}"}})
+assert code == 422 and "ghost" in json.loads(out)["error"], "the check's own words"
+assert len(proposed) == 1
+cat = {s["name"]: s for s in body(req("GET", "/api/skills", sid=sid))["skills"]}
+assert sorted(cat) == ["changelog", "repo-recon", "security-review", "systematic-debugging",
+                       "verification-before-completion"], cat
+assert cat["security-review"]["slot"] == "check" and cat["changelog"]["source"] == "ours"
+assert cat["repo-recon"]["slot"] == "plan" and cat["repo-recon"]["source"] == "ours"
+assert cat["systematic-debugging"]["source"] == "obra/superpowers@8ca22db", "\"same\" repeats the row above"
+assert cat["systematic-debugging"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")
+assert all(s["description"] for s in cat.values())
+
 # POSTs need the session's CSRF token; logout ends the session server-side
 assert req("POST", "/auth/logout", sid=sid)[0] == 403
 assert req("POST", "/auth/logout", sid=sid, csrf="wrong")[0] == 403
@@ -534,6 +873,13 @@ assert b'class="hero"' in req("GET", "/")[2]   # / is the landing page; the port
 assert req("GET", "/styles.css")[0] == 200
 for bad in ("/agent.py", "/../agent.py", "/%2e%2e/agent.py", "/.env", "/ui/portal.html", "/..\\agent.py"):
     assert req("GET", bad)[0] == 404, bad
+# docs: flat docs/*.md as markdown, and every page ui/docs.html lists exists
+assert req("GET", "/docs/overview.md")[0] == 200 and b"# Overview" in req("GET", "/docs/overview.md")[2]
+for bad in ("/docs/../agent.py", "/docs/%2e%2e/CLAUDE.md", "/docs/nope.md", "/docs/overview.html", "/docs/"):
+    assert req("GET", bad)[0] == 404, bad
+import re  # noqa: E402
+for name in re.findall(r'\["([\w-]+)", "', (agent.HERE / "ui" / "docs.html").read_text(encoding="utf-8")):
+    assert req("GET", f"/docs/{name}.md")[0] == 200, name
 
 
 # the webhook over a real socket: HMAC first, 204 before any work, then enqueue

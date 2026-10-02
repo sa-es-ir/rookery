@@ -55,7 +55,7 @@
 main{min-width:0}
 .top{height:66px;border-bottom:1px solid var(--smoke);display:flex;align-items:center;gap:16px;
   padding:0 32px;position:sticky;top:0;background:var(--void);z-index:10}
-.top h1{font-size:18px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top h1{min-width:0;font-size:18px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .right{margin-left:auto;display:flex;gap:10px;align-items:center}
 .view{padding:32px;max-width:1000px}
 .intro{color:var(--fog);font-size:15px;font-weight:300;max-width:70ch;margin-bottom:28px}
@@ -105,6 +105,69 @@ main{min-width:0}
   font:400 12px/1.6 var(--mono);color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
   box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 
+/* runs | workflow — pill tag buttons; the view is read-only, so no CTA anywhere on it */
+.switch{display:flex;gap:6px}
+.switch a{border:1px solid var(--smoke);border-radius:8px;padding:5px 16px;font-size:14px;color:var(--fog)}
+.switch a:hover{color:#fff}
+.switch a[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
+
+/* workflow: the shared .flow diagram (styles.css) plus what only this view shows */
+.flow .who .from{font-size:12px;font-family:var(--mono);letter-spacing:0}
+.flow .who .from.repo{color:#fff}
+.flow .chips{display:flex;gap:6px;flex-wrap:wrap}
+.flow .say{margin:0;background:var(--panel);border-radius:8px;padding:12px 14px;max-height:200px;overflow:auto;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:var(--ash);white-space:pre-wrap;word-break:break-word}
+.wfacts{display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:var(--fog);margin-bottom:24px}
+.wfacts b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
+.broken{max-width:680px}
+.broken p{font-size:14px;color:var(--ash);margin:12px 0 10px}
+.broken pre{margin:0;background:var(--panel);border-radius:12px;padding:14px 16px;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
+  box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
+.idle{margin-top:24px;font-size:13px;color:var(--fog);font-weight:300;max-width:680px}
+
+/* propose a change: a Feature Card. Its Ember CTA opens a PR — the view's one primary action */
+.edit{background:var(--surface);border-radius:16px;padding:28px 32px;margin-top:40px;max-width:760px;
+  display:flex;flex-direction:column;gap:16px}
+.edit h3{font-size:20px;font-weight:400;letter-spacing:-.17px}
+.edit .note{font-size:14px;color:var(--fog);font-weight:300;margin-top:6px}
+.files{display:flex;gap:6px;flex-wrap:wrap}
+.files button{background:transparent;border:1px solid var(--smoke);border-radius:8px;padding:5px 12px;cursor:pointer;
+  font:400 12px var(--mono);letter-spacing:0;color:var(--fog)}
+.files button:hover{color:#fff}
+.files button[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
+.files button.dirty::after{content:"";display:inline-block;width:6px;height:6px;margin-left:8px;vertical-align:middle;
+  border-radius:9999px;background:rgb(253,137,37)}
+.files button.gone{text-decoration:line-through}
+.edit textarea,.edit input{width:100%;background:var(--panel);color:var(--ash);border:1px solid var(--smoke);
+  border-radius:8px;padding:14px 16px;font:400 13px/1.6 var(--mono);letter-spacing:0}
+.edit textarea{min-height:300px;resize:vertical;tab-size:2}
+.edit textarea:focus,.edit input:focus{outline:none;border-color:rgb(107,33,239);box-shadow:rgb(7,122,199) 0 0 0 1px}
+.edit textarea:disabled{opacity:.5}
+.edit .new{display:flex;gap:10px}
+.edit .new input{padding:10px 14px}
+.checks{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--fog)}
+.checks .bad{color:#ffb3a5}
+.edit .row{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.edit .row .cta{margin-left:auto}
+.edit .row .cta:disabled{filter:grayscale(1);opacity:.4;cursor:default}
+.edit .done{font-size:14px;color:var(--ash)}
+.edit .done a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
+.edit pre{margin:0;background:var(--panel);border-radius:12px;padding:14px 16px;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
+  box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
+.skill .add{align-self:flex-start}
+
+/* skill catalog */
+.cat{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.skill{background:var(--surface);border-radius:16px;padding:22px 24px;display:flex;flex-direction:column;gap:10px}
+.skill header{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.skill h3{font:400 14px var(--mono);letter-spacing:0;overflow-wrap:anywhere}
+.skill p{font-size:14px;font-weight:300;color:var(--ash)}
+.skill .src{margin-top:auto;font-size:12px;color:var(--fog);font-family:var(--mono);letter-spacing:0}
+.skill .src a{border-bottom:1px solid rgb(107,33,239)}
+.skill .src a:hover{color:#fff}
+
 /* sign in */
 .gate{min-height:100vh;display:grid;place-items:center;padding:24px;
   background:radial-gradient(126.99% 234.27% at 10.15% 142.35%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%),var(--void)}
@@ -128,6 +191,8 @@ main{min-width:0}
   .step .what{grid-column:2;grid-row:2}
   .gate .box{padding:36px 24px}
   .gate h1{font-size:40px}
+  .edit{padding:20px}
+  .edit .row .cta{margin-left:0;width:100%}
 }
 [hidden]{display:none!important}
 </style>
@@ -150,12 +215,14 @@ main{min-width:0}
       <h4>Repos · today</h4>
       <nav class="repos" id="repos"></nav>
     </div>
-    <div class="bottom"><span>@<b id="who"></b></span><button class="link" id="out">Sign out</button></div>
+    <div class="bottom"><span>@<b id="who"></b></span><a class="link" href="#skills">Skills</a><a class="link" href="docs.html">Docs</a>
+      <button class="link" id="out">Sign out</button></div>
   </aside>
 
   <main>
     <div class="top">
       <h1 id="title">Runs</h1>
+      <nav class="switch" id="switch" hidden><a href="#">Runs</a><a href="#workflow">Workflow</a></nav>
       <div class="right">
         <span class="toast" id="toast" role="status"></span>
         <span class="lbl err" id="paused" hidden title="The operator's PAUSED file is present">paused</span>
@@ -166,6 +233,23 @@ main{min-width:0}
       <p class="intro">Every plan, reply and implementation Rookery ran on your repos, newest first.
         A run's log is written as it happens, so a failure shows the task it stopped at.</p>
       <div class="runs" id="runs"></div>
+    </section>
+
+    <section class="view" id="flow" hidden>
+      <p class="intro">What Rookery runs on this repo's next issue: <span class="mono">.rookery/workflow.json</span>
+        as it is on the base branch right now, over the owner's <span class="mono">&lt;owner&gt;/.rookery</span>
+        defaults if the App is installed there, checked the way a job checks it at start. To change it,
+        propose a change below: Rookery opens a pull request, and nothing changes until someone merges it.</p>
+      <div id="wf"></div>
+    </section>
+
+    <section class="view" id="skills" hidden>
+      <p class="intro">The skills Rookery ships. A repo turns one on by listing it under a slot's
+        <span class="mono">skills</span> in <span class="mono">.rookery/workflow.json</span>, and Rookery
+        names it in that slot's prompt. A skill of the same name in the repo's own
+        <span class="mono">.rookery/skills/</span> or <span class="mono">.claude/skills/</span>, or in the
+        owner's <span class="mono">&lt;owner&gt;/.rookery</span>, wins. Pick a repo to add one to it.</p>
+      <div class="cat" id="cat"></div>
     </section>
 
     <section class="view" id="one" hidden>
@@ -274,18 +358,23 @@ function stepView(s){
   const t = {
     phase: () => ['Label ', h('span', {class: 'lbl'}, s.label)],
     base: () => ['Read CLAUDE.md and skills from ', h('span', {class: 'mono'}, s.branch),
-      h('small', null, s.sha.slice(0, 12) + (s.skills.length ? ' · ' + s.skills.join(', ') : ''))],
+      h('small', null, s.sha.slice(0, 12) + (s.skills.length ? ' · ' + s.skills.join(', ') : '')
+        + (s.org ? ' · owner defaults ' + s.org.replace(/@(\w{12})\w*$/, '@$1') : ''))],
     task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
     claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
     tick: () => ['Ticked task ' + s.i + ' in tasks.md'],
-    commit: () => ['Committed task ' + s.i, h('small', null, s.sha)],
+    commit: () => [s.step ? 'Committed step ' : 'Committed task ', s.step ? h('span', {class: 'mono'}, 'rk:' + s.step) : String(s.i),
+      h('small', null, s.sha)],
+    step: () => [s.mode === 'check' ? 'Check ' : 'Write step ', h('span', {class: 'mono'}, 'rk:' + s.agent)],
+    reverted: () => ['Reverted what check ', h('span', {class: 'mono'}, 'rk:' + s.agent), ' edited',
+      h('small', null, s.paths.join(', '))],
     push: () => ['Pushed ', h('span', {class: 'mono'}, s.branch)],
     // only a github.com URL becomes a link: the value came out of a CLI's stdout
     pr: () => /^https:\/\/github\.com\//.test(s.url)
       ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url],
     error: () => ['Stopped', h('pre', null, s.message)],
   }[s.what] || (() => [s.what]);
-  const cls = s.what === 'task' ? 'task' : s.what === 'error' || s.status === 'failed' ? 'bad'
+  const cls = s.what === 'task' || s.what === 'step' ? 'task' : s.what === 'error' || s.what === 'reverted' || s.status === 'failed' ? 'bad'
     : s.what === 'commit' || s.what === 'pr' ? 'good' : '';
   return h('div', {class: 'step ' + cls}, h('time', null, clock(s.at)), h('div', {class: 'rail'}, h('i')),
     h('div', {class: 'what'}, t()));
@@ -303,12 +392,258 @@ async function one(){
       h('div', {class: 'side-actions'}, h('span', {class: 'lbl ' + (LBL[r.status] || '')}, r.status), cancel),
       h('div', {class: 'state'}, where(r)),
       h('div', {class: 'facts'},
-        h('span', null, 'Started ', h('b', null, day(r.started))),
+        h('span', null, 'Started ',h('b', null, day(r.started))),
         r.ended && h('span', null, 'Ended ', h('b', null, day(r.ended))),
         h('span', null, 'Model cost ', h('b', null, usd(r.usd))),
         h('span', null, 'Claude calls ', h('b', null, String(r.steps.filter(s => s.what === 'claude').length))))),
     r.steps.length ? h('div', {class: 'steps'}, r.steps.map(stepView))
       : h('p', {class: 'empty'}, 'Nothing logged yet.'));
+}
+
+/* --- one repo's workflow. The GET is a git fetch plus the job's own checks, so it loads
+   on show(), not on the 4s poll. Every string in it came from the repo: h() only. --- */
+const SLOT = {
+  plan: ['Plan', 'rookery:planning', 'One session per issue. It may write agent-plans/<n>/; anything else it touches is reverted.',
+    () => ['a question → ', h('span', {class: 'lbl'}, 'rookery:awaiting-input'), ' → your reply → plans again, same session']],
+  task: ['Work the tasks', 'rookery:implementing', 'A fresh session per task; decisions.md is the only memory between them.',
+    () => ['next unticked task → ', h('code', null, 'task-done'), ' → Rookery ticks and commits · at most 15']],
+  review: ['Review the diff', 'rookery:reviewing', 'Once, before the push. Advisory: its verdict flags the run, it never blocks the push.'],
+};
+// an `after` step from workflow.json, by its mode
+const STEP = {
+  check: ['Check', 'rookery:implementing', 'Read-only: Rookery reverts any edit it leaves and flags the run. Its findings go into the PR body; changes-needed flags the run, it never blocks the push.'],
+  write: ['Write', 'rookery:implementing', 'May edit. Rookery commits its work as one commit; approving again skips it once that commit is on the branch.'],
+};
+// what the wire after a node says: tasks end ticked, a check either way, a write step done
+const past = s => !s ? 'every box ticked' : s.mode === 'check' ? 'either verdict' : 'STATUS: step-done';
+
+function slotNode([title, phase, note, again], s, w){
+  const ag = w.agents[s.agent] || {};
+  return h('div', {class: 'node'},
+    h('header', null, h('span', {class: 'kind'}, 'agent'), h('h3', null, title), h('span', {class: 'lbl'}, phase)),
+    h('div', {class: 'who'}, s.agent ? h('b', {title: (ag.description || '') + '\n\nfrom ' + (ag.source || '?')}, 'rk:' + s.agent) : 'no agent',
+      ' · ', s.model || 'default model', ' · ', origin(s.from, w)),
+    s.skills.length > 0 && h('div', {class: 'chips'}, s.skills.map(k => {
+      const d = w.skills[k] || {};
+      return h('span', {class: 'lbl', title: (d.description || '') + '\n\nfrom ' + (d.source || '?')}, 'rk:' + k);
+    })),
+    s.instructions && h('pre', {class: 'say'}, s.instructions),
+    h('p', {class: 'note'}, note),
+    again && h('p', {class: 'again'}, again()),   // a fresh element per render
+    again && h('span', {class: 'back'}));
+}
+
+// which layer set a slot: this repo's workflow.json, the owner's <owner>/.rookery, or Rookery
+const origin = (from, w) => from === 'repo'
+  ? h('span', {class: 'from repo', title: 'set by ' + w.config.dir + 'workflow.json in this repo'}, 'workflow.json')
+  : from === 'org' ? h('span', {class: 'from repo', title: "set by the owner's defaults, workflow.json in " + w.org.repo}, w.org.repo)
+  : h('span', {class: 'from', title: "Rookery's default"}, 'built-in');
+
+// the steps no workflow.json can change: a human gate (you) or Rookery itself (bot)
+const fixed = (kind, title, phase, note) => h('div', {class: 'node ' + kind},
+  h('header', null, h('span', {class: 'kind'}, kind === 'bot' ? 'rookery' : 'you'), h('h3', null, title),
+    phase && h('span', {class: 'lbl live'}, phase)),
+  h('p', {class: 'note'}, note));
+const wire = (text, cls) => h('div', {class: cls ? 'wire ' + cls : 'wire'}, text || '');
+const end = (cls, phase, note) => h('div', {class: 'node bot'}, h('span', {class: 'lbl ' + cls}, phase), h('p', {class: 'note'}, note));
+
+async function flow(){
+  const repo = state.repo, box = $('#wf');
+  box.replaceChildren(h('p', {class: 'empty'}, 'Reading the base branch…'));
+  let w;
+  try { w = await call('/api/repos/' + repo + '/workflow'); }
+  catch (e) { w = {error: null, failed: e.message}; }
+  if (state.repo !== repo || state.view !== 'flow') return;   // the user moved on meanwhile
+  if (w.failed) return box.replaceChildren(h('p', {class: 'empty'}, w.failed));
+  if (w.error) return box.replaceChildren(h('div', {class: 'broken'}, h('span', {class: 'lbl err'}, 'invalid'),
+    h('p', null, 'The next run on ' + repo + ' fails at start with:'), h('pre', null, w.error)),
+    ...(w.config ? [editor(w)] : []));   // no config yet: still cloning
+  const named = new Set([...Object.values(w.slots), ...w.after].flatMap(s => s.skills));
+  const idle = Object.keys(w.skills).filter(k => !named.has(k));
+  box.replaceChildren(
+    h('div', {class: 'wfacts'},
+      h('span', null, 'Base ', h('b', null, w.base)),
+      h('span', null, 'At ', h('b', null, w.sha.slice(0, 12))),
+      h('span', null, 'CLAUDE.md ', h('b', null, w.claude_md ? (w.claude_md / 1024).toFixed(1) + ' KB' : 'none')),
+      w.org && h('span', null, 'Owner defaults ', h('b', null, w.org.repo + ' @ ' + w.org.sha.slice(0, 12)))),
+    h('div', {class: 'legend', 'aria-hidden': 'true'},
+      h('span', null, h('i', {class: 'you'}), 'you'), h('span', null, h('i'), 'agent'),
+      h('span', null, h('i', {class: 'bot'}), 'rookery'), h('span', null, h('i', {class: 'loop'}), 'repeats')),
+    h('div', {class: 'flow'},
+      fixed('you', 'Label the issue', 'rookery:trigger', 'Someone with write access adds the label. Nothing runs before that.'),
+      wire('webhook'),
+      slotNode(SLOT.plan, w.slots.plan, w),
+      wire('STATUS: plan-ready'),
+      fixed('you', 'Approve the plan', 'rookery:awaiting-approval',
+        'An approve comment from someone with write access. Never the portal, never a model. Any other reply goes back to Plan.'),
+      wire('approve'),
+      slotNode(SLOT.task, w.slots.task, w),
+      ...w.after.flatMap((s, i) => [wire(past(w.after[i - 1])), slotNode(STEP[s.mode], s, w)]),
+      wire(past(w.after[w.after.length - 1])),
+      slotNode(SLOT.review, w.slots.review, w),
+      wire('either verdict'),
+      fixed('bot', 'Push and open a draft PR', null, 'To feature/issue-<n>, by Rookery. The agent never pushes, and nothing merges.'),
+      wire('', 'split'),
+      h('div', {class: 'fork'},
+        end('ok', 'rookery:done', w.after.some(s => s.mode === 'check') ? 'review-ok, and every check check-ok' : 'review-ok'),
+        end('err', 'rookery:error', 'changes-needed, or a failure at any step. approve again resumes at the first unticked task.'))),
+    idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
+      idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
+      '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
+    editor(w));
+}
+
+/* --- propose a change. Edits stay in this tab until "Open pull request"; then the server checks
+   them the way a job checks at start and opens a PR from the App. A human merges it — nothing
+   here writes to a branch Rookery reads from. File text goes in through .value, never markup. --- */
+const AGENT_KEYS = ['name', 'description', 'tools', 'model', 'skills'], MODELS = ['haiku', 'sonnet', 'opus'];
+const NAME = /^[a-z0-9][a-z0-9-]*$/;
+const ed = {repo: null, files: {}, edits: {}, tab: 'workflow.json', made: null, error: null, add: null};
+const now = p => p in ed.edits ? ed.edits[p] : ed.files[p] ?? null;   // null: not there / deleted
+const changed = () => Object.keys(ed.edits).filter(p => ed.edits[p] !== (ed.files[p] ?? null));
+
+// the §3.2 allowlist and the shape checks, while you type. The server runs the real ones again.
+function problems(p, text){
+  if (text == null) return [];
+  if (p === 'workflow.json'){
+    let j;
+    try { j = JSON.parse(text); } catch (e) { return ['Not valid JSON: ' + e.message]; }
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return ['The top level is an object.'];
+    const out = Object.keys(j).filter(k => !['plan', 'task', 'review', 'after'].includes(k))
+      .map(k => '`' + k + '` is not a slot: only plan, task, review, after.');
+    if ('after' in j && (!Array.isArray(j.after) || j.after.length > 5)) out.push('`after` is a list of at most 5 steps.');
+    return out;
+  }
+  const name = p.slice('agents/'.length, -'.md'.length), out = [];
+  if (!NAME.test(name)) out.push('An agent name is lowercase letters, digits and dashes.');
+  const m = text.match(/^\s*---[ \t]*\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return [...out, 'An agent starts with a --- frontmatter block.'];
+  const lines = m[1].split(/\r?\n/), ind = Math.min(...lines.filter(l => l.trim()).map(l => l.match(/^\s*/)[0].length));
+  for (const raw of lines){
+    const line = raw.slice(ind);   // like the server: a uniformly indented block is the top level
+    if (!line.trim() || /^[\s#]/.test(line) || line.startsWith('- ') || line === '-') continue;
+    const key = line.split(':')[0].trim(), val = line.slice(line.indexOf(':') + 1).trim().replace(/^['"]|['"]$/g, '');
+    if (!AGENT_KEYS.includes(key)) out.push('`' + key + '` is not allowed — only ' + AGENT_KEYS.join(', ') + '.');
+    else if (key === 'name' && val !== name) out.push('`name` must be the file name, ' + name + '.');
+    else if (key === 'model' && !MODELS.includes(val)) out.push('`model` is one of ' + MODELS.join(', ') + '.');
+  }
+  return out;
+}
+
+// the catalog's "Add to <slot>": the effective skills of that slot plus this one, in workflow.json
+function addSkill(w){
+  const {slot, skill} = ed.add;
+  ed.add = null;
+  let j;
+  try { j = JSON.parse(now('workflow.json') || '{}'); } catch { j = null; }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return toast('workflow.json does not parse; add rk:' + skill + ' by hand.');
+  const s = j[slot] = j[slot] && typeof j[slot] === 'object' ? j[slot] : {};
+  // seeded from the effective slot, so an owner default's skills are kept, not replaced
+  s.skills = Array.isArray(s.skills) ? s.skills : [...((w.slots || {})[slot] || {skills: []}).skills];
+  if (!s.skills.includes(skill)) s.skills.push(skill);
+  ed.edits['workflow.json'] = JSON.stringify(j, null, 2) + '\n';
+  ed.tab = 'workflow.json';
+  requestAnimationFrame(() => $('#edit') && $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'}));
+}
+
+function editor(w){
+  if (ed.repo !== w.repo) Object.assign(ed, {repo: w.repo, edits: {}, tab: 'workflow.json', made: null, error: null});
+  ed.files = w.config.files;
+  if (ed.add && ed.add.repo === w.repo) addSkill(w);
+  const dir = w.config.dir;
+  const tabs = h('div', {class: 'files', role: 'tablist'}), body = h('div'), checks = h('div', {class: 'checks'});
+  const said = h('div'), row = h('div', {class: 'row'});
+  const card = h('div', {class: 'edit', id: 'edit'},
+    h('div', null, h('h3', null, 'Propose a change'),
+      h('p', {class: 'note'}, 'Rookery opens a pull request on ' + w.repo + ' with the files you change here, after checking them the way a job checks at start. Nothing steers a run until someone merges it. Opening one needs write access to ' + w.repo + '.')),
+    tabs, body, checks, said, row);
+  const go = q => { ed.tab = q; draw(); };
+
+  // everything but the open file's textarea, which typing must not rebuild (undo, caret, scroll)
+  function status(){
+    const p = ed.tab, text = p === '+' ? null : now(p), dirty = changed();
+    const paths = [...new Set(['workflow.json', ...Object.keys(ed.files), ...Object.keys(ed.edits)])];
+    const issues = p === '+' ? [] : problems(p, text);
+    tabs.replaceChildren(...paths.map(q => h('button', {role: 'tab', 'aria-current': q === p, onclick: () => go(q),
+        class: [dirty.includes(q) && 'dirty', now(q) == null && q !== 'workflow.json' && 'gone'].filter(Boolean).join(' ') || null},
+        dir + q)),
+      h('button', {role: 'tab', 'aria-current': p === '+', onclick: () => go('+')}, '+ agent'));
+    checks.replaceChildren(...(p === '+' ? [] : text == null && p in ed.files ? ['Deleted in this pull request.']
+      : issues.length ? issues.map(i => h('span', {class: 'bad'}, i))
+      : text ? [p === 'workflow.json' ? 'Parses. Agent and skill names are checked when you open the pull request.' : 'Frontmatter keys are allowed.']
+      : ['No ' + dir + 'workflow.json yet: every slot is the owner\'s or Rookery\'s default.']));
+    said.replaceChildren(...[ed.error && h('pre', null, ed.error),
+      ed.made && h('p', {class: 'done'}, 'Opened ', /^https:\/\/github\.com\//.test(ed.made)
+        ? h('a', {href: ed.made, target: '_blank', rel: 'noopener'}, ed.made.replace('https://github.com/', '')) : ed.made,
+        '. It takes effect once merged.')].filter(Boolean));
+    const bad = dirty.some(q => problems(q, ed.edits[q]).length);
+    row.replaceChildren(...[
+      p.startsWith('agents/') && (text == null
+        ? h('button', {class: 'link', onclick: () => { delete ed.edits[p]; draw(); }}, 'Restore')
+        : p in ed.files ? h('button', {class: 'link', onclick: () => { ed.edits[p] = null; draw(); }}, 'Delete agent')
+        : h('button', {class: 'link', onclick: () => { delete ed.edits[p]; go('workflow.json'); }}, 'Discard')),
+      dirty.length > 0 && h('button', {class: 'link', onclick: () => {
+        Object.assign(ed, {edits: {}, error: null}); go(ed.tab in ed.files || ed.tab === '+' ? ed.tab : 'workflow.json'); }}, 'Discard all'),
+      h('button', {class: 'cta', disabled: !dirty.length || bad, onclick: e => submit(e.target, dirty)},
+        'Open pull request' + (dirty.length ? ' · ' + dirty.length + (dirty.length > 1 ? ' files' : ' file') : ''))].filter(Boolean));
+  }
+
+  async function submit(btn, dirty){
+    btn.disabled = true;
+    btn.textContent = 'Checking and opening…';
+    try {
+      const r = await call('/api/repos/' + w.repo + '/config', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({files: Object.fromEntries(dirty.map(q => [q, ed.edits[q]]))})});
+      Object.assign(ed, {made: r.url, error: null, edits: {}});
+      if (!(ed.tab in ed.files)) ed.tab = 'workflow.json';
+    } catch (err) { Object.assign(ed, {error: err.message, made: null}); }
+    draw();
+  }
+
+  function draw(){
+    const p = ed.tab;
+    if (p === '+'){
+      const name = h('input', {placeholder: 'agent name, e.g. security', 'aria-label': 'New agent name'});
+      const add = () => {
+        const n = name.value.trim(), q = 'agents/' + n + '.md';
+        if (!NAME.test(n)) return toast('An agent name is lowercase letters, digits and dashes.');
+        if (now(q) == null) ed.edits[q] = '---\nname: ' + n + '\ndescription: >\n  What this agent is for, in one line.\nmodel: sonnet\n---\n\nYou ...\n';
+        go(q);
+      };
+      name.onkeydown = e => { if (e.key === 'Enter') add(); };
+      body.replaceChildren(h('div', {class: 'new'}, name, h('button', {class: 'frost', onclick: add}, 'Add')));
+      status();
+      return name.isConnected && name.focus();
+    }
+    const text = now(p), area = h('textarea', {spellcheck: 'false', 'aria-label': dir + p, disabled: text == null && p in ed.files,
+      placeholder: p === 'workflow.json' ? '{\n  "task": {"skills": ["verification-before-completion"]}\n}' : null});
+    area.value = text ?? '';
+    area.oninput = () => {
+      // emptying a file that was never there is no change at all
+      if (area.value === '' && !(p in ed.files)) delete ed.edits[p]; else ed.edits[p] = area.value;
+      status();
+    };
+    body.replaceChildren(area);
+    status();
+  }
+
+  draw();
+  return card;
+}
+
+/* --- the catalog: static, from skills/ --- */
+async function catalog(){
+  const d = await call('/api/skills');
+  $('#cat').replaceChildren(...d.skills.map(s => h('div', {class: 'skill'},
+    h('header', null, h('h3', null, 'rk:' + s.name), s.slot && h('span', {class: 'lbl'}, s.slot)),
+    h('p', null, s.description),
+    // check/write skills ride on an `after` step, which needs an agent: written by hand in the editor
+    state.repo && ['plan', 'task', 'review'].includes(s.slot) && h('button', {class: 'frost add', onclick: () => {
+      ed.add = {repo: state.repo, slot: s.slot, skill: s.name};
+      location.hash = '#workflow';
+    }}, 'Add to ' + s.slot + ' on ' + state.repo),
+    h('div', {class: 'src'}, s.url && /^https:\/\/github\.com\//.test(s.url)
+      ? h('a', {href: s.url, target: '_blank', rel: 'noopener'}, s.source) : s.source || ''))));
 }
 
 async function stop(r){
@@ -322,13 +657,22 @@ async function stop(r){
 
 function toast(msg){ $('#toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').textContent = '', 6000); }
 
-/* --- navigation: #run/<id> is one run, anything else the list --- */
+/* --- navigation: #run/<id> is one run, #workflow the picked repo's workflow,
+   #skills the catalog, anything else the list --- */
 function show(){
   const m = location.hash.match(/^#run\/(\d+)$/);
   state.run = m ? +m[1] : null;
-  if (!m && location.hash) history.replaceState(null, '', location.pathname);
-  $('#list').hidden = !!m; $('#one').hidden = !m;
-  if (!m) $('#title').textContent = state.repo || 'Runs';
+  const v = state.view = m ? 'one' : location.hash === '#skills' ? 'skills'
+    : location.hash === '#workflow' && state.repo ? 'flow' : 'list';
+  if (v === 'list' && location.hash) history.replaceState(null, '', location.pathname);
+  for (const id of ['list', 'one', 'flow', 'skills']) $('#' + id).hidden = id !== v;
+  const sw = $('#switch');
+  sw.hidden = !state.repo || v === 'one' || v === 'skills';
+  sw.children[0].setAttribute('aria-current', v === 'list');
+  sw.children[1].setAttribute('aria-current', v === 'flow');
+  if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : state.repo || 'Runs';
+  if (v === 'flow') flow();
+  if (v === 'skills') catalog().catch(e => toast(e.message));
   refresh();
 }
 
@@ -336,7 +680,7 @@ let busy = false;
 async function refresh(){
   if (busy || !state.me) return;
   busy = true;
-  try { await repos(); await (state.run ? one() : list()); }
+  try { await repos(); await (state.view === 'one' ? one() : state.view === 'list' ? list() : null); }
   catch (e) { if (e.message !== 'signed out') toast(e.message); }
   finally { busy = false; }
 }

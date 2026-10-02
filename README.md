@@ -87,7 +87,7 @@ issue is. `decisions.md` is the only memory that crosses between them.
 
 ### Two named roles
 
-`agent.py:AGENTS` defines two, passed to the CLI as `--agents`/`--agent`:
+`agents/*.md` defines two, passed to the CLI as plugin agents (`--agent rk:<name>`):
 
 | Role | Runs | Can it write? |
 | --- | --- | --- |
@@ -103,7 +103,55 @@ stranded in a local worktree. A `changes-needed` verdict only lands
 `rookery:error` so somebody looks. Blocking and self-fixing variants are specced
 but deliberately unbuilt.
 
-To split models by role, add `"model": "opus"` to a role in `AGENTS`.
+Each role sets its model in its frontmatter (`model: opus`); tasks run on sonnet.
+
+### Per-repo workflow
+
+A repo steers its runs from its **base branch** — never from the branch the agent
+is editing, so a change takes effect only once a human merges it:
+
+- `CLAUDE.md` (root) and `.claude/skills/` work as they do for the repo's own
+  developers. Nested `CLAUDE.md` files are not read.
+- `.rookery/skills/<name>/SKILL.md` are skills for the bot only; they win over a
+  `.claude/skills` skill, which wins over the built-in catalog
+  ([skills/](skills/README.md)), of the same name.
+- `.rookery/workflow.json` picks the agent, the skills and extra instructions
+  per slot. Anything left out keeps the default: today's pipeline, no skills.
+
+- `.rookery/agents/<name>.md` are the repo's own agents, in the same format as
+  `agents/*.md`. One named `planmaker` or `reviewer` replaces that role. Frontmatter
+  may carry only `name`, `description`, `tools`, `model` and `skills`.
+- **Owner defaults:** an `<owner>/.rookery` repo with the App installed on it holds
+  `workflow.json`, `agents/` and `skills/` at its root, for every repo of that owner.
+  A repo's own config wins over it, key by key in a slot; a repo's own `after` replaces
+  the owner's whole list. It is read from its own base branch, like the rest.
+
+```json
+{
+  "plan":   { "skills": ["repo-recon"], "instructions": "Every schema change gets its own task." },
+  "task":   { "skills": ["verification-before-completion"] },
+  "after":  [
+    { "agent": "reviewer", "mode": "check", "skills": ["security-review"] },
+    { "agent": "docs",     "mode": "write", "skills": ["changelog"] }
+  ],
+  "review": { "agent": "reviewer" }
+}
+```
+
+`after` holds up to 5 steps that run in order between the last task and the review,
+each with its own agent:
+
+| Mode | May edit | Replies | Then |
+| --- | --- | --- | --- |
+| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings go into the PR body under `## <agent>`; `changes-needed` sets `rookery:error` but never blocks the push. Runs again on every `approve` |
+| `write` | yes | `step-done` / `failed` | Rookery commits `#<n> step <agent>`; `approve` again skips a step whose commit is on the branch. `failed` stops the run like a failed task |
+
+A skill runs only when a slot names it. An invalid file, or a name that matches
+no skill or agent, fails the run at start with a comment — Rookery never quietly
+falls back to the default. The draft PR's footer names the base commit the run
+read all of this at, and the steps it ran. A PR whose branch changes `.rookery/`,
+`.claude/` or the root `CLAUDE.md` opens with a warning that it changes agent
+configuration.
 
 ## Setup
 
@@ -141,7 +189,7 @@ Only people with write access to the repo can move an issue along, and approval 
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
 `git push` and `gh`; it never publishes.
 
-Each repo gets 10 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
+Each repo gets 30 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
 override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
 new call. Hitting either comments on the issue and sets `rookery:error`.
 
@@ -171,6 +219,16 @@ URL. You see the repos of your own installations of the App, and for each:
   push, PR, the error;
 - **Cancel** on a running job (write access needed): the `claude` call is killed and the
   issue gets the error comment and `rookery:error`, like any failure. `approve` resumes it.
+- **Workflow**: the pipeline the repo's next issue gets — agent, model, skills and
+  instructions per slot, read from `.rookery/workflow.json` on base just now and checked
+  the way a job checks it, so a broken config shows the error the job would fail with.
+  **Propose a change** edits `.rookery/workflow.json` and `.rookery/agents/*.md` (on
+  `<owner>/.rookery`: the root's, the owner defaults) and opens a pull request from the
+  App, after running the same checks on it. Write access needed; nothing changes until
+  someone merges it.
+- **Skills** (sidebar): the built-in catalog, with each skill's slot and pinned source.
+  With a repo picked, a plan/task/review skill has **Add to …**, which puts it in that
+  slot in the editor.
 
 There is no approve button. Approval stays an `approve` comment on the issue.
 

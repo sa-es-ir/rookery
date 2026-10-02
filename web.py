@@ -20,12 +20,14 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
 from contextlib import closing
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import agent
 from agent import log
@@ -38,6 +40,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", f"http://127.0.0.1:{agent.PORT}").rstr
 SECURE = PUBLIC_URL.startswith("https://")  # the Secure cookie flag; off only over plain http
 TTL = 8 * 3600  # a session, and GitHub's own lifetime for a user token
 UI = agent.HERE / "ui"
+DOCS = agent.HERE / "docs"  # product docs as markdown, rendered by ui/docs.html; flat like ui/
 MAX_BODY = 26 * 1024 * 1024  # GitHub caps a webhook payload at 25 MB
 HEADERS = [("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"),
            ("Referrer-Policy", "same-origin")]
@@ -186,6 +189,54 @@ def run(s, job):
             "steps": [{"at": at, "what": w, **d} for at, w, d in steps]}
 
 
+def workflow(s, repo):
+    """A visible repo's effective workflow, from agent.steer(): the job's own validator, on a
+    freshly fetched base, into a throwaway plugin dir. None for a repo the session can't see:
+    its custom personas and instructions are that tenant's."""
+    if repo not in visible(s):
+        return None
+    base, path = agent.REPOS[repo], agent.clone_dir(repo)
+    out = {"repo": repo, "base": base, "error": None}
+    if not base or not path.exists():
+        return {**out, "error": "Rookery is still cloning this repo. Try again in a minute."}
+    with tempfile.TemporaryDirectory() as plug:
+        try:
+            got = agent.steer(repo, path, base, Path(plug))
+        except Exception as e:   # whatever would fail the next job at start
+            got = {"error": str(e)}
+    # the editor's starting point, even (above all) when the config does not validate
+    out["config"] = {"dir": agent.config_dir(repo), "files": agent.config_files(repo)}
+    if "error" in got:
+        return {**out, "error": got["error"]}
+    model = lambda a: got["agents"][a].get("model") if a else "sonnet"   # claude()'s choice, same rule
+    wf, owf = got["workflow"], got["org_workflow"] or {**agent.WORKFLOW, "after": []}
+    # which layer set it: the repo's own workflow.json, its owner's .rookery, or the built-in
+    origin = lambda mine, owners, builtin: "repo" if mine != owners else "org" if owners != builtin else "built-in"
+    return {**out, "sha": got["sha"], "claude_md": len(got["claude_md"].encode()), "org": got["org"],
+            "slots": {k: {**wf[k], "model": model(wf[k]["agent"]), "from": origin(wf[k], owf[k], v)}
+                      for k, v in agent.WORKFLOW.items()},
+            "after": [{**v, "model": model(v["agent"]), "from": origin(wf["after"], owf["after"], [])}
+                      for v in wf["after"]],
+            "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n]}
+                       for n, m in got["agents"].items()},
+            "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
+
+
+def catalog():
+    """skills/: each SKILL.md's description, plus slot and source from the README's table,
+    which is where the pinned upstream commit is written down. "same" repeats the row above."""
+    rows, src = {}, ""
+    for m in re.finditer(r"^\| `([\w-]+)` \| (\w+) \| (.+?) \|$", (agent.HERE / "skills" / "README.md")
+                         .read_text(encoding="utf-8"), re.M):
+        src = src if m.group(3) == "same" else m.group(3)
+        link = re.search(r"\[([^]]+)]\((https://[^)]+)\)", src)
+        rows[m.group(1)] = {"slot": m.group(2), "source": link.group(1) if link else src,
+                            "url": link and link.group(2)}
+    return [{"name": p.parent.name, **rows.get(p.parent.name, {"slot": None, "source": None, "url": None}),
+             "description": agent.frontmatter(p, agent.SKILL_KEYS, p.parent.name).get("description", "")}
+            for p in sorted((agent.HERE / "skills").glob("*/SKILL.md"))]
+
+
 # --- routing -----------------------------------------------------------------
 
 def route(method, url, headers, body=b""):
@@ -211,6 +262,28 @@ def route(method, url, headers, body=b""):
             return js(200, {"login": s["login"], "csrf": s["csrf"], "app": agent.ME.removesuffix("[bot]")})
         if method == "GET" and path == "/api/repos":
             return js(200, repos(s))
+        if method == "GET" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/workflow", path)):
+            w = workflow(s, m.group(1))
+            return js(200, w) if w else js(404, {"error": "no such repo"})
+        if method == "POST" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/config", path)):
+            repo = m.group(1)
+            if repo not in visible(s):
+                return js(404, {"error": "no such repo"})
+            # what steers a repo is changed only by a PR its writers merge; proposing one needs write too
+            if not agent.can_write(repo, s["login"]):
+                return js(403, {"error": f"changing the config needs write access to {repo}"})
+            try:
+                files = json.loads(body)["files"]
+                if not isinstance(files, dict) or not all(isinstance(t, (str, type(None))) for t in files.values()):
+                    raise TypeError
+            except (ValueError, KeyError, TypeError):
+                return js(400, {"error": 'expected {"files": {"<path>": "<text>" or null}}'})
+            try:
+                return js(201, {"url": agent.propose(repo, files, s["login"])})
+            except Exception as e:   # the check the next job would fail, or git/gh saying no
+                return js(422, {"error": str(e)})
+        if method == "GET" and path == "/api/skills":
+            return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":
             return js(200, {"runs": runs(s, urllib.parse.parse_qs(u.query).get("repo", [None])[0])})
         if method == "GET" and (m := re.fullmatch(r"/api/runs/(\d+)", path)):
@@ -228,6 +301,9 @@ def route(method, url, headers, body=b""):
             return js(202, {"cancelled": r["id"]})
         return js(404, {"error": "no such endpoint"})
 
+    if method == "GET" and (m := re.fullmatch(r"/docs/([\w-]+\.md)", path)) and (DOCS / m.group(1)).is_file():
+        return 200, [("Content-Type", "text/markdown; charset=utf-8"), ("Cache-Control", "no-cache")], \
+            (DOCS / m.group(1)).read_bytes()
     if method == "GET":
         name = "index.html" if path == "/" else path[1:]
         # a flat whitelist of ui/ files: no subdirectories, so no way out of ui/

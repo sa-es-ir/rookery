@@ -59,9 +59,9 @@ under uid 0, which is what `agent.py` uses.
 
 ```bash
 scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
-scp -r agents root@SERVER_IP:/opt/rookery/
+scp -r agents skills docs root@SERVER_IP:/opt/rookery/
 ssh root@SERVER_IP mkdir -p /opt/rookery/ui
-scp ui/index.html ui/portal.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
 scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
@@ -161,6 +161,40 @@ JSON with a `"result"` field means the whole chain works — this is the exact c
 `/exit`. That writes `~/.claude.json`, the onboarding flag the credentials file does not
 cover.
 
+### RTK — optional, server, root then rookery
+
+[RTK](https://github.com/rtk-ai/rtk) is a `PreToolUse` hook that compacts command output
+(`git status`, `ls`, test runners) before the agent reads it. `--setting-sources user` still
+loads the `rookery` user's own settings, so one hook covers every tenant. The musl build runs
+on the no-AVX2 CPU.
+
+```bash
+# root: a binary the agent can't replace
+v=v0.50.0; cd "$(mktemp -d)"
+curl -fsSLO https://github.com/rtk-ai/rtk/releases/download/$v/rtk-x86_64-unknown-linux-musl.tar.gz
+curl -fsSLO https://github.com/rtk-ai/rtk/releases/download/$v/checksums.txt
+sha256sum -c --ignore-missing checksums.txt && tar xzf rtk-*.tar.gz
+install -o root -g root -m 755 rtk /usr/local/bin/rtk
+
+# rookery: never pass publishing commands through the hook; telemetry stays off (the default)
+rtk config --create
+sed -i 's/^exclude_commands = \[\]/exclude_commands = ["git push", "gh"]/' ~/.config/rtk/config.toml
+cat > ~/.claude/settings.json <<'EOF'
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash",
+    "hooks": [ { "type": "command", "command": "/usr/local/bin/rtk hook claude" } ] } ] } }
+EOF
+```
+
+**Don't use `rtk init -g`.** It also writes instructions into `~/.claude/CLAUDE.md`, which
+every tenant's agent would load. The hook is enough.
+
+**The exclusions are only one of two guards.** Deny rules match the command after the hook
+rewrites it. Without the exclusions, `git push` becomes `rtk git push` and *runs* (spike,
+2 October 2026). `claude()` also denies `rtk git push` / `rtk gh`, so a config reset doesn't
+reopen the hole. Keep both.
+
+`rtk gain` shows the savings. To remove it: delete `~/.claude/settings.json`.
+
 ## 8. Target repos — GitHub, not the server
 
 There is no repo list to write. At startup `sync()` asks the App for every repository it
@@ -191,7 +225,7 @@ GH_TOKEN=$(tok OWNER/REPO) gh issue list --repo OWNER/REPO
 ```
 
 Check `/opt/rookery/.env`: note `WEBHOOK_SECRET` for step 10. Optional: `RUN_CAP` (default
-10 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
+30 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
 `$WORKSPACE/rookery.db`:
 
 ```bash
@@ -242,7 +276,9 @@ as **root** (`rookery` is not a sudoer):
 
 ```bash
 scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
-chown rookery:rookery /opt/rookery/agent.py /opt/rookery/web.py  # server, root
+scp -r agents skills docs root@SERVER_IP:/opt/rookery/           # your machine, when they changed
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css root@SERVER_IP:/opt/rookery/ui/   # likewise
+chown -R rookery:rookery /opt/rookery                            # server, root
 systemctl restart rookery                                        # server, root
 ```
 
