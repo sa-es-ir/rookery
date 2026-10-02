@@ -11,8 +11,9 @@ Lets a tenant change *how* Rookery works on their repo without weakening
    pipeline: planmaker → approve → tasks → reviewer → PR.
 
 **Status:** spikes done (§8, CLI 2.1.110 on the server, 1 October 2026).
-`--strict-mcp-config` is merged (PR #7, §9.0). A0 is built and in PR #8, not yet
-deployed (§9.1). Phases A–C are not started. **Decided:** tenant configuration
+`--strict-mcp-config` (PR #7, §9.0) and A0 (PR #8, §9.1) are merged, and both
+were deployed together on 2 October 2026 and smoke-tested (§8). Phases A–C are
+not started. **Decided:** tenant configuration
 lives in the repo under `.rookery/` (§1.2), and org defaults wait for Phase C.
 The decisions still open are §9.2, §9.3 and §9.5.
 
@@ -463,6 +464,16 @@ So the appended copy replaces the worktree's, works alongside `--agent`, and the
 `rk` plugin loads from `--plugin-dir=<path>` (`init.plugins`, `rk:probe-skill`).
 Without the header it is slightly weaker than native; `claude()` sends the header.
 
+**Smoke test after the A0 deploy** (2 October 2026, production, `rookery-throwaway-2`
+issue #4 → draft PR #5; plan + 1 task + review, about $0.29). Base `main` carried a
+`CLAUDE.md` with a codeword rule, a `.claude/skills/smoke-check` skill, and a
+`.claude/settings.json` `SessionStart` hook touching `/tmp/rookery-smoke-hook-ran`.
+Both the plan and the implement job logged their own `base` step (sha, `["smoke-check"]`);
+`plan.md` ended with the codeword, so the appended `CLAUDE.md` reached the agent; the
+hook marker never appeared across all three calls; each job's `plugins/…/job-<id>` was
+gone after it finished. The server had still been running pre-PR-#7 code, so
+`--strict-mcp-config` went live in this same deploy.
+
 ---
 
 ## 9. Open decisions
@@ -472,7 +483,7 @@ Without the header it is slightly weaker than native; `claude()` sends the heade
    agent, and stops a repo's `.mcp.json` from spawning (S4e-E). Restricting the
    CLI login account's connectors is a separate backstop, not a replacement.
 1. ~~Turn off native project settings (`--setting-sources user`)?~~ **Done:
-   built as A0 (PR #8), deploy pending.** It closes "the agent edits its own
+   A0, PR #8, deployed 2 October 2026.** It closes "the agent edits its own
    instructions mid-run" and pins every steering input to reviewed base (§1.3).
    It is not a sandbox: repo code still runs whenever the tests do. The cost is
    losing nested `CLAUDE.md` files.
@@ -490,7 +501,7 @@ Without the header it is slightly weaker than native; `claude()` sends the heade
 |---|---|---|
 | 0 | ~~Spikes~~ done (§8) | n/a |
 | 0.5 | ~~`--strict-mcp-config` in `claude()` (§9.0)~~ **merged, PR #7** | the flag is in every `claude` argv |
-| A0 | **Built, PR #8, not deployed** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
+| A0 | **Done: PR #8, deployed and smoke-tested 2 October 2026** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
 | A | Catalog in `skills/`, `.rookery/workflow.json` (slots, skills, `instructions`), skills named in slot prompts, agents moved to the plugin as `rk:<name>`, run-log fields, portal Workflow view and catalog | a bad config, a bad name or an unknown agent fails at start; unknown frontmatter keys rejected; only `skills/` + `agents/` assembled; the workflow API 404s an unseen repo and uses the job's validator |
 | B | `.rookery/agents/`, `after` steps (check/write), `MAX_STEPS`, PR sections, config-change warning | a check step's edits reverted; write-step resume via commit subject; STATUS set enforced per mode |
 | C | Portal editing via PR, agent editor, org defaults | edits need `can_write()`; nothing written except through a PR |
