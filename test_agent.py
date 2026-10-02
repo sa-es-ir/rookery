@@ -20,6 +20,11 @@ assert not agent.APPROVE.match("approver should look first")
 m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
 assert m and m.group(1) == "questions"
 assert not agent.MARKER.search("the STATUS: plan-ready marker must be on its own line")
+for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-ok  "):   # prod: haiku bolds it
+    m = agent.MARKER.search(f"fine\n{line}\nmore")
+    assert m and m.group(1) == "review-ok", line
+    assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
+assert not agent.MARKER.search("**STATUS: review-ok** but see below")
 
 # webhook signature
 raw = b'{"action":"opened"}'
@@ -288,6 +293,19 @@ assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
 # deny rules see the hook-rewritten command: the RTK forms must be denied too
 assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
+# a task resumes its session on approve-again; the review and after steps start one per job
+sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
+real_caps, agent.check_caps = agent.check_caps, lambda repo: None   # caps are tested above
+def sid(**k):
+    argv.clear(), agent.claude(sc, "p", key="review", **k)
+    return argv[0][argv[0].index("--session-id") + 1]
+agent.active["o/sid"] = {"job": 1, "cancel": None}
+assert sid() == sid(), "tasks keep resuming"
+first = sid(per_job=True)
+agent.active["o/sid"] = {"job": 2, "cancel": None}
+assert sid(per_job=True) not in (first, sid()), "a new job is a new session"
+del agent.active["o/sid"]
+agent.check_caps = real_caps
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")
 agent.sh = boom
@@ -479,8 +497,9 @@ agent.worktree = lambda c: wt
 (wt / "CLAUDE.md").write_text("Use spaces.\n", encoding="utf-8")   # the branch changes what steers the agent
 git(wt, "add", "-A"), git(wt, "commit", "-qm", "#3 task 1: one")
 said, prs, phases, calls = [], [], [], []
-def fake_claude(c, prompt, key="plan", resume=False, slot="task"):
+def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False):
     calls.append(key)
+    assert per_job, "the review and after steps never resume an earlier job's session"
     if key == "step-sec":
         assert prompt.startswith("Check the finished work") and slot["agent"] == "sec"
         (wt / "CLAUDE.md").write_text("tampered\n", encoding="utf-8")
@@ -494,8 +513,18 @@ def fake_claude(c, prompt, key="plan", resume=False, slot="task"):
 real_gh, real_claude = agent.gh, agent.claude
 agent.claude, agent.comment = fake_claude, lambda c, body: said.append(body)
 agent.set_phase = lambda c, phase: phases.append(phase)
-agent.gh = lambda repo, *a, input=None, **k: (prs.append(input) or "https://github.com/o/r/pull/1"
-                                              if a[:2] == ("pr", "create") else json.dumps({"title": "t"}))
+pr_open, pr_said = [], []
+def fake_gh(repo, *a, input=None, **k):
+    if a[:2] == ("pr", "view"):   # open once created: a second approve must not create again
+        return "https://github.com/o/r/pull/1" if pr_open else ""
+    if a[:2] == ("pr", "create"):
+        assert not pr_open, "gh refuses a second PR for the branch"
+        pr_open.append(1)
+        return prs.append(input) or "https://github.com/o/r/pull/1"
+    if a[:2] == ("pr", "comment"):
+        return pr_said.append((a[2], input)) or ""
+    return json.dumps({"title": "t"})
+agent.gh = fake_gh
 agent.sh = lambda *a, **k: "" if a[:2] == ("git", "push") else real_sh(*a, **k)
 agent.implement(pc)
 subjects = git(wt, "log", "--format=%s", "origin/main..HEAD").splitlines()
@@ -513,9 +542,11 @@ assert phases[-1] == "rookery:error" and "Changes wanted by sec" in said[-1], "a
 calls.clear()
 agent.implement(pc)
 assert calls == ["step-sec", "review"], calls
+assert len(prs) == 1 and pr_said[0][0] == "https://github.com/o/r/pull/1" and "## sec" in pr_said[0][1], \
+    "the re-run's sections go on the open PR"
 # STATUS is held to the step's mode
 for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "failed")]:
-    agent.claude = lambda c, p, key="plan", resume=False, slot="task": (status, "x")
+    agent.claude = lambda c, p, key="plan", resume=False, slot="task", **k: (status, "x")
     try:
         agent.after_steps(pc, wt, [{**agent.STEP, "agent": "z", "mode": mode}])
         raise AssertionError(f"{mode} accepted {status}")

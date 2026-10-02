@@ -196,3 +196,18 @@ plan/task/review skills; a check/write skill needs an `after` step written by ha
 - **Revisit when:** tenants open several config PRs in a row, or ask to edit skills here.
   Reusing the user's open `rookery/config-*` PR, and serving the built-in persona text to
   the editor, are the next steps.
+
+## 13. A PR opened by a re-run carries only that job's sections
+
+**Decided 2 October 2026** (B/C smoke test, skills-and-workflows.md §8).
+
+`implement()` builds the PR body from what ran in this job: tasks ticked now, `after` steps
+run now, this review. A job that failed after some tasks or write steps, approved again,
+opens the PR without their sections; their commits are on the branch. And when the PR is
+already open, the re-run posts its sections as a PR comment, while the issue comment still
+says they are "in the PR body".
+
+- **Gained:** no state carried between jobs to rebuild a body; the commits are the record.
+- **Given up:** the PR description can miss the summary of work done in an earlier attempt.
+- **Revisit when:** a reviewer misses it. Each task's and write step's reply could go in its
+  commit body, and the PR body be rebuilt from `git log`; the issue comment's wording is one line.

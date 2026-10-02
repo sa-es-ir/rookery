@@ -56,7 +56,9 @@ state machine (`PHASES`), advanced only via `set_phase()`, which removes stale p
 Per-issue files live in `agent-plans/<n>/` inside the target repo — `plan.md`, `tasks.md`,
 `decisions.md` — and are committed and pushed with the change so they land in the PR. Nothing
 local persists between runs: Claude session ids are `uuid5(NS, "repo#n/key")`, so re-running
-the same issue resumes the same session.
+the same issue resumes the same session. The review and `after` steps pass `per_job=True`,
+which adds the job id: they re-run whole on every approve, and a resumed one repeats its last
+verdict instead of looking again.
 
 Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rookery:awaiting-input`
 (a reply re-enters `plan(resume=True)`, same session) or `rookery:awaiting-approval` → an
@@ -113,7 +115,8 @@ reply outside the mode's `MODES` pair, or a write step's `failed`, raises. Each 
 goes into the PR body as `## <agent>`; any check's `changes-needed` or reverted edit sets
 `rookery:error` like the reviewer's. The reviewer's own leftovers are reverted too, so no
 later write step or task commits them. A branch touching `STEERING` gets `CONFIG_WARNING` at
-the top of the PR body.
+the top of the PR body. Approving again after a run that opened the PR (a check flagged it)
+posts that run's sections as a comment on the open PR, since `gh pr create` refuses a second.
 
 `implement()` is the heart: loop the first unticked task in `tasks.md` → **a fresh Claude
 session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick the checkbox →
@@ -215,8 +218,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   fix loop is specced in the plan doc — a fix loop needs its own bound, because a reviewer
   that appends tasks breaks "every tick strictly reduces the open count". `after` steps keep
   the same shape: checks are advisory, and neither mode appends tasks.
-- **`STATUS:` is parsed, never inferred.** `MARKER` requires the marker alone on its line; a
-  missing marker is an error, not a guess. The marker is stripped from the text before it is
+- **`STATUS:` is parsed, never inferred.** `MARKER` requires the marker alone on its line
+  (markdown bold around it is tolerated, nothing else); a missing marker is an error, not a guess. The marker is stripped from the text before it is
   posted as a comment.
 - **`MAX_TASKS = 15`**, checked every iteration; the loop is bounded by `range(MAX_TASKS + 1)`
   with a `for/else` that raises on non-convergence. Every tick strictly reduces the open count.

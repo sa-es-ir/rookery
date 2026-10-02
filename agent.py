@@ -70,7 +70,8 @@ TRIGGER = "rookery:trigger"
 PHASES = ["rookery:planning", "rookery:awaiting-input", "rookery:awaiting-approval",
           "rookery:implementing", "rookery:reviewing", "rookery:done", "rookery:error"]
 APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
-MARKER = re.compile(r"^STATUS:[ \t]*(\S+)[ \t]*$", re.M)
+# alone on its line; markdown bold around it is tolerated (prod: `**STATUS: review-ok**`)
+MARKER = re.compile(r"^(?:\*\*)?STATUS:(?:\*\*)?[ \t]*([\w-]+)[ \t]*(?:\*\*)?[ \t]*$", re.M)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
@@ -645,12 +646,14 @@ def propose(repo, files, by):
                                                     for f, t in files.items()))
 
 
-def claude(c, prompt, key="plan", resume=False, slot="task"):
+def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False):
     """One session per key: planning is one long thread, each task is its own. `slot`
     picks the workflow slot — its agent, the skills to name, the instructions to append —
-    by name, or is an `after` step itself."""
-    sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
+    by name, or is an `after` step itself. `per_job` makes the session this job's own: the
+    review and `after` steps re-run whole on every approve, and a resumed one repeats its
+    last verdict instead of looking again (prod: a gate kept "failing" on a file now there)."""
     a = active.get(c.repo) or {}
+    sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}" + (f"/job-{a.get('job')}" if per_job else "")))
     s = slot if isinstance(slot, dict) else (a.get("workflow") or WORKFLOW)[slot]
     # a skill in the plugin alone almost never fires (S5: 0/3); named in the prompt, 3/3
     prompt = "\n\n".join([prompt] + [USE_SKILL.format(name=k) for k in s["skills"]])
@@ -923,7 +926,7 @@ def implement(c):
 
     set_phase(c, "rookery:reviewing")
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
-                             key="review", slot="review")
+                             key="review", slot="review", per_job=True)
     keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
@@ -937,13 +940,20 @@ def implement(c):
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     # what steers the agent changes only by a human merging it (pin()): say so where they merge
     steers = sh("git", "diff", "--name-only", f"origin/{c.base}...HEAD", "--", *STEERING, cwd=wt)
-    url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
-             "--title", title, "--body-file", "-",
-             input=(CONFIG_WARNING if steers else "")
-             + "\n\n".join(done + sections) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
-             # the commit every steering input was read at; GitHub links owner/repo@sha
-             f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
-             + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
+    body = ((CONFIG_WARNING if steers else "")
+            + "\n\n".join(done + sections) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
+            # the commit every steering input was read at; GitHub links owner/repo@sha
+            f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
+            + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
+    # approve again after a run that opened the PR (a check flagged it): `gh pr create`
+    # refuses a second PR for the branch, so this run's sections go on that PR as a comment
+    url = gh(c.repo, "pr", "view", branch, "--json", "state,url", "--jq",
+             'select(.state == "OPEN") | .url', check=False)
+    if url:
+        gh(c.repo, "pr", "comment", url, "--body-file", "-", input=body)
+    else:
+        url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
+                 "--title", title, "--body-file", "-", input=body)
     # The review and the checks are advisory: the PR opens either way, so the work is
     # always on GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)
@@ -971,7 +981,7 @@ def after_steps(c, wt, after):
             continue
         step(c.repo, "step", agent=name, mode=mode)
         status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=pdir(c.n), base=c.base),
-                             key=f"step-{name}", slot=s)
+                             key=f"step-{name}", slot=s, per_job=True)
         # enforced, not asked: whatever a check leaves in the worktree is reverted, and flagged
         reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
         if reverted:
