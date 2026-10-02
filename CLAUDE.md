@@ -82,7 +82,21 @@ named in the prompt (`USE_SKILL`) — a skill that is merely installed almost ne
 `instructions` go into `--append-system-prompt` after `CLAUDE.md`, under the same 64 KB cap.
 The catalog in `skills/` (see `skills/README.md`) is copied into the plugin only when a slot
 names it; `.rookery/skills` beats `.claude/skills` beats the catalog, and the `base` step
-logs the winner in `sources`.
+logs the winner in `sources`. `.rookery/agents/*.md` (top level only) join the built-in
+`agents/` in the plugin, and one with a built-in's name replaces that role; the `base` step
+logs the repo's agents in `agents`.
+
+**`after` steps.** `workflow.json`'s `after` is up to `MAX_STEPS = 5` steps, each an `agent`,
+a `mode` (`check` or `write`, `MODES`), `skills` and `instructions`; `claude(slot=)` takes the
+step dict itself. `after_steps()` runs them in order between the task loop and the review
+(`CHECK` / `WRITE` prompts, `key=f"step-{agent}"`). A check's edits are reverted
+(`keep_plans_only(keep=())`) and flag the run; a write step is committed as `#<n> step
+<agent>` (`--allow-empty`) and skipped on re-approve once that subject is on the branch. A
+reply outside the mode's `MODES` pair, or a write step's `failed`, raises. Each step's reply
+goes into the PR body as `## <agent>`; any check's `changes-needed` or reverted edit sets
+`rookery:error` like the reviewer's. The reviewer's own leftovers are reverted too, so no
+later write step or task commits them. A branch touching `STEERING` gets `CONFIG_WARNING` at
+the top of the PR body.
 
 `implement()` is the heart: loop the first unticked task in `tasks.md` → **a fresh Claude
 session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick the checkbox →
@@ -135,7 +149,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **What steers the agent is read from base, once per job, never the worktree.** Every
   plan/reply/implement job runs `pin()` first: `git fetch origin <base>`, then root
   `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job), `.rookery/workflow.json`,
-  `.rookery/skills` and `.claude/skills` (→ a per-job `--plugin-dir` with only `skills/` and
+  `.rookery/skills`, `.claude/skills` and `.rookery/agents` (→ a per-job `--plugin-dir` with only `skills/` and
   `agents/`, all `rk:<name>`, removed by `finish()`, cleared at startup) at that sha, logged as
   the `base` step. `--setting-sources user` keeps the CLI from loading them, or the repo's
   hooks, from the worktree the agent edits. A skill's frontmatter may only carry `name`,
@@ -148,12 +162,12 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
   bot login) is filtered out so the bot can't approve itself.
 - **Caps are checked before every `claude` call** (`check_caps()`): `RUN_CAP` calls and
-  `USD_CAP` dollars per repo per UTC day (defaults 10 and $20), plus the operator's `PAUSED`
+  `USD_CAP` dollars per repo per UTC day (defaults 30 and $20), plus the operator's `PAUSED`
   file next to `agent.py`. Every call — failed ones too — is recorded with its
   `total_cost_usd` in `$WORKSPACE/rookery.db`, one sqlite3 connection per call, so a restart
   keeps the day's count. A cap raises like any other error (comment + `rookery:error`); mid
   implementation that means the current task is committed and the next one never starts.
-  Caps are per tenant; `MAX_TASKS` is per issue — keep them independent.
+  Caps are per tenant; `MAX_TASKS` and `MAX_STEPS` are per issue — keep them independent.
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
@@ -178,7 +192,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   branch is pushed and the draft PR opened either way, so work is never stranded in a local
   worktree; `changes-needed` only sets `rookery:error`. Escalating it to a blocking gate or a
   fix loop is specced in the plan doc — a fix loop needs its own bound, because a reviewer
-  that appends tasks breaks "every tick strictly reduces the open count".
+  that appends tasks breaks "every tick strictly reduces the open count". `after` steps keep
+  the same shape: checks are advisory, and neither mode appends tasks.
 - **`STATUS:` is parsed, never inferred.** `MARKER` requires the marker alone on its line; a
   missing marker is an error, not a guess. The marker is stripped from the text before it is
   posted as a comment.

@@ -75,7 +75,8 @@ assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", Non
 assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
 # the catalog: every skill passes the same allowlist a repo's does
 cat = sorted(p.name for p in (agent.HERE / "skills").iterdir() if p.is_dir())
-assert cat == ["repo-recon", "systematic-debugging", "test-driven-development", "verification-before-completion"]
+assert cat == ["changelog", "repo-recon", "security-review", "systematic-debugging", "test-driven-development",
+               "verification-before-completion"]
 for name in cat:
     assert agent.frontmatter(agent.HERE / "skills" / name / "SKILL.md", agent.SKILL_KEYS, name)["name"] == name
 assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
@@ -321,7 +322,7 @@ git(agent.WORKSPACE, "clone", "-q", str(origin), str(clone))       # Rookery's c
 def merge(files):
     for name, text in files.items():
         (up / name).parent.mkdir(parents=True, exist_ok=True)
-        (up / name).write_text(text, encoding="utf-8")
+        (up / name).unlink() if text is None else (up / name).write_text(text, encoding="utf-8")
     git(up, "add", "-A"), git(up, "commit", "-qm", "x"), git(up, "push", "-q", "origin", "main")
 merge({"CLAUDE.md": "Use tabs.\n", ".claude/skills/verify/run.sh": "make test\n",
        ".claude/skills/verify/SKILL.md": "---\nname: verify\ndescription: >\n  run the checks\n"
@@ -398,7 +399,16 @@ def pin_error(files):
         agent.finish("o/r", "failed")
 wf_error = lambda wf: pin_error({".rookery/workflow.json": wf if isinstance(wf, str) else json.dumps(wf)})
 assert "not valid JSON" in wf_error("{"), "an invalid file fails, never falls back to the default"
-assert "`after` steps" in wf_error({"after": []})
+assert "top level" in wf_error({"before": []})
+assert "at most 5 steps" in wf_error({"after": [{"agent": f"a{i}", "mode": "check"} for i in range(6)]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer"}]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer", "mode": ["check"]}]})
+assert "needs an `agent` and a `mode`" in wf_error({"after": [{"mode": "write"}]})
+assert "`after[0]` is an object with only" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "x": 1}]})
+assert "names an agent twice" in wf_error({"after": [{"agent": "reviewer", "mode": "check"},
+                                                    {"agent": "reviewer", "mode": "write"}]})
+assert "`after[0]` names the agent `ghost`" in wf_error({"after": [{"agent": "ghost", "mode": "check"}]})
+assert "`after[0]` names the skill" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "skills": ["nope"]}]})
 assert "a list of names" in wf_error({"task": {"skills": "verify"}})
 assert "must match" in wf_error({"task": {"skills": ["../../etc"]}})
 assert "must match" in wf_error({"plan": {"agent": ""}})
@@ -426,6 +436,92 @@ assert "`permissionMode`" in fm_error("---\nname: x\npermissionMode: bypassPermi
 assert "`model`" in fm_error("---\nname: x\nmodel: gpt-5\n---\n", agent.AGENT_KEYS)
 assert "filename" in fm_error("---\nname: y\n---\n", agent.AGENT_KEYS)
 assert fm_error("---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n", agent.AGENT_KEYS) is None
+
+# .rookery/agents on base: added to the plugin, or replacing a built-in role by name
+merge({".claude/skills/Bad_Name/SKILL.md": None, ".rookery/skills/verify/SKILL.md": "---\nname: verify\n---\n"})
+assert "`hooks`" in pin_error({".rookery/agents/sec.md": "---\nname: sec\nhooks:\n  Stop: []\n---\n"}), \
+    "a repo agent is held to the same allowlist"
+assert "filename" in pin_error({".rookery/agents/sec.md": "---\nname: other\n---\n"})
+merge({".rookery/agents/sec.md": "---\nname: sec\nmodel: haiku\n---\nfind holes\n",
+       ".rookery/agents/docs.md": "---\nname: docs\n---\nwrite docs\n",
+       ".rookery/agents/reviewer.md": "---\nname: reviewer\nmodel: sonnet\n---\nthe repo's reviewer\n",
+       ".rookery/agents/notes.txt": "not an agent\n", ".rookery/agents/sub/x.md": "---\nname: x\n---\n",
+       ".rookery/workflow.json": json.dumps({"after": [
+           {"agent": "sec", "mode": "check", "skills": ["verify"], "instructions": "OWASP only."},
+           {"agent": "docs", "mode": "write"}]})})
+agent.RUN_CAP = 99
+agent.begin(pc, "implement")
+agent.pin(pc)
+a = agent.active["o/r"]
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md", "planmaker.md", "reviewer.md",
+                                                                        "sec.md"], "top-level *.md only"
+assert (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8").endswith("the repo's reviewer\n")
+assert a["agents"]["reviewer"]["model"] == "sonnet" and a["agent_sources"]["planmaker"] == "built-in"
+argv[:] = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: check-ok"})
+assert agent.claude(pc, "p", key="step-sec", slot=a["workflow"]["after"][0]) == ("check-ok", "")
+agent.sh = real_sh
+assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and argv[0][2] == "p\n\nUse the `rk:verify` skill."
+assert next(x for x in argv[0] if x.startswith("--append-system-prompt=")).endswith("OWASP only.")
+with agent.closing(agent.db()) as con:
+    based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'",
+                                   (a["job"],)).fetchone()[0])
+assert based["agents"] == ["docs", "reviewer", "sec"], "the repo's agents are logged"
+
+# after steps: between the task loop and the review; a check may not edit, a write is committed
+git(clone, "config", "user.email", "t@t"), git(clone, "config", "user.name", "t")
+wt = agent.wt_root("o/r") / "issue-3"
+git(clone, "fetch", "-q", "origin", "main"), git(clone, "worktree", "add", "-q", "-B", "feature/issue-3", str(wt), "origin/main")
+agent.worktree = lambda c: wt
+(wt / agent.pdir(3)).mkdir(parents=True)
+(wt / agent.pdir(3) / "tasks.md").write_text("- [x] one\n", encoding="utf-8")
+(wt / "CLAUDE.md").write_text("Use spaces.\n", encoding="utf-8")   # the branch changes what steers the agent
+git(wt, "add", "-A"), git(wt, "commit", "-qm", "#3 task 1: one")
+said, prs, phases, calls = [], [], [], []
+def fake_claude(c, prompt, key="plan", resume=False, slot="task"):
+    calls.append(key)
+    if key == "step-sec":
+        assert prompt.startswith("Check the finished work") and slot["agent"] == "sec"
+        (wt / "CLAUDE.md").write_text("tampered\n", encoding="utf-8")
+        (wt / "scratch.txt").write_text("x", encoding="utf-8")
+        return "check-ok", "no holes"
+    if key == "step-docs":
+        (wt / "docs.md").write_text("docs\n", encoding="utf-8")
+        return "step-done", "wrote docs"
+    (wt / "review.txt").write_text("x", encoding="utf-8")   # the reviewer is read-only too
+    return "review-ok", "fine"
+real_gh, real_claude = agent.gh, agent.claude
+agent.claude, agent.comment = fake_claude, lambda c, body: said.append(body)
+agent.set_phase = lambda c, phase: phases.append(phase)
+agent.gh = lambda repo, *a, input=None, **k: (prs.append(input) or "https://github.com/o/r/pull/1"
+                                              if a[:2] == ("pr", "create") else json.dumps({"title": "t"}))
+agent.sh = lambda *a, **k: "" if a[:2] == ("git", "push") else real_sh(*a, **k)
+agent.implement(pc)
+subjects = git(wt, "log", "--format=%s", "origin/main..HEAD").splitlines()
+assert subjects == ["#3 step docs", "#3 task 1: one"], subjects
+assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not (wt / "scratch.txt").exists(), \
+    "a check's edits are reverted"
+assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
+body_ = prs[0]
+assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
+assert "## sec · rk:verify\n\nno holes\n\n_Rookery reverted" in body_ and "## docs\n\nwrote docs" in body_
+assert body_.index("## sec") < body_.index("## docs") < body_.index("## Review")
+assert body_.endswith(" · steps: sec, docs"), body_[-80:]
+assert phases[-1] == "rookery:error" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
+# approve again: the committed write step is skipped, the check runs again
+calls.clear()
+agent.implement(pc)
+assert calls == ["step-sec", "review"], calls
+# STATUS is held to the step's mode
+for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "failed")]:
+    agent.claude = lambda c, p, key="plan", resume=False, slot="task": (status, "x")
+    try:
+        agent.after_steps(pc, wt, [{**agent.STEP, "agent": "z", "mode": mode}])
+        raise AssertionError(f"{mode} accepted {status}")
+    except RuntimeError as e:
+        assert "step z" in str(e), e
+agent.claude, agent.gh, agent.sh = real_claude, real_gh, real_sh
+agent.finish("o/r", "ok")
 
 # run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
 real_pin, agent.pin = agent.pin, lambda c: None   # pin() is tested above
@@ -600,23 +696,29 @@ agent.clone_dir("o/r").mkdir(parents=True)
 real_steer, dirs = agent.steer, []
 def fake_steer(repo, path, base, plug):
     dirs.append(plug)
-    wf = {**agent.WORKFLOW, "task": {**agent.WORKFLOW["task"], "skills": ["tdd"]}}
+    wf = {**agent.WORKFLOW, "task": {**agent.WORKFLOW["task"], "skills": ["tdd"]},
+          "after": [{**agent.STEP, "agent": "sec", "mode": "check"}]}
     return {"sha": "abc", "claude_md": "é", "workflow": wf, "sources": {"tdd": "catalog"},
-            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {}}}
+            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {},
+                                                        "sec": {"model": "haiku", "description": "holes"}},
+            "agent_sources": {"planmaker": "built-in", "reviewer": "built-in", "sec": ".rookery/agents"}}
 agent.steer = fake_steer
 w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
 assert w["sha"] == "abc" and w["claude_md"] == 2 and w["error"] is None, w
 assert [(k, v["agent"], v["model"], v["custom"]) for k, v in w["slots"].items()] == [
     ("plan", "planmaker", "opus", False), ("task", None, "sonnet", True), ("review", "reviewer", None, False)], w
 assert w["skills"] == {"tdd": {"source": "catalog", "description": "red, green"}}
+assert [(s["agent"], s["mode"], s["model"]) for s in w["after"]] == [("sec", "check", "haiku")], w["after"]
+assert w["agents"]["sec"] == {"description": "holes", "source": ".rookery/agents"}
 assert not dirs[0].exists(), "the throwaway plugin dir is gone"
 agent.steer = lambda *a: (_ for _ in ()).throw(RuntimeError("`task` names the skill `x`"))
 assert body(req("GET", "/api/repos/o/r/workflow", sid=sid))["error"] == "`task` names the skill `x`", \
     "the error the next job would fail with"
 agent.steer = real_steer
 cat = {s["name"]: s for s in body(req("GET", "/api/skills", sid=sid))["skills"]}
-assert sorted(cat) == ["repo-recon", "systematic-debugging", "test-driven-development",
-                       "verification-before-completion"], cat
+assert sorted(cat) == ["changelog", "repo-recon", "security-review", "systematic-debugging",
+                       "test-driven-development", "verification-before-completion"], cat
+assert cat["security-review"]["slot"] == "check" and cat["changelog"]["source"] == "ours"
 assert cat["repo-recon"]["slot"] == "plan" and cat["repo-recon"]["source"] == "ours"
 assert cat["systematic-debugging"]["source"] == "obra/superpowers@8ca22db", "\"same\" repeats the row above"
 assert cat["test-driven-development"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")

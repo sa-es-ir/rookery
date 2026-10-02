@@ -52,7 +52,7 @@ APP_ID = os.environ.get("APP_ID", "")
 APP_KEY = os.environ.get("APP_KEY", str(HERE / "app.pem"))
 SECRET = os.environ["WEBHOOK_SECRET"].encode()
 # per repo per UTC day; a run is one claude call. RUN_CAP/USD_CAP override them.
-RUN_CAP = int(os.environ.get("RUN_CAP", "10"))
+RUN_CAP = int(os.environ.get("RUN_CAP", "30"))
 USD_CAP = float(os.environ.get("USD_CAP", "20"))
 PAUSED = HERE / "PAUSED"  # operator switch: while this file exists, no claude call starts
 # comma-separated owner/name: serve only these of the App's repos. For a local
@@ -73,6 +73,7 @@ MARKER = re.compile(r"^STATUS:[ \t]*(\S+)[ \t]*$", re.M)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
+MAX_STEPS = 5   # `after` steps in .rookery/workflow.json; per issue, like MAX_TASKS, and apart from it
 # CLAUDE.md goes to the CLI as one argv entry, and Linux caps one at 128 KB
 CLAUDE_MD_MAX = 64 * 1024
 # every skill and agent name: it is rendered into prompts ("Use the `rk:x` skill") and --agent
@@ -87,6 +88,10 @@ MODELS = ("haiku", "sonnet", "opus")
 WORKFLOW = {"plan": {"agent": "planmaker", "skills": [], "instructions": ""},
             "task": {"agent": None, "skills": [], "instructions": ""},
             "review": {"agent": "reviewer", "skills": [], "instructions": ""}}
+# one `after` step: runs between the task loop and the review. `agent` and `mode` are required.
+STEP = {"agent": None, "mode": None, "skills": [], "instructions": ""}
+# mode -> the STATUS values a step in it may reply; anything else fails the job
+MODES = {"check": ("check-ok", "changes-needed"), "write": ("step-done", "failed")}
 
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
@@ -406,28 +411,43 @@ def parse_agent(p, where):
 
 def workflow(text, where):
     """.rookery/workflow.json -> every slot with every key, WORKFLOW filling what the file
-    leaves out. An invalid file fails the job: silently running the default is worse."""
+    leaves out, plus its `after` steps. An invalid file fails the job: silently running the
+    default is worse."""
     try:
         given = json.loads(text) if text else {}
     except ValueError as e:
         raise RuntimeError(f"{where} is not valid JSON: {e}")
-    if not isinstance(given, dict) or given.keys() - WORKFLOW.keys():
-        raise RuntimeError(f"{where}: the top level is an object with only {', '.join(WORKFLOW)} "
-                           "(`after` steps are not built yet).")
-    wf = {}
-    for slot, default in WORKFLOW.items():
-        s = given.get(slot, {})
+    if not isinstance(given, dict) or given.keys() - WORKFLOW.keys() - {"after"}:
+        raise RuntimeError(f"{where}: the top level is an object with only {', '.join(WORKFLOW)}, after.")
+    if not isinstance(given.get("after", []), list) or len(given.get("after", [])) > MAX_STEPS:
+        raise RuntimeError(f"{where}: `after` is a list of at most {MAX_STEPS} steps.")
+
+    def one(slot, s, default):
         if not isinstance(s, dict) or s.keys() - default.keys():
             raise RuntimeError(f"{where}: `{slot}` is an object with only {', '.join(default)}.")
-        s = wf[slot] = {**default, **s}
+        s = {**default, **s}
         if not (s["agent"] is None or isinstance(s["agent"], str)) or not isinstance(s["instructions"], str) \
                 or not isinstance(s["skills"], list) or not all(isinstance(k, str) for k in s["skills"]):
             raise RuntimeError(f"{where}: in `{slot}`, `agent` is a name or null, `skills` a list of "
                                "names, `instructions` a string.")
+        if default is STEP and (not s["agent"] or not isinstance(s["mode"], str) or s["mode"] not in MODES):
+            raise RuntimeError(f"{where}: `{slot}` needs an `agent` and a `mode`, {' or '.join(MODES)}.")
         for name in s["skills"] + ([] if s["agent"] is None else [s["agent"]]):
             if not NAME.fullmatch(name):
                 raise RuntimeError(f"{where}: `{name}` in `{slot}` — a name must match `{NAME.pattern}`.")
+        return s
+
+    wf = {slot: one(slot, given.get(slot, {}), default) for slot, default in WORKFLOW.items()}
+    wf["after"] = [one(f"after[{i}]", s, STEP) for i, s in enumerate(given.get("after", []))]
+    # a step's commit subject and PR section carry its agent's name: two would collide
+    if len(names := [s["agent"] for s in wf["after"]]) > len(set(names)):
+        raise RuntimeError(f"{where}: `after` names an agent twice; each step needs its own.")
     return wf
+
+
+def slots(wf):
+    """(label, slot) for every slot and `after` step in wf — what steer() checks and assembles."""
+    return [*((k, wf[k]) for k in WORKFLOW), *((f"after[{i}]", s) for i, s in enumerate(wf["after"]))]
 
 
 def fetch(repo, path, base):
@@ -446,7 +466,8 @@ def pin(c):
     plug = WORKSPACE / "plugins" / c.repo.replace("/", "_") / f"job-{a['job']}"
     a["plugin"] = plug   # set first, so finish() removes it whatever steer() gets to
     a.update(steer(c.repo, c.path, c.base, plug))
-    step(c.repo, "base", branch=c.base, sha=a["sha"], skills=sorted(a["sources"]), sources=a["sources"])
+    step(c.repo, "base", branch=c.base, sha=a["sha"], skills=sorted(a["sources"]), sources=a["sources"],
+         agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"))
     log(f"#{c.n} pinned origin/{c.base} at {a['sha'][:12]}: {len(a['claude_md'])} chars of CLAUDE.md, "
         f"skills {a['sources']}")
 
@@ -461,7 +482,7 @@ def steer(repo, path, base, plug):
     blob = lambda p: sh("git", "cat-file", "blob", o, cwd=path) if (o := oid(p)) else ""
     md = blob("CLAUDE.md")
     wf = workflow(blob(".rookery/workflow.json"), f".rookery/workflow.json on {base}")
-    for slot, s in wf.items():
+    for slot, s in slots(wf):
         if (size := len((md + s["instructions"]).encode())) > CLAUDE_MD_MAX:
             also = f" plus the `{slot}` instructions in .rookery/workflow.json" if s["instructions"] else ""
             raise RuntimeError(f"CLAUDE.md{also} on {base} is {size // 1024} KB; Rookery passes it to "
@@ -473,21 +494,32 @@ def steer(repo, path, base, plug):
     (plug / ".claude-plugin" / "plugin.json").write_text('{"name": "rk"}', encoding="utf-8")
     skills = plug / "skills"
     skills.mkdir(exist_ok=True)
+
+    def untar(src, dest, keep):
+        """src at sha into dest, the members keep() takes -> their names."""
+        tar = subprocess.run(["git", "archive", f"{sha}:{src}"], cwd=path, capture_output=True, check=True).stdout
+        with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+            # "data": no link or path out of dest
+            t.extractall(dest, filter="data", members=(got := [m for m in t if keep(m)]))
+        return [m.name for m in got]
+
+    # built-in agents, then .rookery/agents on base: the same name replaces the built-in role
     shutil.copytree(HERE / "agents", plug / "agents")
+    by = {p.stem: "built-in" for p in (plug / "agents").glob("*.md")}
+    if oid(".rookery/agents"):
+        # top-level *.md only: the CLI reads nothing else from agents/, so nothing else gets in
+        top = lambda m: m.isfile() and "/" not in m.name and m.name.endswith(".md")
+        by.update((Path(f).stem, ".rookery/agents") for f in untar(".rookery/agents", plug / "agents", top))
     # the first source to bring a name wins: .rookery/skills, .claude/skills, then the catalog
     won = {}
     for src in (".rookery/skills", ".claude/skills"):
         if oid(src):
-            tar = subprocess.run(["git", "archive", f"{sha}:{src}"], cwd=path,
-                                 capture_output=True, check=True).stdout
-            with tarfile.open(fileobj=io.BytesIO(tar)) as t:
-                # "data": no link or path out of skills/
-                t.extractall(skills, filter="data", members=[m for m in t if m.name.split("/")[0] not in won])
+            untar(src, skills, lambda m: m.name.split("/")[0] not in won)
             for d in skills.iterdir():
                 if d.is_dir():
                     won.setdefault(d.name, src)
     # the catalog only as far as this repo enabled it; names are NAME-checked, so no `..`
-    for name in sorted({k for s in wf.values() for k in s["skills"]} - won.keys()):
+    for name in sorted({k for _, s in slots(wf) for k in s["skills"]} - won.keys()):
         if (HERE / "skills" / name).is_dir():
             shutil.copytree(HERE / "skills" / name, skills / name)
             won[name] = "catalog"
@@ -497,24 +529,26 @@ def steer(repo, path, base, plug):
         if not NAME.fullmatch(name):
             raise RuntimeError(f"{where}: a skill name must match `{NAME.pattern}`.")
         described[name] = frontmatter(skills / name / "SKILL.md", SKILL_KEYS, where).get("description", "")
-    agents = {p.stem: parse_agent(p, f"agent {p.stem}") for p in sorted((plug / "agents").glob("*.md"))}
+    agents = {p.stem: parse_agent(p, f"{by[p.stem]}/{p.name} on {base}" if by[p.stem] != "built-in"
+                                  else f"agent {p.stem}") for p in sorted((plug / "agents").glob("*.md"))}
     # --agent with a name that does not exist is silently ignored (S2a): never pass one
-    for slot, s in wf.items():
+    for slot, s in slots(wf):
         for kind, names, have in (("agent", [s["agent"]] if s["agent"] else [], agents),
                                   ("skill", s["skills"], won)):
             if missing := [x for x in names if x not in have]:
                 raise RuntimeError(f".rookery/workflow.json on {base}: `{slot}` names the {kind} "
                                    f"`{missing[0]}`, and there is no {kind} by that name.")
-    return {"sha": sha, "claude_md": md, "workflow": wf, "agents": agents, "sources": won,
-            "skills": described}
+    return {"sha": sha, "claude_md": md, "workflow": wf, "agents": agents, "agent_sources": by,
+            "sources": won, "skills": described}
 
 
 def claude(c, prompt, key="plan", resume=False, slot="task"):
     """One session per key: planning is one long thread, each task is its own. `slot`
-    picks the workflow slot: its agent, the skills to name, the instructions to append."""
+    picks the workflow slot — its agent, the skills to name, the instructions to append —
+    by name, or is an `after` step itself."""
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
     a = active.get(c.repo) or {}
-    s = (a.get("workflow") or WORKFLOW)[slot]
+    s = slot if isinstance(slot, dict) else (a.get("workflow") or WORKFLOW)[slot]
     # a skill in the plugin alone almost never fires (S5: 0/3); named in the prompt, 3/3
     prompt = "\n\n".join([prompt] + [USE_SKILL.format(name=k) for k in s["skills"]])
     cmd = ["claude", "-p", prompt, "--output-format", "json",
@@ -646,6 +680,44 @@ plus the findings as markdown, worst first. This text is posted verbatim into
 the pull request body, so write it for the person about to read the diff.
 """
 
+CHECK = """Check the finished work for GitHub issue #{n} before it goes to a
+human as a draft pull request. Your role says what to check for.
+
+The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
+{d}/decisions.md holds the trade-offs each task recorded. The change itself is
+`git diff origin/{base}...HEAD`.
+
+Read only: do not edit, do not commit, do not use gh. Rookery reverts any edit
+you leave behind.
+
+Reply with exactly one line `STATUS: check-ok` or `STATUS: changes-needed`,
+plus the findings as markdown, worst first. This text is posted verbatim into
+the pull request body under your name, so write it for the person about to
+read the diff.
+"""
+
+WRITE = """The tasks for GitHub issue #{n} are done and committed. You run after
+them, as one more step; your role says what to add.
+
+The approved plan is {d}/plan.md, and {d}/decisions.md holds the trade-offs
+each task recorded. The change so far is `git diff origin/{base}...HEAD`.
+
+Make your changes in this worktree. Leave {d}/tasks.md alone. Do not commit, do
+not push, do not touch {base}, do not use gh — the orchestrator commits for you.
+
+Append any trade-off or non-obvious choice you make to {d}/decisions.md, one
+short bullet each, with the reason.
+
+Reply with exactly one line `STATUS: step-done` or `STATUS: failed`, plus one
+short paragraph on what changed. It is posted into the pull request body under
+your name.
+"""
+
+# what pin() reads from base: a PR that changes any of it steers Rookery once merged
+STEERING = (".rookery", ".claude", "CLAUDE.md")
+CONFIG_WARNING = ("> ⚠ This PR changes agent configuration (`.rookery/`, `.claude/` or the root "
+                  "`CLAUDE.md`). Once merged, it steers how Rookery works on this repo.\n\n")
+
 # one line per skill the slot enables in .rookery/workflow.json, after the slot's prompt
 USE_SKILL = "Use the `rk:{name}` skill."
 
@@ -671,15 +743,17 @@ def tick(wt, n, at):
 
 # --- jobs --------------------------------------------------------------------
 
-def keep_plans_only(c, wt):
-    """Planning writes agent-plans/<n>/ and nothing else — revert the rest.
+def keep_plans_only(c, wt, keep=None):
+    """Planning writes agent-plans/<n>/ and nothing else — revert the rest. `keep=()`
+    reverts everything, for a step that may not edit at all. -> the reverted paths.
 
     The PLAN prompt asks for this; here it is enforced, because a prompt is not
     a guard. Every call to plan() reverts what the previous one left behind, so
     calling it again — which a long question-and-answer thread does repeatedly —
     can never accumulate stray edits ahead of the task loop.
     """
-    keep = pdir(c.n) + "/"
+    keep = (pdir(c.n) + "/",) if keep is None else keep
+    reverted = []
     # -uall, not the default: plain --porcelain collapses an untracked tree to
     # its shallowest dir, so a first-ever plan reports as `?? agent-plans/` and
     # would fail the prefix test below and be deleted.
@@ -690,10 +764,12 @@ def keep_plans_only(c, wt):
         path = path.strip().split(" -> ")[-1].strip('"')  # a rename reports both sides
         if path.startswith(keep):
             continue
-        log(f"#{c.n} planner touched {path} — reverting")
+        log(f"#{c.n} agent touched {path} — reverting")
         # `clean` takes untracked files and whole untracked dirs; `checkout`
         # restores modified and deleted tracked ones.
         sh("git", *(["clean", "-fdq"] if code == "??" else ["checkout"]), "--", path, cwd=wt)
+        reverted.append(path)
+    return reverted
 
 
 def plan(c, title, body, resume):
@@ -736,12 +812,16 @@ def implement(c):
     else:
         raise RuntimeError("task loop did not converge")
 
+    after = (active[c.repo].get("workflow") or {}).get("after", [])
+    sections, wanting = after_steps(c, wt, after)
+
     branch = f"feature/issue-{c.n}"
     assert branch != c.base
 
     set_phase(c, "rookery:reviewing")
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
                              key="review", slot="review")
+    keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
     # an explicit https URL, so the push is the App's even when origin is ssh
@@ -752,18 +832,61 @@ def implement(c):
     sh("git", "update-ref", f"refs/remotes/origin/{branch}", branch, cwd=wt)
     step(c.repo, "push", branch=branch)
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
+    # what steers the agent changes only by a human merging it (pin()): say so where they merge
+    steers = sh("git", "diff", "--name-only", f"origin/{c.base}...HEAD", "--", *STEERING, cwd=wt)
     url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
              "--title", title, "--body-file", "-",
-             input="\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
+             input=(CONFIG_WARNING if steers else "")
+             + "\n\n".join(done + sections) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
              # the commit every steering input was read at; GitHub links owner/repo@sha
-             f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}")
-    # The review is advisory: the PR opens either way, so the work is always on
-    # GitHub rather than stranded in a local worktree. A bad verdict only flags.
+             f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
+             + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
+    # The review and the checks are advisory: the PR opens either way, so the work is
+    # always on GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)
-    ok = verdict == "review-ok"
-    comment(c, f"Draft PR: {url}" if ok else
-            f"Draft PR: {url}\n\nThe reviewer wants changes — see **Review** in the PR body.")
-    set_phase(c, "rookery:done" if ok else "rookery:error")
+    if verdict != "review-ok":
+        wanting.append("the reviewer")
+    comment(c, f"Draft PR: {url}" if not wanting else
+            f"Draft PR: {url}\n\nChanges wanted by {', '.join(wanting)} — see their sections in the PR body.")
+    set_phase(c, "rookery:error" if wanting else "rookery:done")
+
+
+def after_steps(c, wt, after):
+    """The workflow's `after` steps, in order, between the task loop and the review ->
+    (their PR sections, the check steps that want changes). A check step may not edit and
+    re-runs every time; a write step's work is committed by the orchestrator, and a re-run
+    skips it once that commit is on the branch. Neither adds tasks, so the loop's bound holds."""
+    if not after:
+        return [], []
+    on_branch = set(sh("git", "log", "--format=%s", f"origin/{c.base}..HEAD", cwd=wt).splitlines())
+    sections, wanting = [], []
+    for s in after:
+        name, mode = s["agent"], s["mode"]
+        subject = f"#{c.n} step {name}"
+        if mode == "write" and subject in on_branch:
+            log(f"#{c.n} step {name} already committed — skipping")
+            continue
+        step(c.repo, "step", agent=name, mode=mode)
+        status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=pdir(c.n), base=c.base),
+                             key=f"step-{name}", slot=s)
+        # enforced, not asked: whatever a check leaves in the worktree is reverted, and flagged
+        reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
+        if reverted:
+            step(c.repo, "reverted", agent=name, paths=reverted)
+            msg += f"\n\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._"
+        if status not in MODES[mode]:
+            raise RuntimeError(f"step {name} replied `STATUS: {status}`; a {mode} step replies "
+                               f"{' or '.join(MODES[mode])}.")
+        if status == "failed":
+            raise RuntimeError(f"step {name} reported failed:\n\n{msg}")
+        if mode == "write":
+            sh("git", "add", "-A", cwd=wt)
+            sh("git", "commit", "--allow-empty", "-m", subject, cwd=wt)
+            step(c.repo, "commit", step=name, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
+        elif status == "changes-needed" or reverted:
+            wanting.append(name)
+        sections.append(f"## {name}" + "".join(f" · rk:{k}" for k in s["skills"]) + f"\n\n{msg}")
+    return sections, wanting
 
 
 # --- repos: onboarding and retention ----------------------------------------

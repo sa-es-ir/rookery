@@ -38,6 +38,8 @@ fit a slot that exists in Phase A.
   `docs-writer`, `webapp-testing` (needs browsers on the server, which has no AVX2).
 - **Given up:** the most-requested extra review (security) waits for Phase B.
 - **Revisit when:** Phase B lands the `after` steps, or a tenant asks for a specific skill.
+- **Outcome, 2 October 2026:** Phase B shipped `security-review` (check) and `changelog`
+  (write) with the `after` steps. The "no phase yet" list stands.
 
 ## 3. `repo-recon` is off by default too
 
@@ -71,3 +73,75 @@ not on the 4-second poll.
 - **Revisit when:** the journal or GitHub's rate limits show repeated workflow fetches, or
   a job start waits on the lock. The cheap fix is a per-repo result cache of ~30 seconds
   keyed by the fetched sha, or skipping the fetch when the last one is under a minute old.
+
+## 5. The `rookery` user's `gh` login may still be on the box
+
+**Deferred since Phase 1, logged 2 October 2026** (phase5-deploy.md "Still open" 1).
+
+The App replaced `gh auth login` in Phase 1, but the old login was never removed from the
+server. `gh auth status` as `rookery` should say "not logged in"; until someone checks, it
+may not.
+
+- **Gained:** nothing. It's a leftover, not a choice.
+- **Given up:** if the login is there, `~/.config/gh/hosts.yml` holds a long-lived personal
+  token the agent can read. The deny rules stop `gh`, not `cat` plus `curl`, and that token
+  reaches every repo the account can, not just the installed ones.
+- **Revisit when:** next time anyone is on the server. The fix is one command
+  (`su - rookery -c 'gh auth logout'`) and nothing in `agent.py` depends on the login.
+
+## 6. SSH still accepts root password logins
+
+**Deferred since 19 September 2026, logged 2 October 2026** (phase5-deploy.md "Still open" 2).
+
+Root on `185.208.172.15` is being password-brute-forced. Login is by key in practice, but
+`PasswordAuthentication no` and `PermitRootLogin prohibit-password` aren't set.
+
+- **Gained:** no risk of locking ourselves out by editing `sshd_config` on the only box.
+- **Given up:** the server is one guessed root password away from being lost, along with
+  `app.pem`, the Claude credentials and every tenant's clone.
+- **Revisit when:** now, before the link goes to anyone else. Open a second key session and
+  confirm it works before closing the first, then reload `sshd`.
+
+## 7. The agent can read `app.pem`
+
+**Deferred since Phase 1, logged 2 October 2026** (phase5-deploy.md "Still open" 4,
+DEPLOY.md step 5 "Known ceiling").
+
+`claude` runs as `rookery`, the same user that reads the App's private key to mint tokens.
+
+- **Gained:** one service user, one systemd unit, no `sudo` between the orchestrator and
+  the agent.
+- **Given up:** a prompt-injected agent can sign its own JWT with `openssl` and act as the
+  App on every installation, not just the repo it was working on. The key outranks any
+  token minted from it, and the deny rules don't cover `openssl` + `curl`.
+- **Revisit when:** before onboarding anyone outside the invite list. The small fix is to
+  run `claude` as a second user that can't read `/opt/rookery`; the real fix is the sandbox.
+
+## 8. Port 80 on the origin answers anyone
+
+**Deferred since the Phase 5 deploy (29 September 2026), logged 2 October 2026**
+(phase5-deploy.md "Still open").
+
+nginx listens on port 80 for every address, not only Cloudflare's.
+
+- **Gained:** nothing to maintain when Cloudflare changes its IP ranges.
+- **Given up:** anyone who finds the IP reaches the same app over plain http, around
+  Cloudflare. Session cookies and the OAuth code then cross the internet in cleartext, and
+  Cloudflare's rate limiting and bot rules don't apply.
+- **Revisit when:** with §6 or §9. nginx `allow`/`deny` for Cloudflare's published ranges,
+  or `ufw`, closes it.
+
+## 9. Cloudflare → origin is plain http (SSL mode Flexible)
+
+**Decided 29 September 2026** (phase5-deploy.md, "Upgrade path: Flexible → Full (strict)").
+
+The browser → Cloudflare hop is HTTPS; Cloudflare → nginx is http on port 80. Chosen over
+a tunnel, Caddy or certbot as the least moving parts.
+
+- **Gained:** no certificates on the box, nothing to renew, a plain nginx config.
+- **Given up:** cookies, OAuth codes and webhook payloads cross the Cloudflare → server hop
+  unencrypted. An https redirect on the origin can never be added while Flexible holds (it
+  loops).
+- **Revisit when:** §8 is done, or anyone outside the invite list signs in. The upgrade is a
+  Cloudflare Origin Certificate on nginx plus Full (strict), already written up in
+  phase5-deploy.md.

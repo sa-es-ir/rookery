@@ -225,7 +225,7 @@ GH_TOKEN=$(tok OWNER/REPO) gh issue list --repo OWNER/REPO
 ```
 
 Check `/opt/rookery/.env`: note `WEBHOOK_SECRET` for step 10. Optional: `RUN_CAP` (default
-10 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
+30 `claude` calls) and `USD_CAP` (default 20) per repo per UTC day. Usage is in
 `$WORKSPACE/rookery.db`:
 
 ```bash

@@ -205,9 +205,11 @@ def workflow(s, repo):
             return {**out, "error": str(e)}
     model = lambda a: got["agents"][a].get("model") if a else "sonnet"   # claude()'s choice, same rule
     return {**out, "sha": got["sha"], "claude_md": len(got["claude_md"].encode()),
-            "slots": {k: {**v, "model": model(v["agent"]), "custom": v != agent.WORKFLOW[k]}
-                      for k, v in got["workflow"].items()},
-            "agents": {n: m.get("description", "") for n, m in got["agents"].items()},
+            "slots": {k: {**got["workflow"][k], "model": model(got["workflow"][k]["agent"]),
+                          "custom": got["workflow"][k] != v} for k, v in agent.WORKFLOW.items()},
+            "after": [{**v, "model": model(v["agent"]), "custom": True} for v in got["workflow"]["after"]],
+            "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n]}
+                       for n, m in got["agents"].items()},
             "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
 
 

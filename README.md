@@ -118,18 +118,36 @@ is editing, so a change takes effect only once a human merges it:
 - `.rookery/workflow.json` picks the agent, the skills and extra instructions
   per slot. Anything left out keeps the default: today's pipeline, no skills.
 
+- `.rookery/agents/<name>.md` are the repo's own agents, in the same format as
+  `agents/*.md`. One named `planmaker` or `reviewer` replaces that role. Frontmatter
+  may carry only `name`, `description`, `tools`, `model` and `skills`.
+
 ```json
 {
   "plan":   { "skills": ["repo-recon"], "instructions": "Every schema change gets its own task." },
   "task":   { "skills": ["verification-before-completion"] },
+  "after":  [
+    { "agent": "reviewer", "mode": "check", "skills": ["security-review"] },
+    { "agent": "docs",     "mode": "write", "skills": ["changelog"] }
+  ],
   "review": { "agent": "reviewer" }
 }
 ```
 
+`after` holds up to 5 steps that run in order between the last task and the review,
+each with its own agent:
+
+| Mode | May edit | Replies | Then |
+| --- | --- | --- | --- |
+| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings go into the PR body under `## <agent>`; `changes-needed` sets `rookery:error` but never blocks the push. Runs again on every `approve` |
+| `write` | yes | `step-done` / `failed` | Rookery commits `#<n> step <agent>`; `approve` again skips a step whose commit is on the branch. `failed` stops the run like a failed task |
+
 A skill runs only when a slot names it. An invalid file, or a name that matches
 no skill or agent, fails the run at start with a comment — Rookery never quietly
 falls back to the default. The draft PR's footer names the base commit the run
-read all of this at.
+read all of this at, and the steps it ran. A PR whose branch changes `.rookery/`,
+`.claude/` or the root `CLAUDE.md` opens with a warning that it changes agent
+configuration.
 
 ## Setup
 
@@ -167,7 +185,7 @@ Only people with write access to the repo can move an issue along, and approval 
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
 `git push` and `gh`; it never publishes.
 
-Each repo gets 10 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
+Each repo gets 30 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
 override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
 new call. Hitting either comments on the issue and sets `rookery:error`.
 
