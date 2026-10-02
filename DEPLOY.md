@@ -59,7 +59,7 @@ under uid 0, which is what `agent.py` uses.
 
 ```bash
 scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
-scp -r agents root@SERVER_IP:/opt/rookery/
+scp -r agents skills root@SERVER_IP:/opt/rookery/
 ssh root@SERVER_IP mkdir -p /opt/rookery/ui
 scp ui/index.html ui/portal.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
@@ -276,7 +276,9 @@ as **root** (`rookery` is not a sudoer):
 
 ```bash
 scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
-chown rookery:rookery /opt/rookery/agent.py /opt/rookery/web.py  # server, root
+scp -r agents skills root@SERVER_IP:/opt/rookery/                # your machine, when they changed
+scp ui/index.html ui/portal.html ui/styles.css root@SERVER_IP:/opt/rookery/ui/   # likewise
+chown -R rookery:rookery /opt/rookery                            # server, root
 systemctl restart rookery                                        # server, root
 ```
 

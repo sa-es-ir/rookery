@@ -66,11 +66,18 @@ for at, _, _ in [t for t in after if not t[1]]:
 assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
 
 # the two named roles, and the review verdicts the orchestrator branches on
-roles = __import__("json").loads(agent.AGENTS)
+roles = {p.stem: agent.parse_agent(p, p.stem) for p in (agent.HERE / "agents").glob("*.md")}
 assert set(roles) == {"planmaker", "reviewer"}
-assert all(r["description"] and r["prompt"] for r in roles.values())
+assert all(r["description"] for r in roles.values())
 assert "Edit" not in roles["reviewer"]["tools"], "the reviewer reports, never fixes"
 assert all(r["model"] == "opus" for r in roles.values()), "roles think; tasks grind on sonnet"
+assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", None, "reviewer"}
+assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
+# the catalog: every skill passes the same allowlist a repo's does
+cat = sorted(p.name for p in (agent.HERE / "skills").iterdir() if p.is_dir())
+assert cat == ["repo-recon", "systematic-debugging", "test-driven-development", "verification-before-completion"]
+for name in cat:
+    assert agent.frontmatter(agent.HERE / "skills" / name / "SKILL.md", agent.SKILL_KEYS, name)["name"] == name
 assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
 assert agent.MARKER.search("STATUS: changes-needed\nbug in foo.py").group(1) == "changes-needed"
 
@@ -339,6 +346,47 @@ assert not plugin.exists(), "the plugin dir is gone after the job"
 with agent.closing(agent.db()) as con:
     based = json.loads(con.execute("SELECT detail FROM steps WHERE what = 'base'").fetchone()[0])
 assert based["sha"] == git(up, "rev-parse", "HEAD").strip() and based["skills"] == ["verify"], "base_sha logged"
+assert based["sources"] == {"verify": ".claude/skills"}, "which source won"
+assert "--agents" not in argv[0] and "--model" in argv[0], "no workflow.json: tasks run as no agent"
+
+# .rookery/workflow.json on base: slots name skills and add instructions; agents are plugin agents
+merge({".rookery/workflow.json": json.dumps({
+           "plan": {"skills": ["repo-recon"], "instructions": "One migration per task."},
+           "task": {"skills": ["verify", "systematic-debugging"]}}),
+       ".rookery/skills/verify/SKILL.md": "---\nname: verify\n---\nfrom .rookery\n",
+       ".claude/skills/repo-recon/SKILL.md": "---\nname: repo-recon\n---\nthe repo's own\n"})
+agent.begin(pc, "plan", "t")
+agent.pin(pc)
+a = agent.active["o/r"]
+sk = a["plugin"] / "skills"
+assert (sk / "verify" / "SKILL.md").read_text(encoding="utf-8").endswith("from .rookery\n")
+assert not (sk / "verify" / "run.sh").exists(), "the winner's files only, never a merge of two skills"
+assert (sk / "repo-recon" / "SKILL.md").read_text(encoding="utf-8").endswith("the repo's own\n"), "repo beats catalog"
+assert (sk / "systematic-debugging" / "find-polluter.sh").exists(), "an enabled catalog skill, files and all"
+assert not (sk / "test-driven-development").exists(), "a catalog skill nobody enabled stays out"
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "reviewer.md"]
+assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
+argv[:] = []
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: plan-ready"})
+agent.claude(pc, "p", key="plan", slot="plan")
+agent.claude(pc, "p", key="task-0", slot="task")
+agent.sh = real_sh
+plan_argv, task_argv = argv
+assert plan_argv[plan_argv.index("--agent") + 1] == "rk:planmaker" and "--model" not in plan_argv, plan_argv
+assert plan_argv[2] == "p\n\nUse the `rk:repo-recon` skill.", "an enabled skill is named, or it never fires"
+sysp = next(x for x in plan_argv if x.startswith("--append-system-prompt="))
+assert "Use tabs." in sysp and sysp.endswith("One migration per task."), "instructions follow the persona"
+assert task_argv[2].endswith("`rk:verify` skill.\n\nUse the `rk:systematic-debugging` skill.")
+assert "One migration" not in "".join(task_argv), "a slot's instructions are its own"
+job_id = a["job"]
+agent.finish("o/r", "ok")
+with agent.closing(agent.db()) as con:
+    logged = [json.loads(d) for w, d in con.execute("SELECT what, detail FROM steps WHERE job = ?", (job_id,))]
+assert logged[0]["sources"] == {"verify": ".rookery/skills", "repo-recon": ".claude/skills",
+                                "systematic-debugging": "catalog"}, logged[0]
+assert [(s["agent"], s["skills"], s["model"]) for s in logged[1:]] == [
+    ("planmaker", ["repo-recon"], "opus"), (None, ["verify", "systematic-debugging"], "sonnet")], logged
+
 def pin_error(files):
     merge(files)
     agent.begin(pc, "plan", "t")
@@ -348,12 +396,36 @@ def pin_error(files):
         return str(e)
     finally:
         agent.finish("o/r", "failed")
+wf_error = lambda wf: pin_error({".rookery/workflow.json": wf if isinstance(wf, str) else json.dumps(wf)})
+assert "not valid JSON" in wf_error("{"), "an invalid file fails, never falls back to the default"
+assert "`after` steps" in wf_error({"after": []})
+assert "a list of names" in wf_error({"task": {"skills": "verify"}})
+assert "must match" in wf_error({"task": {"skills": ["../../etc"]}})
+assert "must match" in wf_error({"plan": {"agent": ""}})
+assert "no skill by that name" in wf_error({"task": {"skills": ["test-drivn-development"]}})
+assert "no agent by that name" in wf_error({"review": {"agent": "ghost"}}), "--agent would ignore it silently"
+assert "plus the `plan` instructions" in wf_error({"plan": {"instructions": "x" * (64 * 1024)}})
+merge({".rookery/workflow.json": "{}"})
 assert "64 KB" in pin_error({"CLAUDE.md": "x" * (64 * 1024 + 1)}), "an oversized CLAUDE.md fails at start"
-assert "`hooks`" in pin_error({"CLAUDE.md": "ok\n", ".claude/skills/verify/SKILL.md":
+assert "`hooks`" in pin_error({"CLAUDE.md": "ok\n", ".rookery/skills/verify/SKILL.md":
                                "---\nname: verify\nhooks:\n  PreToolUse: []\n---\n"}), "skill hooks rejected"
 assert "must match" in pin_error({".claude/skills/verify/SKILL.md": "---\nname: verify\n---\n",
                                   ".claude/skills/Bad_Name/SKILL.md": "---\nname: x\n---\n"})
 assert not list((agent.WORKSPACE / "plugins").rglob("job-*")), "a failed job's plugin dir is gone too"
+# frontmatter: an allowlist of top-level keys, however the YAML is laid out
+fm = agent.WORKSPACE / "x.md"
+def fm_error(text, keys=agent.SKILL_KEYS):
+    fm.write_text(text, encoding="utf-8")
+    try:
+        agent.parse_agent(fm, "x") if keys == agent.AGENT_KEYS else agent.frontmatter(fm, keys, "x")
+    except RuntimeError as e:
+        return str(e)
+assert "`hooks`" in fm_error("---\n  name: x\n  hooks:\n    Stop: []\n---\n"), "an indented top level is still top"
+assert "`mcpServers`" in fm_error("---\nname: x\nmcpServers: {}\n---\n", agent.AGENT_KEYS)
+assert "`permissionMode`" in fm_error("---\nname: x\npermissionMode: bypassPermissions\n---\n", agent.AGENT_KEYS)
+assert "`model`" in fm_error("---\nname: x\nmodel: gpt-5\n---\n", agent.AGENT_KEYS)
+assert "filename" in fm_error("---\nname: y\n---\n", agent.AGENT_KEYS)
+assert fm_error("---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n", agent.AGENT_KEYS) is None
 
 # run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
 real_pin, agent.pin = agent.pin, lambda c: None   # pin() is tested above
@@ -519,6 +591,36 @@ assert body(req("GET", "/api/runs?repo=o/other", sid=sid))["runs"] == []
 assert req("GET", f"/api/runs/{theirs}", sid=sid)[0] == 404, "another tenant's run looks like no run"
 one = body(req("GET", f"/api/runs/{mine}", sid=sid))
 assert one["title"] == "Add a thing" and [s["what"] for s in one["steps"]] == ["task", "claude", "error"]
+
+# workflow: agent.steer() — what pin() runs at job start — into a throwaway dir; an unseen repo is a 404
+assert req("GET", "/api/repos/o/other/workflow", sid=sid)[0] == 404, "another tenant's personas stay theirs"
+assert req("GET", "/api/repos/o/nope/workflow", sid=sid)[0] == 404
+assert "still cloning" in body(req("GET", "/api/repos/o/r/workflow", sid=sid))["error"]
+agent.clone_dir("o/r").mkdir(parents=True)
+real_steer, dirs = agent.steer, []
+def fake_steer(repo, path, base, plug):
+    dirs.append(plug)
+    wf = {**agent.WORKFLOW, "task": {**agent.WORKFLOW["task"], "skills": ["tdd"]}}
+    return {"sha": "abc", "claude_md": "é", "workflow": wf, "sources": {"tdd": "catalog"},
+            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {}}}
+agent.steer = fake_steer
+w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
+assert w["sha"] == "abc" and w["claude_md"] == 2 and w["error"] is None, w
+assert [(k, v["agent"], v["model"], v["custom"]) for k, v in w["slots"].items()] == [
+    ("plan", "planmaker", "opus", False), ("task", None, "sonnet", True), ("review", "reviewer", None, False)], w
+assert w["skills"] == {"tdd": {"source": "catalog", "description": "red, green"}}
+assert not dirs[0].exists(), "the throwaway plugin dir is gone"
+agent.steer = lambda *a: (_ for _ in ()).throw(RuntimeError("`task` names the skill `x`"))
+assert body(req("GET", "/api/repos/o/r/workflow", sid=sid))["error"] == "`task` names the skill `x`", \
+    "the error the next job would fail with"
+agent.steer = real_steer
+cat = {s["name"]: s for s in body(req("GET", "/api/skills", sid=sid))["skills"]}
+assert sorted(cat) == ["repo-recon", "systematic-debugging", "test-driven-development",
+                       "verification-before-completion"], cat
+assert cat["repo-recon"]["slot"] == "plan" and cat["repo-recon"]["source"] == "ours"
+assert cat["systematic-debugging"]["source"] == "obra/superpowers@8ca22db", "\"same\" repeats the row above"
+assert cat["test-driven-development"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")
+assert all(s["description"] for s in cat.values())
 
 # POSTs need the session's CSRF token; logout ends the session server-side
 assert req("POST", "/auth/logout", sid=sid)[0] == 403

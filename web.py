@@ -20,12 +20,14 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
 from contextlib import closing
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import agent
 from agent import log
@@ -186,6 +188,44 @@ def run(s, job):
             "steps": [{"at": at, "what": w, **d} for at, w, d in steps]}
 
 
+def workflow(s, repo):
+    """A visible repo's effective workflow, from agent.steer(): the job's own validator, on a
+    freshly fetched base, into a throwaway plugin dir. None for a repo the session can't see:
+    its custom personas and instructions are that tenant's."""
+    if repo not in visible(s):
+        return None
+    base, path = agent.REPOS[repo], agent.clone_dir(repo)
+    out = {"repo": repo, "base": base, "error": None}
+    if not base or not path.exists():
+        return {**out, "error": "Rookery is still cloning this repo. Try again in a minute."}
+    with tempfile.TemporaryDirectory() as plug:
+        try:
+            got = agent.steer(repo, path, base, Path(plug))
+        except Exception as e:   # whatever would fail the next job at start
+            return {**out, "error": str(e)}
+    model = lambda a: got["agents"][a].get("model") if a else "sonnet"   # claude()'s choice, same rule
+    return {**out, "sha": got["sha"], "claude_md": len(got["claude_md"].encode()),
+            "slots": {k: {**v, "model": model(v["agent"]), "custom": v != agent.WORKFLOW[k]}
+                      for k, v in got["workflow"].items()},
+            "agents": {n: m.get("description", "") for n, m in got["agents"].items()},
+            "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
+
+
+def catalog():
+    """skills/: each SKILL.md's description, plus slot and source from the README's table,
+    which is where the pinned upstream commit is written down. "same" repeats the row above."""
+    rows, src = {}, ""
+    for m in re.finditer(r"^\| `([\w-]+)` \| (\w+) \| (.+?) \|$", (agent.HERE / "skills" / "README.md")
+                         .read_text(encoding="utf-8"), re.M):
+        src = src if m.group(3) == "same" else m.group(3)
+        link = re.search(r"\[([^]]+)]\((https://[^)]+)\)", src)
+        rows[m.group(1)] = {"slot": m.group(2), "source": link.group(1) if link else src,
+                            "url": link and link.group(2)}
+    return [{"name": p.parent.name, **rows.get(p.parent.name, {"slot": None, "source": None, "url": None}),
+             "description": agent.frontmatter(p, agent.SKILL_KEYS, p.parent.name).get("description", "")}
+            for p in sorted((agent.HERE / "skills").glob("*/SKILL.md"))]
+
+
 # --- routing -----------------------------------------------------------------
 
 def route(method, url, headers, body=b""):
@@ -211,6 +251,11 @@ def route(method, url, headers, body=b""):
             return js(200, {"login": s["login"], "csrf": s["csrf"], "app": agent.ME.removesuffix("[bot]")})
         if method == "GET" and path == "/api/repos":
             return js(200, repos(s))
+        if method == "GET" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/workflow", path)):
+            w = workflow(s, m.group(1))
+            return js(200, w) if w else js(404, {"error": "no such repo"})
+        if method == "GET" and path == "/api/skills":
+            return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":
             return js(200, {"runs": runs(s, urllib.parse.parse_qs(u.query).get("repo", [None])[0])})
         if method == "GET" and (m := re.fullmatch(r"/api/runs/(\d+)", path)):

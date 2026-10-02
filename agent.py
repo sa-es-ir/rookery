@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import textwrap
 import threading
 import time
 import urllib.request
@@ -74,9 +75,18 @@ NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
 # CLAUDE.md goes to the CLI as one argv entry, and Linux caps one at 128 KB
 CLAUDE_MD_MAX = 64 * 1024
-SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
-# a repo skill's frontmatter may say no more than this — `hooks:` would run shell here
-SKILL_KEYS = re.compile(r"(name|description|allowed-tools)[ \t]*:")
+# every skill and agent name: it is rendered into prompts ("Use the `rk:x` skill") and --agent
+NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+# frontmatter may say no more than this — `hooks:` would run shell here, `mcpServers:`
+# reach out from here, `permissionMode:` loosen what the deny rules hold
+SKILL_KEYS = ("name", "description", "allowed-tools")
+AGENT_KEYS = ("name", "description", "tools", "model", "skills")
+MODELS = ("haiku", "sonnet", "opus")
+# the built-in workflow: today's pipeline, no skills. Whatever .rookery/workflow.json on
+# base leaves out — a slot, or a key in one — comes from here.
+WORKFLOW = {"plan": {"agent": "planmaker", "skills": [], "instructions": ""},
+            "task": {"agent": None, "skills": [], "instructions": ""},
+            "review": {"agent": "reviewer", "skills": [], "instructions": ""}}
 
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
@@ -278,6 +288,7 @@ def usage(repo):
 
 active = {}
 alock = threading.Lock()
+fetchlocks = collections.defaultdict(threading.Lock)   # repo -> held around `git fetch`, see fetch()
 
 
 def begin(c, act, title=None):
@@ -354,60 +365,158 @@ def worktree(c):
     if not wt.exists():
         log(f"#{c.n} creating worktree {wt} from origin/{c.base}")
         wt.parent.mkdir(parents=True, exist_ok=True)
-        sh("git", "fetch", "origin", c.base, cwd=c.path, env=auth(c.repo))
+        fetch(c.repo, c.path, c.base)
         sh("git", "worktree", "add", "-B", f"feature/issue-{c.n}", str(wt),
            f"origin/{c.base}", cwd=c.path)
     return wt
 
 
+def frontmatter(p, keys, where):
+    """p's top-level frontmatter keys -> raw value, continuation lines folded in. Any key
+    outside `keys` fails the job. The CLI reads the file itself; this only gates it."""
+    m = re.match(r"\s*---[ \t]*\r?\n(.*?)\r?\n---", p.read_text(encoding="utf-8-sig"), re.S) \
+        if p.exists() else None
+    meta, key = {}, None
+    # dedent: YAML takes a uniformly indented block as the top level, so must we
+    for line in textwrap.dedent(m.group(1)).splitlines() if m else []:
+        if not line.strip() or line.startswith("#"):
+            continue
+        if line[0].isspace() or line.startswith("- ") or line == "-":   # belongs to the key above
+            if key:
+                meta[key] = (meta[key] + " " + line.strip()).strip()
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if key not in keys:
+            raise RuntimeError(f"{where}: frontmatter `{key}` is not allowed — only {', '.join(keys)}.")
+        meta[key] = "" if val in (">", "|", ">-", "|-") else val.strip("'\"")
+    return meta
+
+
+def parse_agent(p, where):
+    """An agent file held to the frontmatter allowlist. The CLI reads the persona itself
+    from the plugin, as `rk:<name>`; Rookery only needs the model, for the run log."""
+    meta = frontmatter(p, AGENT_KEYS, where)
+    if not NAME.fullmatch(p.stem) or meta.get("name", p.stem) != p.stem:
+        raise RuntimeError(f"{where}: an agent's name must match `{NAME.pattern}` and its filename.")
+    if meta.get("model", MODELS[0]) not in MODELS:
+        raise RuntimeError(f"{where}: `model` must be one of {', '.join(MODELS)}.")
+    return meta
+
+
+def workflow(text, where):
+    """.rookery/workflow.json -> every slot with every key, WORKFLOW filling what the file
+    leaves out. An invalid file fails the job: silently running the default is worse."""
+    try:
+        given = json.loads(text) if text else {}
+    except ValueError as e:
+        raise RuntimeError(f"{where} is not valid JSON: {e}")
+    if not isinstance(given, dict) or given.keys() - WORKFLOW.keys():
+        raise RuntimeError(f"{where}: the top level is an object with only {', '.join(WORKFLOW)} "
+                           "(`after` steps are not built yet).")
+    wf = {}
+    for slot, default in WORKFLOW.items():
+        s = given.get(slot, {})
+        if not isinstance(s, dict) or s.keys() - default.keys():
+            raise RuntimeError(f"{where}: `{slot}` is an object with only {', '.join(default)}.")
+        s = wf[slot] = {**default, **s}
+        if not (s["agent"] is None or isinstance(s["agent"], str)) or not isinstance(s["instructions"], str) \
+                or not isinstance(s["skills"], list) or not all(isinstance(k, str) for k in s["skills"]):
+            raise RuntimeError(f"{where}: in `{slot}`, `agent` is a name or null, `skills` a list of "
+                               "names, `instructions` a string.")
+        for name in s["skills"] + ([] if s["agent"] is None else [s["agent"]]):
+            if not NAME.fullmatch(name):
+                raise RuntimeError(f"{where}: `{name}` in `{slot}` — a name must match `{NAME.pattern}`.")
+    return wf
+
+
+def fetch(repo, path, base):
+    """Under the repo's lock: the portal's workflow view fetches from an HTTP thread while
+    the repo's worker may be fetching too, and two fetches race on the same ref lock."""
+    with fetchlocks[repo]:
+        sh("git", "fetch", "origin", base, cwd=path, env=auth(repo))
+
+
 def pin(c):
-    """Read what steers the agent — root CLAUDE.md and .claude/skills — from a freshly
-    fetched origin/<base>, once at job start, for every call in the job. Not from the
-    worktree: those are the files a task agent edits mid-run. A change to any of it
+    """Read what steers the agent — root CLAUDE.md, .rookery/workflow.json, skills — from a
+    freshly fetched origin/<base>, once at job start, for every call in the job. Not from
+    the worktree: those are the files a task agent edits mid-run. A change to any of it
     steers the bot only after a human merges it. A bad input fails the job here."""
-    sh("git", "fetch", "origin", c.base, cwd=c.path, env=auth(c.repo))
-    sha = sh("git", "rev-parse", f"origin/{c.base}", cwd=c.path)
-    oid = lambda path: sh("git", "rev-parse", "--verify", "--quiet", f"{sha}:{path}", cwd=c.path, check=False)
-    md = sh("git", "cat-file", "blob", o, cwd=c.path) if (o := oid("CLAUDE.md")) else ""
-    if len(md.encode()) > CLAUDE_MD_MAX:
-        raise RuntimeError(f"CLAUDE.md on {c.base} is {len(md.encode()) // 1024} KB; Rookery passes it to "
-                           f"the agent in one argument, which is capped at {CLAUDE_MD_MAX // 1024} KB. "
-                           "Shorten it on the base branch, then comment again.")
     a = active[c.repo]
-    a["claude_md"] = md
-    # one plugin per job (the CLI loads exactly one per --plugin-dir), so its skills are `rk:<name>`
-    a["plugin"] = plug = WORKSPACE / "plugins" / c.repo.replace("/", "_") / f"job-{a['job']}"
+    plug = WORKSPACE / "plugins" / c.repo.replace("/", "_") / f"job-{a['job']}"
+    a["plugin"] = plug   # set first, so finish() removes it whatever steer() gets to
+    a.update(steer(c.repo, c.path, c.base, plug))
+    step(c.repo, "base", branch=c.base, sha=a["sha"], skills=sorted(a["sources"]), sources=a["sources"])
+    log(f"#{c.n} pinned origin/{c.base} at {a['sha'][:12]}: {len(a['claude_md'])} chars of CLAUDE.md, "
+        f"skills {a['sources']}")
+
+
+def steer(repo, path, base, plug):
+    """pin()'s work, minus the job: fetch base, validate everything that steers the agent,
+    assemble the plugin at `plug`. The portal's workflow view calls this too, so the page
+    and the next run cannot disagree. Raises on the first bad input."""
+    fetch(repo, path, base)
+    sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
+    oid = lambda p: sh("git", "rev-parse", "--verify", "--quiet", f"{sha}:{p}", cwd=path, check=False)
+    blob = lambda p: sh("git", "cat-file", "blob", o, cwd=path) if (o := oid(p)) else ""
+    md = blob("CLAUDE.md")
+    wf = workflow(blob(".rookery/workflow.json"), f".rookery/workflow.json on {base}")
+    for slot, s in wf.items():
+        if (size := len((md + s["instructions"]).encode())) > CLAUDE_MD_MAX:
+            also = f" plus the `{slot}` instructions in .rookery/workflow.json" if s["instructions"] else ""
+            raise RuntimeError(f"CLAUDE.md{also} on {base} is {size // 1024} KB; Rookery passes it to "
+                               f"the agent in one argument, which is capped at {CLAUDE_MD_MAX // 1024} KB. "
+                               "Shorten it on the base branch, then comment again.")
+    # one plugin per job (the CLI loads exactly one per --plugin-dir), so all in it is `rk:<name>`.
+    # Only skills/ and agents/: hooks/, .mcp.json or commands/ from any source never get in.
     (plug / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (plug / ".claude-plugin" / "plugin.json").write_text('{"name": "rk"}', encoding="utf-8")
     skills = plug / "skills"
     skills.mkdir(exist_ok=True)
-    if oid(".claude/skills"):
-        tar = subprocess.run(["git", "archive", f"{sha}:.claude/skills"], cwd=c.path,
-                             capture_output=True, check=True).stdout
-        with tarfile.open(fileobj=io.BytesIO(tar)) as t:
-            t.extractall(skills, filter="data")   # "data": no link or path out of skills/
-    names = sorted(d.name for d in skills.iterdir() if d.is_dir())
-    for name in names:
-        where = f".claude/skills/{name} on {c.base}"
-        if not SKILL_NAME.fullmatch(name):
-            raise RuntimeError(f"{where}: a skill name must match `{SKILL_NAME.pattern}`.")
-        p = skills / name / "SKILL.md"
-        fm = re.match(r"\s*---[ \t]*\r?\n(.*?)\r?\n---", p.read_text(encoding="utf-8-sig"), re.S) \
-            if p.exists() else None
-        for line in fm.group(1).splitlines() if fm else []:
-            # top-level keys only: indented lines, `- ` items and comments belong to one above
-            if line.strip() and not line[0].isspace() and not line.startswith(("#", "- ")) \
-                    and line != "-" and not SKILL_KEYS.match(line):
-                raise RuntimeError(f"{where}: SKILL.md frontmatter `{line.split(':')[0].strip()}` is not "
-                                   "allowed — only name, description and allowed-tools.")
-    step(c.repo, "base", branch=c.base, sha=sha, skills=names)
-    log(f"#{c.n} pinned origin/{c.base} at {sha[:12]}: {len(md)} chars of CLAUDE.md, skills {names}")
+    shutil.copytree(HERE / "agents", plug / "agents")
+    # the first source to bring a name wins: .rookery/skills, .claude/skills, then the catalog
+    won = {}
+    for src in (".rookery/skills", ".claude/skills"):
+        if oid(src):
+            tar = subprocess.run(["git", "archive", f"{sha}:{src}"], cwd=path,
+                                 capture_output=True, check=True).stdout
+            with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+                # "data": no link or path out of skills/
+                t.extractall(skills, filter="data", members=[m for m in t if m.name.split("/")[0] not in won])
+            for d in skills.iterdir():
+                if d.is_dir():
+                    won.setdefault(d.name, src)
+    # the catalog only as far as this repo enabled it; names are NAME-checked, so no `..`
+    for name in sorted({k for s in wf.values() for k in s["skills"]} - won.keys()):
+        if (HERE / "skills" / name).is_dir():
+            shutil.copytree(HERE / "skills" / name, skills / name)
+            won[name] = "catalog"
+    described = {}
+    for name, src in sorted(won.items()):
+        where = f"{src}/{name} on {base}" if src != "catalog" else f"catalog skill {name}"
+        if not NAME.fullmatch(name):
+            raise RuntimeError(f"{where}: a skill name must match `{NAME.pattern}`.")
+        described[name] = frontmatter(skills / name / "SKILL.md", SKILL_KEYS, where).get("description", "")
+    agents = {p.stem: parse_agent(p, f"agent {p.stem}") for p in sorted((plug / "agents").glob("*.md"))}
+    # --agent with a name that does not exist is silently ignored (S2a): never pass one
+    for slot, s in wf.items():
+        for kind, names, have in (("agent", [s["agent"]] if s["agent"] else [], agents),
+                                  ("skill", s["skills"], won)):
+            if missing := [x for x in names if x not in have]:
+                raise RuntimeError(f".rookery/workflow.json on {base}: `{slot}` names the {kind} "
+                                   f"`{missing[0]}`, and there is no {kind} by that name.")
+    return {"sha": sha, "claude_md": md, "workflow": wf, "agents": agents, "sources": won,
+            "skills": described}
 
 
-def claude(c, prompt, key="plan", resume=False, agent=None):
-    """One session per key: planning is one long thread, each task is its own."""
+def claude(c, prompt, key="plan", resume=False, slot="task"):
+    """One session per key: planning is one long thread, each task is its own. `slot`
+    picks the workflow slot: its agent, the skills to name, the instructions to append."""
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}"))
     a = active.get(c.repo) or {}
+    s = (a.get("workflow") or WORKFLOW)[slot]
+    # a skill in the plugin alone almost never fires (S5: 0/3); named in the prompt, 3/3
+    prompt = "\n\n".join([prompt] + [USE_SKILL.format(name=k) for k in s["skills"]])
     cmd = ["claude", "-p", prompt, "--output-format", "json",
            "--permission-mode", "bypassPermissions",
            # none of the target repo's own settings: its hooks would run on this box, and
@@ -418,25 +527,31 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
            "--strict-mcp-config"]
     if a.get("plugin"):
         cmd.append(f"--plugin-dir={a['plugin']}")
-    if a.get("claude_md"):
+    # the slot's instructions land after the persona, which --agent puts in the system prompt
+    rules = [f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}"
+             if a.get("claude_md") else "",
+             f"Instructions for this step (.rookery/workflow.json, from {c.base}):\n\n{s['instructions']}"
+             if s["instructions"] else ""]
+    if any(rules):
         # `=`: a value that starts with "-" stays a value. The header is the CLI's own for a
         # discovered CLAUDE.md: without it haiku dropped a format rule 2/9, with it 0/5 (S8).
         cmd.append("--append-system-prompt=Codebase and user instructions are shown below. Be sure to "
                    "adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default "
-                   "behavior and you MUST follow them exactly as written.\n\n"
-                   f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}")
+                   "behavior and you MUST follow them exactly as written.\n\n" + "\n\n".join(filter(None, rules)))
     # guardrail: the agent never publishes. Deny rules beat bypassPermissions. They match the
     # command after hooks rewrite it, so the operator's RTK hook (DEPLOY.md §7) turning
     # `git push` into `rtk git push` would slip past the first two without the rtk forms.
     cmd += ["--disallowed-tools", "Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"]
-    if agent:
-        # an agent's `tools` list is a role hint, not a boundary — the deny
-        # rules above and the checks in plan() are what actually enforce.
-        cmd += ["--agents", AGENTS, "--agent", agent]
+    if s["agent"]:
+        # a plugin agent, from agents/*.md via pin(); its `model:` is honoured (S2b). Its
+        # `tools` list is a role hint, not a boundary — the deny rules above and the checks
+        # in plan() are what actually enforce.
+        cmd += ["--agent", f"rk:{s['agent']}"]
+        model = (a.get("agents") or {}).get(s["agent"], {}).get("model")
     else:
-        # implementation tasks run as no agent, so the model is set here; the two
-        # roles carry their own `model:` in agents/*.md.
+        # no agent (implementation tasks, by default), so the model is set here
         cmd += ["--model", "sonnet"]
+        model = "sonnet"
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
     wt, out, m = worktree(c), "", None
@@ -456,42 +571,19 @@ def claude(c, prompt, key="plan", resume=False, agent=None):
         # a failed call still counts as a run; its cost is lost with its stdout
         record(c.repo, cost_of(out))
         step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
-             usd=cost_of(out))
+             usd=cost_of(out), agent=s["agent"], skills=s["skills"], model=model)
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
     return m.group(1), (text[:m.start()] + text[m.end():]).strip()
 
 
-# Named roles, loaded from agents/*.md and passed to the CLI as --agents/--agent.
-# They hold the standing rules of a role; the templates below hold the job.
-# Implementation tasks run as no agent at all — the default harness with the
+# Named roles live in agents/*.md and reach the CLI as plugin agents, `--agent rk:<name>`
+# (pin(), claude()). They hold the standing rules of a role; the templates below hold
+# the job. Implementation tasks run as no agent at all — the default harness with the
 # deny rules is the point.
 
-def parse_agent(p):
-    """The Claude Code agent file format, minimal subset: a folded `description: >`,
-    an inline `tools: [...]`, and the body as the prompt. Same format `--plugin-dir`
-    would read, so that swap deletes this function and changes nothing else."""
-    fm, body = re.match(r"^---\n(.*?)\n---\n(.*)$",
-                        p.read_text(encoding="utf-8"), re.S).groups()
-    meta, key = {}, None
-    for line in fm.splitlines():
-        m = re.match(r"(\w+):[ \t]*(.*)$", line)
-        if m:
-            key, val = m.group(1), m.group(2).strip()
-            meta[key] = "" if val == ">" else val   # folded block scalar: value is below
-        elif line.strip() and key:
-            meta[key] = (meta[key] + " " + line.strip()).strip()
-    assert meta.pop("name", p.stem) == p.stem, f"{p}: name must match the filename"
-    if "tools" in meta:
-        meta["tools"] = [t.strip() for t in meta["tools"].strip("[]").split(",") if t.strip()]
-    return {**meta, "prompt": body.strip()}
-
-
-AGENTS = json.dumps({p.stem: parse_agent(p)
-                     for p in sorted((HERE / "agents").glob("*.md"))})
-
-PLAN = """You are planning work for GitHub issue #{n} in {repo}.
+PLAN ="""You are planning work for GitHub issue #{n} in {repo}.
 
 Title: {title}
 
@@ -554,6 +646,9 @@ plus the findings as markdown, worst first. This text is posted verbatim into
 the pull request body, so write it for the person about to read the diff.
 """
 
+# one line per skill the slot enables in .rookery/workflow.json, after the slot's prompt
+USE_SKILL = "Use the `rk:{name}` skill."
+
 
 # --- tasks -------------------------------------------------------------------
 
@@ -606,7 +701,7 @@ def plan(c, title, body, resume):
     prompt = (REPLY.format(n=c.n, body=body, d=pdir(c.n)) if resume
               else PLAN.format(n=c.n, repo=c.repo, title=title, body=body,
                                d=pdir(c.n), max=MAX_TASKS))
-    status, msg = claude(c, prompt, resume=resume, agent="planmaker")
+    status, msg = claude(c, prompt, resume=resume, slot="plan")
     keep_plans_only(c, worktree(c))
     comment(c, msg)
     set_phase(c, "rookery:awaiting-input" if status == "questions" else "rookery:awaiting-approval")
@@ -646,7 +741,7 @@ def implement(c):
 
     set_phase(c, "rookery:reviewing")
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
-                             key="review", agent="reviewer")
+                             key="review", slot="review")
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
     # an explicit https URL, so the push is the App's even when origin is ssh
@@ -659,7 +754,9 @@ def implement(c):
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
              "--title", title, "--body-file", "-",
-             input="\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}")
+             input="\n\n".join(done) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
+             # the commit every steering input was read at; GitHub links owner/repo@sha
+             f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}")
     # The review is advisory: the PR opens either way, so the work is always on
     # GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)

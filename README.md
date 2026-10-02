@@ -87,7 +87,7 @@ issue is. `decisions.md` is the only memory that crosses between them.
 
 ### Two named roles
 
-`agent.py:AGENTS` defines two, passed to the CLI as `--agents`/`--agent`:
+`agents/*.md` defines two, passed to the CLI as plugin agents (`--agent rk:<name>`):
 
 | Role | Runs | Can it write? |
 | --- | --- | --- |
@@ -103,7 +103,33 @@ stranded in a local worktree. A `changes-needed` verdict only lands
 `rookery:error` so somebody looks. Blocking and self-fixing variants are specced
 but deliberately unbuilt.
 
-To split models by role, add `"model": "opus"` to a role in `AGENTS`.
+Each role sets its model in its frontmatter (`model: opus`); tasks run on sonnet.
+
+### Per-repo workflow
+
+A repo steers its runs from its **base branch** — never from the branch the agent
+is editing, so a change takes effect only once a human merges it:
+
+- `CLAUDE.md` (root) and `.claude/skills/` work as they do for the repo's own
+  developers. Nested `CLAUDE.md` files are not read.
+- `.rookery/skills/<name>/SKILL.md` are skills for the bot only; they win over a
+  `.claude/skills` skill, which wins over the built-in catalog
+  ([skills/](skills/README.md)), of the same name.
+- `.rookery/workflow.json` picks the agent, the skills and extra instructions
+  per slot. Anything left out keeps the default: today's pipeline, no skills.
+
+```json
+{
+  "plan":   { "skills": ["repo-recon"], "instructions": "Every schema change gets its own task." },
+  "task":   { "skills": ["verification-before-completion"] },
+  "review": { "agent": "reviewer" }
+}
+```
+
+A skill runs only when a slot names it. An invalid file, or a name that matches
+no skill or agent, fails the run at start with a comment — Rookery never quietly
+falls back to the default. The draft PR's footer names the base commit the run
+read all of this at.
 
 ## Setup
 
@@ -171,6 +197,11 @@ URL. You see the repos of your own installations of the App, and for each:
   push, PR, the error;
 - **Cancel** on a running job (write access needed): the `claude` call is killed and the
   issue gets the error comment and `rookery:error`, like any failure. `approve` resumes it.
+- **Workflow**: the pipeline the repo's next issue gets — agent, model, skills and
+  instructions per slot, read from `.rookery/workflow.json` on base just now and checked
+  the way a job checks it, so a broken config shows the error the job would fail with.
+  Read-only: change it by merging to base.
+- **Skills** (sidebar): the built-in catalog, with each skill's slot and pinned source.
 
 There is no approve button. Approval stays an `approve` comment on the issue.
 

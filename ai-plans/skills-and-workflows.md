@@ -12,10 +12,12 @@ Lets a tenant change *how* Rookery works on their repo without weakening
 
 **Status:** spikes done (§8, CLI 2.1.110 on the server, 1 October 2026).
 `--strict-mcp-config` (PR #7, §9.0) and A0 (PR #8, §9.1) are merged, and both
-were deployed together on 2 October 2026 and smoke-tested (§8). Phases A–C are
-not started. **Decided:** tenant configuration
+were deployed together on 2 October 2026 and smoke-tested (§8). Phase A is split:
+A1 (the backend) and A2 (the portal) were deployed together on 2 October 2026; B and C are not started. **Decided:** tenant configuration
 lives in the repo under `.rookery/` (§1.2), and org defaults wait for Phase C.
-The decisions still open are §9.2, §9.3 and §9.5.
+The first catalog is 4 skills (§9.3), and task skills are off by default (§9.5).
+Both are recorded in [trade-offs.md](trade-offs.md). The only decision still open
+is §9.2, which must be settled before Phase B.
 
 ---
 
@@ -509,10 +511,13 @@ shared by every tenant, which needs a spike with a per-tenant store first.
 2. **Caps. Decide before Phase B.** Raise the `RUN_CAP` default (one env var,
    cheapest), or switch to calls per issue? Plan + 6 tasks + review is already
    8 of 10.
-3. **First catalog cut.** The bold rows in §2.4.
+3. ~~First catalog cut~~ **Decided: 4 skills.** `repo-recon`,
+   `verification-before-completion`, `systematic-debugging` and
+   `test-driven-development`. `security-review` and `changelog` wait for
+   Phase B's `after` steps (trade-offs.md §2).
 4. ~~Org-level `<owner>/.rookery` in Phase A?~~ **Decided: Phase C** (§1.2).
-5. **Default task skills.** Should `verification-before-completion` be on by
-   default for everyone?
+5. ~~Default task skills~~ **Decided: off by default.** A repo with no
+   `workflow.json` gets no task skills (trade-offs.md §1).
 
 ## 10. Phasing
 
@@ -521,6 +526,7 @@ shared by every tenant, which needs a spike with a per-tenant store first.
 | 0 | ~~Spikes~~ done (§8) | n/a |
 | 0.5 | ~~`--strict-mcp-config` in `claude()` (§9.0)~~ **merged, PR #7** | the flag is in every `claude` argv |
 | A0 | **Done: PR #8, deployed and smoke-tested 2 October 2026** (`pin()`). Fetch base at job start, `--setting-sources user --strict-mcp-config` (S4e-D), `stdin=DEVNULL` on `claude`, root `CLAUDE.md` from base via `--append-system-prompt`, repo `.claude/skills` from base into a per-job plugin removed in `finally`, `base_sha` in the run log. **Its own PR and deploy.** | no project hooks load; skills and `CLAUDE.md` are read from the freshly fetched `origin/<base>`, not the worktree; an oversized `CLAUDE.md` fails at start; skill `hooks:` frontmatter rejected; the plugin dir is gone after the job |
-| A | Catalog in `skills/`, `.rookery/workflow.json` (slots, skills, `instructions`), skills named in slot prompts, agents moved to the plugin as `rk:<name>`, run-log fields, portal Workflow view and catalog | a bad config, a bad name or an unknown agent fails at start; unknown frontmatter keys rejected; only `skills/` + `agents/` assembled; the workflow API 404s an unseen repo and uses the job's validator |
+| A1 | **Deployed 2 October 2026, with A2.** Backend half of A: catalog in `skills/` (pinned to obra/superpowers@8ca22db, see `skills/README.md`), `.rookery/workflow.json` (plan/task/review: agent, skills, `instructions`), skills named in slot prompts, `instructions` after `CLAUDE.md` in `--append-system-prompt`, agents in the plugin as `rk:<name>`, `.rookery/skills` > `.claude/skills` > catalog, run-log fields, PR footer. `after` in the file is rejected until B. | a bad config, a bad name or an unknown skill/agent fails at start; unknown frontmatter keys rejected (skills and agents); only `skills/` + `agents/` assembled; precedence and the winner logged |
+| A2 | **Deployed 2 October 2026, with A1.** Portal half of A: Workflow view, skill catalog, `GET /api/repos/<owner>/<repo>/workflow`, `GET /api/skills` | the workflow API 404s an unseen repo and uses the job's validator |
 | B | `.rookery/agents/`, `after` steps (check/write), `MAX_STEPS`, PR sections, config-change warning | a check step's edits reverted; write-step resume via commit subject; STATUS set enforced per mode |
 | C | Portal editing via PR, agent editor, org defaults | edits need `can_write()`; nothing written except through a PR |

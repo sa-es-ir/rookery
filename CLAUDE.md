@@ -63,17 +63,26 @@ Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rook
 `approve` comment from someone with write access → `implement()` → `rookery:reviewing` → `rookery:done` /
 `rookery:error`.
 
-**Named roles are `AGENTS`, passed as `--agents`/`--agent`.** `planmaker` runs `plan()`,
+**Named roles are plugin agents, `--agent rk:<name>`.** `planmaker` runs `plan()`,
 `reviewer` runs the review pass; implementation tasks deliberately run as _no_ agent — the
 default harness plus the deny rules is the point. They live in `agents/*.md` (root, in the
-native Claude Code agent format, loaded by `parse_agent()` at import) rather than
-`.claude/agents/*.md`: `claude` runs with cwd set to the _target_ repo's worktree, so
-definitions in this repo would never be discovered and writing them into the target would
-pollute it — the JSON is transport, the files are the source. Root, not `.claude/`, so
-Claude Code does not load them as subagents for anyone working _on_ Rookery.
+native Claude Code agent format) and `pin()` copies them into the job's plugin, where
+`parse_agent()` holds their frontmatter to `AGENT_KEYS`. Not `.claude/agents/*.md`:
+`claude` runs with cwd set to the _target_ repo's worktree, so definitions in this repo
+would never be discovered and writing them into the target would pollute it. Root, not
+`.claude/`, so Claude Code does not load them as subagents for anyone working _on_ Rookery.
 Both roles declare `model: opus` in their frontmatter; agentless task invocations pass
 `--model sonnet` in `claude()` — a bad plan costs fifteen tasks of wrong code, grinding
 through those tasks does not need the same model.
+
+**Workflow slots.** `claude(slot=)` is `plan`, `task` or `review`; each slot has an `agent`,
+`skills` and `instructions`, from the target repo's `.rookery/workflow.json` on base with
+`WORKFLOW` filling what it leaves out (the default enables no skills). Enabled skills are
+named in the prompt (`USE_SKILL`) — a skill that is merely installed almost never fires.
+`instructions` go into `--append-system-prompt` after `CLAUDE.md`, under the same 64 KB cap.
+The catalog in `skills/` (see `skills/README.md`) is copied into the plugin only when a slot
+names it; `.rookery/skills` beats `.claude/skills` beats the catalog, and the `base` step
+logs the winner in `sources`.
 
 `implement()` is the heart: loop the first unticked task in `tasks.md` → **a fresh Claude
 session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick the checkbox →
@@ -99,6 +108,11 @@ keeps that list. Visible = that list ∩ `REPOS`. Signing in again replaces the 
 fresh list; the App's Setup URL is `/auth/login`, so an install does that by itself. POSTs
 need the session's `X-CSRF-Token`.
 Cancel needs `can_write()`, the same check as `approve`. `REPOS_ONLY` limits an instance.
+The Workflow view (`GET /api/repos/<owner>/<repo>/workflow`) runs `steer()` — `pin()`'s
+fetch, checks and plugin assembly minus the job — into a temp dir, so the page and the next
+run cannot disagree; an unseen repo is a 404. `fetch()` holds a per-repo lock, since that
+GET fetches from an HTTP thread while the repo's worker may be fetching. `GET /api/skills`
+reads `skills/` plus the slot/source table in `skills/README.md`.
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
@@ -120,11 +134,15 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   (spike S4e in `ai-plans/skills-and-workflows.md`).
 - **What steers the agent is read from base, once per job, never the worktree.** Every
   plan/reply/implement job runs `pin()` first: `git fetch origin <base>`, then root
-  `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job) and `.claude/skills`
-  (→ a per-job `--plugin-dir`, skills `rk:<name>`, removed by `finish()`, cleared at startup)
-  at that sha, logged as the `base` step. `--setting-sources user` keeps the CLI from loading
-  them, or the repo's hooks, from the worktree the agent edits. A skill's frontmatter may
-  only carry `name`, `description`, `allowed-tools`: `hooks:` would run shell on the box.
+  `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job), `.rookery/workflow.json`,
+  `.rookery/skills` and `.claude/skills` (→ a per-job `--plugin-dir` with only `skills/` and
+  `agents/`, all `rk:<name>`, removed by `finish()`, cleared at startup) at that sha, logged as
+  the `base` step. `--setting-sources user` keeps the CLI from loading them, or the repo's
+  hooks, from the worktree the agent edits. A skill's frontmatter may only carry `name`,
+  `description`, `allowed-tools`; an agent's `name`, `description`, `tools`, `model`,
+  `skills`: `hooks:` would run shell on the box. An invalid workflow, a name off `NAME`, or a
+  slot naming a skill or agent that is not in the plugin fails the job at start — never a
+  silent fallback, since `--agent` ignores an unknown name without an error.
 - **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's

@@ -55,7 +55,7 @@
 main{min-width:0}
 .top{height:66px;border-bottom:1px solid var(--smoke);display:flex;align-items:center;gap:16px;
   padding:0 32px;position:sticky;top:0;background:var(--void);z-index:10}
-.top h1{font-size:18px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top h1{min-width:0;font-size:18px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .right{margin-left:auto;display:flex;gap:10px;align-items:center}
 .view{padding:32px;max-width:1000px}
 .intro{color:var(--fog);font-size:15px;font-weight:300;max-width:70ch;margin-bottom:28px}
@@ -105,6 +105,45 @@ main{min-width:0}
   font:400 12px/1.6 var(--mono);color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
   box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 
+/* runs | workflow — pill tag buttons; the view is read-only, so no CTA anywhere on it */
+.switch{display:flex;gap:6px}
+.switch a{border:1px solid var(--smoke);border-radius:8px;padding:5px 16px;font-size:14px;color:var(--fog)}
+.switch a:hover{color:#fff}
+.switch a[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
+
+/* workflow: slots are Workflow Nodes on an Electric Current line; fixed stages are inset, not nodes */
+.flow{display:flex;flex-direction:column;max-width:680px}
+.node{background:var(--surface);border-radius:12px;padding:18px 22px;display:flex;flex-direction:column;gap:10px}
+.node.fixed{background:transparent;box-shadow:var(--inset)}
+.node header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.node h3{font-size:16px;font-weight:400}
+.node header .lbl{margin-left:auto}
+.node .who{font-size:14px;color:var(--fog)}
+.node .who b{font-weight:400;color:#fff;font-family:var(--mono);font-size:13px;letter-spacing:0}
+.node .chips{display:flex;gap:6px;flex-wrap:wrap}
+.node .say{margin:0;background:var(--panel);border-radius:8px;padding:12px 14px;max-height:200px;overflow:auto;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:var(--ash);white-space:pre-wrap;word-break:break-word}
+.node .note{font-size:13px;color:var(--fog);font-weight:300}
+.wire{width:2px;height:28px;margin-left:30px;background:var(--current)}
+.wfacts{display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:var(--fog);margin-bottom:24px}
+.wfacts b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
+.broken{max-width:680px}
+.broken p{font-size:14px;color:var(--ash);margin:12px 0 10px}
+.broken pre{margin:0;background:var(--panel);border-radius:12px;padding:14px 16px;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
+  box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
+.idle{margin-top:24px;font-size:13px;color:var(--fog);font-weight:300;max-width:680px}
+
+/* skill catalog */
+.cat{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.skill{background:var(--surface);border-radius:16px;padding:22px 24px;display:flex;flex-direction:column;gap:10px}
+.skill header{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.skill h3{font:400 14px var(--mono);letter-spacing:0;overflow-wrap:anywhere}
+.skill p{font-size:14px;font-weight:300;color:var(--ash)}
+.skill .src{margin-top:auto;font-size:12px;color:var(--fog);font-family:var(--mono);letter-spacing:0}
+.skill .src a{border-bottom:1px solid rgb(107,33,239)}
+.skill .src a:hover{color:#fff}
+
 /* sign in */
 .gate{min-height:100vh;display:grid;place-items:center;padding:24px;
   background:radial-gradient(126.99% 234.27% at 10.15% 142.35%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%),var(--void)}
@@ -150,12 +189,14 @@ main{min-width:0}
       <h4>Repos · today</h4>
       <nav class="repos" id="repos"></nav>
     </div>
-    <div class="bottom"><span>@<b id="who"></b></span><button class="link" id="out">Sign out</button></div>
+    <div class="bottom"><span>@<b id="who"></b></span><a class="link" href="#skills">Skills</a>
+      <button class="link" id="out">Sign out</button></div>
   </aside>
 
   <main>
     <div class="top">
       <h1 id="title">Runs</h1>
+      <nav class="switch" id="switch" hidden><a href="#">Runs</a><a href="#workflow">Workflow</a></nav>
       <div class="right">
         <span class="toast" id="toast" role="status"></span>
         <span class="lbl err" id="paused" hidden title="The operator's PAUSED file is present">paused</span>
@@ -166,6 +207,21 @@ main{min-width:0}
       <p class="intro">Every plan, reply and implementation Rookery ran on your repos, newest first.
         A run's log is written as it happens, so a failure shows the task it stopped at.</p>
       <div class="runs" id="runs"></div>
+    </section>
+
+    <section class="view" id="flow" hidden>
+      <p class="intro">What Rookery runs on this repo's next issue: <span class="mono">.rookery/workflow.json</span>
+        as it is on the base branch right now, checked the way a job checks it at start. To change it,
+        merge a change to that file.</p>
+      <div id="wf"></div>
+    </section>
+
+    <section class="view" id="skills" hidden>
+      <p class="intro">The skills Rookery ships. A repo turns one on by listing it under a slot's
+        <span class="mono">skills</span> in <span class="mono">.rookery/workflow.json</span>, and Rookery
+        names it in that slot's prompt. A skill of the same name in the repo's own
+        <span class="mono">.rookery/skills/</span> or <span class="mono">.claude/skills/</span> wins.</p>
+      <div class="cat" id="cat"></div>
     </section>
 
     <section class="view" id="one" hidden>
@@ -303,12 +359,76 @@ async function one(){
       h('div', {class: 'side-actions'}, h('span', {class: 'lbl ' + (LBL[r.status] || '')}, r.status), cancel),
       h('div', {class: 'state'}, where(r)),
       h('div', {class: 'facts'},
-        h('span', null, 'Started ', h('b', null, day(r.started))),
+        h('span', null, 'Started ',h('b', null, day(r.started))),
         r.ended && h('span', null, 'Ended ', h('b', null, day(r.ended))),
         h('span', null, 'Model cost ', h('b', null, usd(r.usd))),
         h('span', null, 'Claude calls ', h('b', null, String(r.steps.filter(s => s.what === 'claude').length))))),
     r.steps.length ? h('div', {class: 'steps'}, r.steps.map(stepView))
       : h('p', {class: 'empty'}, 'Nothing logged yet.'));
+}
+
+/* --- one repo's workflow. The GET is a git fetch plus the job's own checks, so it loads
+   on show(), not on the 4s poll. Every string in it came from the repo: h() only. --- */
+const SLOT = {
+  plan: ['Plan', 'One session per issue; it may write agent-plans/ and nothing else.'],
+  task: ['Tasks', 'A fresh session per task, until every box in tasks.md is ticked (at most 15).'],
+  review: ['Review', 'Once, before the push. Advisory: changes-needed sets rookery:error, the PR still opens.'],
+};
+
+function slotNode(name, s, w){
+  const [label, note] = SLOT[name];
+  return h('div', {class: 'node'},
+    h('header', null, h('h3', null, label),
+      h('span', {class: s.custom ? 'lbl ok' : 'lbl', title: s.custom ? 'set by .rookery/workflow.json' : "Rookery's default"},
+        s.custom ? 'repo' : 'built-in')),
+    h('div', {class: 'who'}, s.agent ? ['Agent ', h('b', {title: w.agents[s.agent] || null}, 'rk:' + s.agent)]
+      : 'No agent: the default harness', ' · model ', h('b', null, s.model || 'default')),
+    s.skills.length > 0 && h('div', {class: 'chips'}, s.skills.map(k => {
+      const d = w.skills[k] || {};
+      return h('span', {class: 'lbl', title: (d.description || '') + '\n\nfrom ' + (d.source || '?')}, 'rk:' + k);
+    })),
+    s.instructions && h('pre', {class: 'say'}, s.instructions),
+    h('p', {class: 'note'}, note));
+}
+
+const fixed = (title, note) => h('div', {class: 'node fixed'},
+  h('header', null, h('h3', null, title), h('span', {class: 'lbl'}, 'fixed')), h('p', {class: 'note'}, note));
+
+async function flow(){
+  const repo = state.repo, box = $('#wf');
+  box.replaceChildren(h('p', {class: 'empty'}, 'Reading the base branch…'));
+  let w;
+  try { w = await call('/api/repos/' + repo + '/workflow'); }
+  catch (e) { w = {error: null, failed: e.message}; }
+  if (state.repo !== repo || state.view !== 'flow') return;   // the user moved on meanwhile
+  if (w.failed) return box.replaceChildren(h('p', {class: 'empty'}, w.failed));
+  if (w.error) return box.replaceChildren(h('div', {class: 'broken'}, h('span', {class: 'lbl err'}, 'invalid'),
+    h('p', null, 'The next run on ' + repo + ' fails at start with:'), h('pre', null, w.error)));
+  const named = new Set(Object.values(w.slots).flatMap(s => s.skills));
+  const idle = Object.keys(w.skills).filter(k => !named.has(k));
+  const parts = [slotNode('plan', w.slots.plan, w),
+    fixed('Approve', 'An approve comment on the issue from someone with write access. Never the portal, never a model.'),
+    slotNode('task', w.slots.task, w), slotNode('review', w.slots.review, w),
+    fixed('Push and draft PR', 'By Rookery, to feature/issue-<n>. The agent never pushes.')];
+  box.replaceChildren(
+    h('div', {class: 'wfacts'},
+      h('span', null, 'Base ', h('b', null, w.base)),
+      h('span', null, 'At ', h('b', null, w.sha.slice(0, 12))),
+      h('span', null, 'CLAUDE.md ', h('b', null, w.claude_md ? (w.claude_md / 1024).toFixed(1) + ' KB' : 'none'))),
+    h('div', {class: 'flow'}, parts.flatMap((p, i) => i ? [h('div', {class: 'wire'}), p] : [p])),
+    idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
+      idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
+      '. Name it under a slot\'s skills to use it.'));
+}
+
+/* --- the catalog: static, from skills/ --- */
+async function catalog(){
+  const d = await call('/api/skills');
+  $('#cat').replaceChildren(...d.skills.map(s => h('div', {class: 'skill'},
+    h('header', null, h('h3', null, 'rk:' + s.name), s.slot && h('span', {class: 'lbl'}, s.slot)),
+    h('p', null, s.description),
+    h('div', {class: 'src'}, s.url && /^https:\/\/github\.com\//.test(s.url)
+      ? h('a', {href: s.url, target: '_blank', rel: 'noopener'}, s.source) : s.source || ''))));
 }
 
 async function stop(r){
@@ -322,13 +442,22 @@ async function stop(r){
 
 function toast(msg){ $('#toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').textContent = '', 6000); }
 
-/* --- navigation: #run/<id> is one run, anything else the list --- */
+/* --- navigation: #run/<id> is one run, #workflow the picked repo's workflow,
+   #skills the catalog, anything else the list --- */
 function show(){
   const m = location.hash.match(/^#run\/(\d+)$/);
   state.run = m ? +m[1] : null;
-  if (!m && location.hash) history.replaceState(null, '', location.pathname);
-  $('#list').hidden = !!m; $('#one').hidden = !m;
-  if (!m) $('#title').textContent = state.repo || 'Runs';
+  const v = state.view = m ? 'one' : location.hash === '#skills' ? 'skills'
+    : location.hash === '#workflow' && state.repo ? 'flow' : 'list';
+  if (v === 'list' && location.hash) history.replaceState(null, '', location.pathname);
+  for (const id of ['list', 'one', 'flow', 'skills']) $('#' + id).hidden = id !== v;
+  const sw = $('#switch');
+  sw.hidden = !state.repo || v === 'one' || v === 'skills';
+  sw.children[0].setAttribute('aria-current', v === 'list');
+  sw.children[1].setAttribute('aria-current', v === 'flow');
+  if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : state.repo || 'Runs';
+  if (v === 'flow') flow();
+  if (v === 'skills') catalog().catch(e => toast(e.message));
   refresh();
 }
 
@@ -336,7 +465,7 @@ let busy = false;
 async function refresh(){
   if (busy || !state.me) return;
   busy = true;
-  try { await repos(); await (state.run ? one() : list()); }
+  try { await repos(); await (state.view === 'one' ? one() : state.view === 'list' ? list() : null); }
   catch (e) { if (e.message !== 'signed out') toast(e.message); }
   finally { busy = false; }
 }
