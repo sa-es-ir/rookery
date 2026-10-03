@@ -196,7 +196,7 @@ def workflow(s, repo):
     if repo not in visible(s):
         return None
     base, path = agent.REPOS[repo], agent.clone_dir(repo)
-    out = {"repo": repo, "base": base, "error": None}
+    out = {"repo": repo, "base": base, "error": None, "agent_user": agent.AGENT_USER}
     if not base or not path.exists():
         return {**out, "error": "Rookery is still cloning this repo. Try again in a minute."}
     with tempfile.TemporaryDirectory() as plug:

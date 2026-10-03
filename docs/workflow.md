@@ -74,6 +74,30 @@ Rookery continues at the task that failed. It does not repeat the tasks that are
 
 A person with write access can cancel a running job in the portal. Rookery stops the Claude call, writes a comment and sets `rookery:error`. Comment `approve` to continue.
 
+## Review a pull request
+
+Rookery can review a pull request that it did not write. Ask for the review in one of these ways:
+
+| Do this on the pull request | Notes |
+| --- | --- |
+| Write a comment that contains `@rookery-agent`. | The rest of the comment goes to the reviewer as your note. For example: `@rookery-agent look at the migration`. |
+| Add the label `rookery:pr-review`. | Rookery removes the label when the review is complete. |
+| Request a review from `rookery-agent`. | This works only if `rookery-agent` is a collaborator on the repository. Rookery removes the request when the review is complete. |
+
+Only a person with write, maintain or admin access can ask for a review. A review uses the daily limit of the repository, the same as other runs.
+
+Rookery ignores a mention in a quote (`> …`) or in code. Thus a reply that quotes an earlier request does not start a second review.
+
+Rookery adds a 👀 reaction when the review starts: to your comment for a mention, or to the pull request for the label or a review request. Then it posts one review of type comment on the pull request. The first line gives the verdict, `review-ok` or `changes-needed`, and the agent. The review is advisory. It does not approve the pull request and it does not block a merge.
+
+To review again, for example after new commits, ask again.
+
+Rookery does not review a pull request from a fork. It writes a comment that tells you this.
+
+If the review fails, Rookery writes the error in a comment on the pull request. It does not add a `rookery:*` state label to a pull request.
+
+You can also assign an issue to `rookery-agent` to start a plan. This is the same as the label `rookery:trigger`. It works only if `rookery-agent` is a collaborator.
+
 ## After the pull request closes
 
 When the pull request closes, merged or not merged, Rookery deletes the local working copy of that issue. It does not delete a branch that has commits that are not on GitHub.
