@@ -23,6 +23,7 @@ The file has one entry for each slot. A slot is one part of a run:
 - `plan`: the planning.
 - `task`: each task.
 - `review`: the review after the last task.
+- `pr-review`: the review of a pull request that a person asks for (see [Workflow](workflow.md)).
 - `after`: a list of extra steps before the review.
 
 Each slot can set:
@@ -49,18 +50,29 @@ If the file is not valid, or if it names a skill or an agent that does not exist
 
 ## Agents
 
-Rookery has two agents:
+Rookery has three agents:
 
 - `planmaker` writes the plan.
 - `reviewer` reviews the full change.
+- `pr-reviewer` reviews a pull request when a person asks for it.
 
 The tasks do not use an agent. They use the default Claude harness.
 
 To add an agent, write `.rookery/agents/<name>.md`. Use the Claude Code agent format. The frontmatter can have only these keys: `name`, `description`, `tools`, `model` and `skills`.
 
-An agent with the name `planmaker` or `reviewer` replaces the agent of Rookery with that name.
+An agent with the name `planmaker`, `reviewer` or `pr-reviewer` replaces the agent of Rookery with that name.
 
 Names use only lower-case letters, digits and hyphens.
+
+### Use your own pull request reviewer
+
+| To do this | Do this |
+| --- | --- |
+| Change the instructions of the Rookery reviewer | Write `.rookery/agents/pr-reviewer.md`. |
+| Use an agent with a different name, skills or instructions | In `.rookery/workflow.json`, write `{"pr-review": {"agent": "my-reviewer", "skills": ["security-review"]}}`. Then write `.rookery/agents/my-reviewer.md`. |
+| Do the same for all repositories of an owner | Put the same files at the root of `<owner>/.rookery`. |
+
+Rookery reads the reviewer from the base branch, not from the pull request. Thus a pull request that changes `.rookery/agents/pr-reviewer.md` gets a review from the agent that is on the base branch now.
 
 ## Skills
 
@@ -82,7 +94,7 @@ The frontmatter of a skill can have only these keys: `name`, `description` and `
 | `repo-recon` | plan | Read the repository before the plan. |
 | `verification-before-completion` | task | Check the work before the task is complete. |
 | `systematic-debugging` | task | Find the cause of a bug before it changes the code. |
-| `security-review` | check | Look for security problems in the change. |
+| `security-review` | check, pr-review | Look for security problems in the change. |
 | `changelog` | write | Add an entry to the changelog. |
 
 The portal shows the catalog in **Skills**.

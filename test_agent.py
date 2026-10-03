@@ -26,6 +26,14 @@ for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-o
     assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
 assert not agent.MARKER.search("**STATUS: review-ok** but see below")
 
+# a PR comment addresses Rookery by @AGENT_USER, never in a quote or code; the rest is the note
+assert agent.mention("@Rookery-Agent look hard at the migration") == "look hard at the migration"
+assert agent.mention("hey @rookery-agent") == "hey" and agent.mention("@rookery-agent") == ""
+for text in ("@rookery-agent-x look", "me@rookery-agent", "> @rookery-agent look\n\nthanks", "see `@rookery-agent`",
+             "```\n@rookery-agent\n```", "~~~\n@rookery-agent", "approve", ""):
+    assert agent.mention(text) is None, text
+assert agent.mention("> @rookery-agent old\n\n@rookery-agent new") == "new", "the quote is not in the note"
+
 # webhook signature
 raw = b'{"action":"opened"}'
 good = "sha256=" + hmac.new(b"s3cr3t", raw, hashlib.sha256).hexdigest()
@@ -72,11 +80,11 @@ assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
 
 # the two named roles, and the review verdicts the orchestrator branches on
 roles = {p.stem: agent.parse_agent(p, p.stem) for p in (agent.HERE / "agents").glob("*.md")}
-assert set(roles) == {"planmaker", "reviewer"}
+assert set(roles) == {"planmaker", "reviewer", "pr-reviewer"}
 assert all(r["description"] for r in roles.values())
-assert "Edit" not in roles["reviewer"]["tools"], "the reviewer reports, never fixes"
+assert "Edit" not in roles["reviewer"]["tools"] + roles["pr-reviewer"]["tools"], "reviewers report, never fix"
 assert all(r["model"] == "opus" for r in roles.values()), "roles think; tasks grind on sonnet"
-assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", None, "reviewer"}
+assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", None, "reviewer", "pr-reviewer"}
 assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
 # the catalog: every skill passes the same allowlist a repo's does
 cat = sorted(p.name for p in (agent.HERE / "skills").iterdir() if p.is_dir())
@@ -253,6 +261,36 @@ for repo, user in [("o/r", "alice"), ("o/other", "alice"), ("o/r", "carol"), ("o
                                     "issue": {"number": 9}, "comment": {"user": {"login": user}, "body": "approve"}})
 assert [(j["repo"], j["body"]) for j in drain()] == [("o/r", "approve")]
 
+# PR review: a mention, the label or a review request, from a writer. Any other PR comment is
+# nothing — even `approve` on a PR carrying a phase label (labels_of says awaiting-approval here)
+for user, text in [("bob", "@rookery-agent look hard at the migration"), ("bob", "approve"),
+                   ("bob", "@rookery-agent-x look"), ("bob", "> @rookery-agent look"), ("carol", "@rookery-agent"),
+                   (agent.ME, "@rookery-agent")]:
+    agent.enqueue("issue_comment", {"action": "created", "repository": {"full_name": "o/r"},
+                                    "issue": {"number": 12, "title": "Fix", "pull_request": {}},
+                                    "comment": {"id": 5, "user": {"login": user}, "body": text}})
+assert drain() == [{"kind": "pr-review", "repo": "o/r", "n": 12, "title": "Fix", "by": "bob",
+                    "note": "look hard at the migration", "comment": 5}]
+def pr_event(action, sender, **k):
+    agent.enqueue("pull_request", {"action": action, "repository": {"full_name": "o/r"}, "sender": {"login": sender},
+                                   "pull_request": {"number": 12, "title": "Fix", "head": {"ref": "x"},
+                                                    "user": {"login": "bob"}}, **k})
+pr_event("labeled", "bob", label={"name": agent.REVIEW_LABEL})
+pr_event("labeled", "bob", label={"name": "bug"})
+pr_event("labeled", "carol", label={"name": agent.REVIEW_LABEL})
+pr_event("review_requested", "alice", requested_reviewer={"login": "Rookery-Agent"})
+pr_event("review_requested", "alice", requested_reviewer={"login": "dave"})
+pr_event("review_requested", "alice", requested_team={"name": "core"})
+pr_event("review_requested", "carol", requested_reviewer={"login": "rookery-agent"})
+assert [(j["kind"], j["by"], j.get("label"), j.get("requested")) for j in drain()] == [
+    ("pr-review", "bob", True, None), ("pr-review", "alice", None, True)]
+# assigning AGENT_USER to an issue starts it, like the trigger label, and only before any phase
+for who, phases in [("rookery-agent", set()), ("dave", set()), ("rookery-agent", {"rookery:planning"})]:
+    agent.labels_of = lambda repo, n: phases
+    agent.enqueue("issues", {"action": "assigned", "assignee": {"login": who},
+                             "repository": {"full_name": "o/r"}, "issue": issue})
+assert [j["kind"] for j in drain()] == ["start"]
+
 # caps: runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
 agent.WORKSPACE = Path(tempfile.mkdtemp())
 agent.PAUSED = agent.WORKSPACE / "PAUSED"
@@ -383,7 +421,8 @@ assert not (sk / "verify" / "run.sh").exists(), "the winner's files only, never 
 assert (sk / "repo-recon" / "SKILL.md").read_text(encoding="utf-8").endswith("the repo's own\n"), "repo beats catalog"
 assert (sk / "systematic-debugging" / "find-polluter.sh").exists(), "an enabled catalog skill, files and all"
 assert not (sk / "changelog").exists(), "a catalog skill nobody enabled stays out"
-assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "reviewer.md"]
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "pr-reviewer.md", "reviewer.md"]
+assert a["workflow"]["pr-review"] == agent.WORKFLOW["pr-review"], "a slot the repo leaves out is the built-in's"
 assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
 argv[:] = []
 agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: plan-ready"})
@@ -433,6 +472,8 @@ assert "must match" in wf_error({"task": {"skills": ["../../etc"]}})
 assert "must match" in wf_error({"plan": {"agent": ""}})
 assert "no skill by that name" in wf_error({"task": {"skills": ["test-drivn-development"]}})
 assert "no agent by that name" in wf_error({"review": {"agent": "ghost"}}), "--agent would ignore it silently"
+assert "`pr-review` names the agent `ghost`" in wf_error({"pr-review": {"agent": "ghost"}})
+assert "`pr-review` names the skill" in wf_error({"pr-review": {"skills": ["nope"]}})
 assert "plus the `plan` instructions" in wf_error({"plan": {"instructions": "x" * (64 * 1024)}})
 merge({".rookery/workflow.json": "{}"})
 assert "64 KB" in pin_error({"CLAUDE.md": "x" * (64 * 1024 + 1)}), "an oversized CLAUDE.md fails at start"
@@ -472,8 +513,8 @@ agent.RUN_CAP = 99
 agent.begin(pc, "implement")
 agent.pin(pc)
 a = agent.active["o/r"]
-assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md", "planmaker.md", "reviewer.md",
-                                                                        "sec.md"], "top-level *.md only"
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md", "planmaker.md", "pr-reviewer.md",
+                                                                        "reviewer.md", "sec.md"], "top-level *.md only"
 assert (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8").endswith("the repo's reviewer\n")
 assert a["agents"]["reviewer"]["model"] == "sonnet" and a["agent_sources"]["planmaker"] == "built-in"
 argv[:] = []
@@ -554,6 +595,26 @@ for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "f
         assert "step z" in str(e), e
 agent.claude, agent.gh, agent.sh = real_claude, real_gh, real_sh
 agent.finish("o/r", "ok")
+
+# a PR's worktree: its head, detached, beside the issue worktrees, with its base fetched for the diff
+git(up, "checkout", "-q", "-b", "feat")
+(up / "feat.txt").write_text("x\n", encoding="utf-8")
+git(up, "add", "-A"), git(up, "commit", "-qm", "feat"), git(up, "push", "-q", "origin", "HEAD:refs/pull/7/head")
+git(up, "checkout", "-q", "main")
+pc7 = agent.Ctx("o/r", 7, clone, "main")
+wt7 = agent.pr_worktree(pc7, "main")
+assert wt7 == agent.wt_root("o/r") / "pr-7" and git(wt7, "diff", "--name-only", "origin/main...HEAD").split() == ["feat.txt"]
+assert git(wt7, "rev-parse", "--abbrev-ref", "HEAD").strip() == "HEAD", "detached: nothing to commit to"
+(wt7 / "junk.txt").write_text("x", encoding="utf-8")
+assert agent.pr_worktree(pc7, "main") == wt7 and not (wt7 / "junk.txt").exists(), "a leftover is replaced"
+# claude(wt=) runs there, and never makes an issue-<n> worktree for the PR's number
+agent.worktree, cwds = lambda c: (_ for _ in ()).throw(AssertionError("an issue worktree for a PR")), []
+agent.sh = lambda *a, **k: cwds.append(k.get("cwd")) or json.dumps({"result": "STATUS: review-ok"})
+agent.claude(pc7, "p", key="pr-review", slot="pr-review", per_job=True, wt=wt7)
+agent.sh = real_sh
+assert cwds == [wt7], cwds
+agent.drop_pr_worktree(pc7)
+assert not wt7.exists() and "pr-7" not in git(clone, "worktree", "list")
 
 # <owner>/.rookery: the owner's defaults, under the repo's own config and over the built-in
 oup = agent.WORKSPACE / "org-up"
@@ -665,6 +726,42 @@ agent.step("o/r", "claude", key="x")            # outside a job: nothing is writ
 with agent.closing(agent.db()) as con:
     assert con.execute("SELECT COUNT(*) FROM steps").fetchone()[0] == len(steps)
 agent.claude = real_claude
+
+# PR review: one comment-type review; a failure is a PR comment, never a phase label on the PR
+ghs, apis, made, ran = [], [], [], []
+prv = {"title": "Fix", "body": "", "baseRefName": "dev", "isCrossRepository": False, "state": "OPEN"}
+def fake_gh(repo, *a, input=None, check=True):
+    ghs.append((a, input))
+    return json.dumps(prv) if a[:2] == ("pr", "view") else ""
+def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=None):
+    assert "look at the migration" in prompt and "`git diff origin/dev...HEAD`" in prompt, prompt
+    ran.append((key, slot, per_job, wt))
+    return "changes-needed", "bug in x.py"
+nope = lambda *a, **k: (_ for _ in ()).throw(AssertionError("gh issue … / a phase label on a PR"))
+saved = agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase, agent.comment
+agent.gh, agent.claude, agent.labels_of, agent.set_phase, agent.comment = fake_gh, fake_claude, nope, nope, nope
+agent.api = lambda m, path, bearer, data=None: apis.append((m, path, data)) or {}
+agent.pr_worktree = lambda c, base: made.append(("add", base)) or Path("pr-8")
+agent.drop_pr_worktree = lambda c: made.append(("drop",))
+job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob", "note": "look at the migration",
+        "comment": 55, "label": True, "requested": True}
+agent.handle(job_)
+assert ran == [("pr-review", "pr-review", True, Path("pr-8"))] and made == [("add", "dev"), ("drop",)]
+assert (("pr", "review", "8", "--comment", "--body-file", "-"), "**changes-needed** · rk:pr-reviewer\n\nbug in x.py") in ghs
+assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
+assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
+                ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis
+ghs.clear(), apis.clear(), made.clear(), ran.clear()
+prv["isCrossRepository"] = True
+agent.handle({**job_, "comment": None, "requested": None})
+assert apis == [("POST", "/repos/o/r/issues/8/reactions", {"content": "eyes"})], "no comment: 👀 on the PR"
+assert not ran and not made, "a fork is refused before anything runs"
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert "from forks" in ghs[1][1]
+with agent.closing(agent.db()) as con:
+    assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE act = 'pr-review' ORDER BY id")] == ["ok", "failed"]
+(agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase,
+ agent.comment), agent.claude = saved, real_claude
 
 # parallel repos: a worker per repo, one job at a time within it
 import threading  # noqa: E402
@@ -807,9 +904,10 @@ def fake_steer(repo, path, base, plug):
           "after": [{**agent.STEP, "agent": "sec", "mode": "check"}]}
     owf = {**agent.WORKFLOW, "review": {**agent.WORKFLOW["review"], "instructions": "Owner's."}, "after": []}
     return {"sha": "abc", "claude_md": "é", "workflow": wf, "sources": {"tdd": "catalog"},
-            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {},
+            "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {}, "pr-reviewer": {},
                                                         "sec": {"model": "haiku", "description": "holes"}},
-            "agent_sources": {"planmaker": "built-in", "reviewer": "built-in", "sec": ".rookery/agents"},
+            "agent_sources": {"planmaker": "built-in", "reviewer": "built-in", "pr-reviewer": "built-in",
+                              "sec": ".rookery/agents"},
             "org": {"repo": "o/.rookery", "sha": "def"}, "org_workflow": owf}
 agent.steer = fake_steer
 real_files, agent.config_files = agent.config_files, lambda repo: {"workflow.json": "{}\n"}
@@ -817,7 +915,8 @@ w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
 assert w["sha"] == "abc" and w["claude_md"] == 2 and w["error"] is None, w
 assert [(k, v["agent"], v["model"], v["from"]) for k, v in w["slots"].items()] == [
     ("plan", "planmaker", "opus", "built-in"), ("task", None, "sonnet", "repo"),
-    ("review", "reviewer", None, "repo")], "the repo's review is the built-in's, but over the owner's"
+    ("review", "reviewer", None, "repo"), ("pr-review", "pr-reviewer", None, "built-in")], \
+    "the repo's review is the built-in's, but over the owner's"
 assert w["org"] == {"repo": "o/.rookery", "sha": "def"}
 assert w["skills"] == {"tdd": {"source": "catalog", "description": "red, green"}}
 assert [(s["agent"], s["mode"], s["model"], s["from"]) for s in w["after"]] == [("sec", "check", "haiku", "repo")]

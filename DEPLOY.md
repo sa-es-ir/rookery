@@ -10,7 +10,7 @@ user it runs as.
 ## 0. Before you start
 
 - A **GitHub App** (step 5): permissions Contents RW, Issues RW, Pull requests RW,
-  Metadata R; events Issues + Issue comment; installed on the target repo. Its App ID,
+  Metadata R; events Issues + Issue comment + Pull request; installed on the target repo. Its App ID,
   private key `.pem` and webhook secret are all the GitHub credentials the box gets —
   no PAT, no `gh auth login`.
 - The **target** repo the agent will work on. Never this one.
@@ -109,6 +109,7 @@ WEBHOOK_SECRET=<the App's webhook secret>
 CLIENT_ID=<the App's client id>
 CLIENT_SECRET=<the App's client secret>
 PUBLIC_URL=https://HOSTNAME
+AGENT_USER=rookery-agent   # optional: the handle people @mention on a PR (default rookery-agent)
 ```
 
 `PUBLIC_URL` being `https://` sets the `Secure` flag on the session cookie.
@@ -437,7 +438,9 @@ GH_TOKEN=$(tok OWNER/REPO) gh issue view N --repo OWNER/REPO --json labels   # s
 
 Then the App itself: its **Issue comment** event must be ticked (App settings →
 Permissions & events). With only **Issues**, a label still fires `job: start`, which
-makes the agent look alive while every comment is silently lost.
+makes the agent look alive while every comment is silently lost. **Pull request** must be
+ticked too: without it `rookery:pr-review` and review requests do nothing, and a closed PR
+never frees its worktree. (A `@rookery-agent` mention on a PR arrives as Issue comment.)
 
 Do not "fix" this by dropping the `ME` check. The bot comments after every planning round;
 without the filter its own comment re-enters `enqueue()` and loops forever, and it can

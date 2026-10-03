@@ -11,6 +11,7 @@ npx smee-client --url https://smee.io/<ch> --target http://127.0.0.1:8787/
 python agent.py owner/repo 12              # dry run: plan issue 12 as if just labelled
 python agent.py owner/repo 12 approve      # dry run: run the task loop, push, open the draft PR
 python agent.py owner/repo 12 use sqlite   # dry run: anything else is fed back as a developer reply
+python agent.py owner/repo 12 @rookery-agent check the migration   # dry run: review PR 12
 ```
 
 There is no build, no lint, no dependency install — stdlib only, plus the `gh`, `claude`
@@ -125,6 +126,18 @@ session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick 
 `decisions.md` is the only memory that crosses between tasks. A failure raises with everything
 before it already committed, so commenting `approve` again resumes at that same task.
 
+**PR review on request.** A second, smaller flow: a `pr-review` job, one advisory review
+of any open same-repo PR. Triggers (`enqueue()`, each gated by `may()` = not `ME` and
+`can_write()`): a PR comment matching `MENTION` (`@AGENT_USER`, default `rookery-agent`, a
+plain machine account with no token on the box; `mention()` ignores quoted lines and code,
+the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
+`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `review_pr()` 👀s the
+comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
+detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
+(`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`.
+`pr_cleanup()` removes the label / review request either way. Assigning `AGENT_USER` to an
+issue is the same as `rookery:trigger`.
+
 **Run log.** `handle()` opens a `jobs` row per plan/reply/implement (`begin()`), and the
 pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost, tick,
 commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
@@ -178,6 +191,11 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   `skills`: `hooks:` would run shell on the box. An invalid workflow, a name off `NAME`, or a
   slot naming a skill or agent that is not in the plugin fails the job at start — never a
   silent fallback, since `--agent` ignores an unknown name without an error.
+- **Never a `PHASES` label on a PR, and never `gh issue …` for one.** `handle()`'s
+  `pr-review` failure path is `gh pr comment`, not `comment()`/`set_phase()`: `gh issue`
+  cannot resolve a PR number, and a phase label on a PR would let a later `approve` comment
+  run `implement()` on it. A PR review reads its steering from base like every job, never
+  from the PR head.
 - **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's

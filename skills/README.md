@@ -13,6 +13,9 @@ never fetched at run time: a skill's scripts run on the operator's box.
 | `security-review` | check | ours |
 | `changelog` | write | ours |
 
+`security-review` also fits the `pr-review` slot: `{"pr-review": {"skills": ["security-review"]}}`.
+(Not in the table's Slot column: the portal reads one slot per row from it.)
+
 `check` and `write` are `after` steps: a repo adds one with an agent of its own, or
 reuses one, e.g. `{"agent": "reviewer", "mode": "check", "skills": ["security-review"]}`.
 

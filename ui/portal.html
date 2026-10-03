@@ -112,6 +112,7 @@ main{min-width:0}
 .switch a[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
 
 /* workflow: the shared .flow diagram (styles.css) plus what only this view shows */
+.flow + .flow{margin-top:64px}   /* the PR review flow, under the issue flow */
 .flow .who .from{font-size:12px;font-family:var(--mono);letter-spacing:0}
 .flow .who .from.repo{color:#fff}
 .flow .chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -289,16 +290,17 @@ async function call(path, opts = {}){
 function signedOut(){ $('#app').hidden = true; $('#gate').hidden = false; state.me = null; }
 
 const LBL = {running: 'live', ok: 'ok', failed: 'err', cancelled: 'err', interrupted: 'err'};
-const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation'};
+const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation', 'pr-review': 'PR review'};
 
 // the one line the whole page exists for: where a run is, or where it stopped
 function where(r){
   const t = r.task && ('task ' + r.task.i + ' of ' + r.task.of);
-  if (r.status === 'running') return t ? 'Running ' + t : r.act === 'implement' ? 'Starting' : 'Planning';
-  if (r.status === 'failed') return t ? 'Failed at ' + t : 'Failed while ' + (r.act === 'implement' ? 'starting' : 'planning');
+  const doing = {implement: 'starting', 'pr-review': 'reviewing'}[r.act] || 'planning';
+  if (r.status === 'running') return t ? 'Running ' + t : doing[0].toUpperCase() + doing.slice(1);
+  if (r.status === 'failed') return t ? 'Failed at ' + t : 'Failed while ' + doing;
   if (r.status === 'cancelled') return 'Cancelled' + (t ? ' at ' + t : '');
   if (r.status === 'interrupted') return 'Interrupted by a restart' + (t ? ' at ' + t : '');
-  return r.act === 'implement' ? 'Done — draft PR opened' : r.act === 'plan' ? 'Plan posted' : 'Plan revised';
+  return {implement: 'Done — draft PR opened', plan: 'Plan posted', 'pr-review': 'Review posted'}[r.act] || 'Plan revised';
 }
 
 function progress(r){
@@ -373,9 +375,10 @@ function stepView(s){
     pr: () => /^https:\/\/github\.com\//.test(s.url)
       ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url],
     error: () => ['Stopped', h('pre', null, s.message)],
+    posted: () => ['Posted the review → ' + s.verdict],
   }[s.what] || (() => [s.what]);
   const cls = s.what === 'task' || s.what === 'step' ? 'task' : s.what === 'error' || s.what === 'reverted' || s.status === 'failed' ? 'bad'
-    : s.what === 'commit' || s.what === 'pr' ? 'good' : '';
+    : s.what === 'commit' || s.what === 'pr' || s.what === 'posted' ? 'good' : '';
   return h('div', {class: 'step ' + cls}, h('time', null, clock(s.at)), h('div', {class: 'rail'}, h('i')),
     h('div', {class: 'what'}, t()));
 }
@@ -408,6 +411,7 @@ const SLOT = {
   task: ['Work the tasks', 'rookery:implementing', 'A fresh session per task; decisions.md is the only memory between them.',
     () => ['next unticked task → ', h('code', null, 'task-done'), ' → Rookery ticks and commits · at most 15']],
   review: ['Review the diff', 'rookery:reviewing', 'Once, before the push. Advisory: its verdict flags the run, it never blocks the push.'],
+  'pr-review': ['Review the pull request', 'rookery:pr-review', 'A fresh session per request, on the PR head. Read-only, from base config like every job. Forks are refused.'],
 };
 // an `after` step from workflow.json, by its mode
 const STEP = {
@@ -487,6 +491,13 @@ async function flow(){
       h('div', {class: 'fork'},
         end('ok', 'rookery:done', w.after.some(s => s.mode === 'check') ? 'review-ok, and every check check-ok' : 'review-ok'),
         end('err', 'rookery:error', 'changes-needed, or a failure at any step. approve again resumes at the first unticked task.'))),
+    h('div', {class: 'flow'},
+      fixed('you', 'Ask for a review', '@' + w.agent_user,
+        'Mention it in a comment on any pull request of this repo (the rest of the comment is your note), add rookery:pr-review, or request its review. From someone with write access.'),
+      wire('webhook'),
+      slotNode(SLOT['pr-review'], w.slots['pr-review'], w),
+      wire('either verdict'),
+      fixed('bot', 'Post the review', null, 'A comment review on the pull request, by Rookery. Advisory: it never approves and never blocks a merge. Ask again to review again.')),
     idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
@@ -509,8 +520,8 @@ function problems(p, text){
     let j;
     try { j = JSON.parse(text); } catch (e) { return ['Not valid JSON: ' + e.message]; }
     if (!j || typeof j !== 'object' || Array.isArray(j)) return ['The top level is an object.'];
-    const out = Object.keys(j).filter(k => !['plan', 'task', 'review', 'after'].includes(k))
-      .map(k => '`' + k + '` is not a slot: only plan, task, review, after.');
+    const out = Object.keys(j).filter(k => !['plan', 'task', 'review', 'pr-review', 'after'].includes(k))
+      .map(k => '`' + k + '` is not a slot: only plan, task, review, pr-review, after.');
     if ('after' in j && (!Array.isArray(j.after) || j.after.length > 5)) out.push('`after` is a list of at most 5 steps.');
     return out;
   }
@@ -647,7 +658,9 @@ async function catalog(){
 }
 
 async function stop(r){
-  if (!confirm('Cancel run ' + r.id + ' on ' + r.repo + '#' + r.n + '?\n\nThe running claude call is killed, the issue gets an error comment and rookery:error. Commenting approve resumes at the first unticked task.')) return;
+  const after = r.act === 'pr-review' ? 'the pull request gets an error comment. Ask for a review again to rerun it.'
+    : 'the issue gets an error comment and rookery:error. Commenting approve resumes at the first unticked task.';
+  if (!confirm('Cancel run ' + r.id + ' on ' + r.repo + '#' + r.n + '?\n\nThe running claude call is killed, ' + after)) return;
   try {
     await call('/api/runs/' + r.id + '/cancel', {method: 'POST'});
     toast('Cancelling run ' + r.id + '…');

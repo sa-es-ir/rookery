@@ -67,6 +67,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(threadName)s] %(m
 log = logging.info
 
 TRIGGER = "rookery:trigger"
+REVIEW_LABEL = "rookery:pr-review"   # on a PR: review it once. Never a PHASES label on a PR (handle()).
+# the name people use for Rookery: a plain machine account, no token for it on the box
+AGENT_USER = os.environ.get("AGENT_USER", "rookery-agent")
+MENTION = re.compile(rf"(?<![\w-])@{re.escape(AGENT_USER)}(?![\w-])", re.I)
 PHASES = ["rookery:planning", "rookery:awaiting-input", "rookery:awaiting-approval",
           "rookery:implementing", "rookery:reviewing", "rookery:done", "rookery:error"]
 APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
@@ -89,7 +93,8 @@ MODELS = ("haiku", "sonnet", "opus")
 # base leaves out — a slot, or a key in one — comes from here.
 WORKFLOW = {"plan": {"agent": "planmaker", "skills": [], "instructions": ""},
             "task": {"agent": None, "skills": [], "instructions": ""},
-            "review": {"agent": "reviewer", "skills": [], "instructions": ""}}
+            "review": {"agent": "reviewer", "skills": [], "instructions": ""},
+            "pr-review": {"agent": "pr-reviewer", "skills": [], "instructions": ""}}
 # one `after` step: runs between the task loop and the review. `agent` and `mode` are required.
 STEP = {"agent": None, "mode": None, "skills": [], "instructions": ""}
 # mode -> the STATUS values a step in it may reply; anything else fails the job
@@ -185,9 +190,10 @@ def jwt():
     return head + "." + b64url(p.stdout)
 
 
-def api(method, path, bearer):
+def api(method, path, bearer, data=None):
     req = urllib.request.Request(
         "https://api.github.com" + path, method=method,
+        data=None if data is None else json.dumps(data).encode(),
         headers={"Authorization": f"Bearer {bearer}", "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28"})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -646,12 +652,13 @@ def propose(repo, files, by):
                                                     for f, t in files.items()))
 
 
-def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False):
+def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=None):
     """One session per key: planning is one long thread, each task is its own. `slot`
     picks the workflow slot — its agent, the skills to name, the instructions to append —
     by name, or is an `after` step itself. `per_job` makes the session this job's own: the
     review and `after` steps re-run whole on every approve, and a resumed one repeats its
-    last verdict instead of looking again (prod: a gate kept "failing" on a file now there)."""
+    last verdict instead of looking again (prod: a gate kept "failing" on a file now there).
+    `wt` runs it elsewhere than the issue's worktree: a PR review's pr_worktree()."""
     a = active.get(c.repo) or {}
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}" + (f"/job-{a.get('job')}" if per_job else "")))
     s = slot if isinstance(slot, dict) else (a.get("workflow") or WORKFLOW)[slot]
@@ -694,7 +701,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False):
         model = "sonnet"
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    wt, out, m = worktree(c), "", None
+    wt, out, m = wt or worktree(c), "", None
     try:
         try:
             out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, track=c.repo)
@@ -817,6 +824,24 @@ short bullet each, with the reason.
 Reply with exactly one line `STATUS: step-done` or `STATUS: failed`, plus one
 short paragraph on what changed. It is posted into the pull request body under
 your name.
+"""
+
+PR_REVIEW = """Review pull request #{n} in {repo}. Someone with write access asked
+for it.
+
+Title: {title}
+
+{body}
+{note}
+This worktree is the pull request's head, detached. The change is
+`git diff origin/{base}...HEAD`. If it touches agent-plans/, the plan it was
+built from is in the diff.
+
+Read only: do not edit, do not commit, do not use gh.
+
+Reply with exactly one line `STATUS: review-ok` or `STATUS: changes-needed`,
+plus the findings as markdown, worst first. This text is posted verbatim as a
+review on the pull request, so write it for the person about to read the diff.
 """
 
 # what pin() reads from base: a PR that changes any of it steers Rookery once merged
@@ -1002,6 +1027,83 @@ def after_steps(c, wt, after):
     return sections, wanting
 
 
+# --- pull request review -----------------------------------------------------
+
+def mention(body):
+    """The comment without its @rookery-agent, or None when it does not address Rookery.
+    Quoted lines and code do not count: a reply quoting a request is not a second one."""
+    text = re.sub(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1|\Z)", "", body or "", flags=re.M | re.S)
+    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(">"))
+    return MENTION.sub("", text).strip() if MENTION.search(re.sub(r"`[^`\n]*`", "", text)) else None
+
+
+def pr_worktree(c, base):
+    """The PR's head, detached, at wt_root/pr-<n>, with origin/<base> fetched for the diff.
+    Never committed to, so removing it can never lose work, and unpushed() has no say."""
+    fetch(c.repo, c.path, f"+refs/pull/{c.n}/head:refs/remotes/origin/pr/{c.n}")
+    fetch(c.repo, c.path, base)
+    wt = drop_pr_worktree(c)
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    sh("git", "worktree", "add", "--detach", str(wt), f"origin/pr/{c.n}", cwd=c.path)
+    return wt
+
+
+def drop_pr_worktree(c):
+    wt = wt_root(c.repo) / f"pr-{c.n}"
+    if wt.exists():
+        sh("git", "worktree", "remove", "--force", str(wt), cwd=c.path, check=False)
+    if wt.exists():   # a leftover git no longer knows about
+        rmtree(wt)
+    sh("git", "worktree", "prune", cwd=c.path, check=False)
+    return wt
+
+
+def review_pr(c, job):
+    """One advisory review on PR c.n, posted as a review of type comment. Any PR of the repo,
+    not only Rookery's; never a fork's (trade-offs.md #14)."""
+    # "queued and running": on the mention, or on the PR itself for a label or review request.
+    # Cosmetic, so never fatal.
+    on = f"issues/comments/{job['comment']}" if job.get("comment") else f"issues/{c.n}"
+    if job.get("comment") or job.get("label") or job.get("requested"):
+        try:
+            api("POST", f"/repos/{c.repo}/{on}/reactions", token(c.repo), {"content": "eyes"})
+        except Exception as e:
+            log(f"#{c.n} 👀 failed: {e}")
+    pr = json.loads(gh(c.repo, "pr", "view", str(c.n), "--json", "title,body,baseRefName,isCrossRepository,state"))
+    if pr["isCrossRepository"]:
+        raise RuntimeError("Rookery does not review pull requests from forks yet.")
+    if pr["state"] != "OPEN":
+        raise RuntimeError(f"This pull request is {pr['state'].lower()}; Rookery reviews open ones only.")
+    note = f"\nThe person who asked for this review wrote:\n\n{job['note']}\n" if job.get("note") else ""
+    try:
+        wt = pr_worktree(c, pr["baseRefName"])
+        verdict, text = claude(c, PR_REVIEW.format(n=c.n, repo=c.repo, title=pr["title"], body=pr["body"] or "",
+                                                   note=note, base=pr["baseRefName"]),
+                               key="pr-review", slot="pr-review", per_job=True, wt=wt)
+    finally:
+        drop_pr_worktree(c)
+    if verdict not in ("review-ok", "changes-needed"):
+        raise RuntimeError(f"the PR reviewer replied `STATUS: {verdict}`; it replies review-ok or changes-needed.")
+    s = (active[c.repo].get("workflow") or WORKFLOW)["pr-review"]
+    head = f"**{verdict}** · rk:{s['agent']}" + "".join(f" · rk:{k}" for k in s["skills"])
+    gh(c.repo, "pr", "review", str(c.n), "--comment", "--body-file", "-", input=f"{head}\n\n{text}")
+    step(c.repo, "posted", verdict=verdict)
+
+
+def pr_cleanup(c, job):
+    """Whatever triggered the review, gone: a label or a request still there means queued or
+    running. Never fails the job over it."""
+    if job.get("label"):
+        gh(c.repo, "pr", "edit", str(c.n), "--remove-label", REVIEW_LABEL, check=False)
+    if job.get("requested"):
+        # the review is the App's, not AGENT_USER's, so GitHub would show the request pending forever
+        try:
+            api("DELETE", f"/repos/{c.repo}/pulls/{c.n}/requested_reviewers", token(c.repo),
+                {"reviewers": [AGENT_USER]})
+        except Exception as e:
+            log(f"#{c.n} removing the review request failed: {e}")
+
+
 # --- repos: onboarding and retention ----------------------------------------
 
 def sync():
@@ -1025,7 +1127,7 @@ def onboard(repo, base=None):
         log(f"{repo} cloning into {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
         sh("git", "clone", "-q", f"https://github.com/{repo}.git", str(path), env=auth(repo))
-    for l in PHASES + [TRIGGER]:
+    for l in PHASES + [TRIGGER, REVIEW_LABEL]:
         # ponytail: one-time claude:* -> rookery:* rename, keeps the label on in-flight issues;
         # delete once every repo has restarted on this code
         gh(repo, "label", "edit", l.replace("rookery:", "claude:"), "--name", l, check=False)
@@ -1083,11 +1185,16 @@ def handle(job):
         return drop_worktree(job["repo"], job["n"])
     c = ctx(job["repo"], job["n"])
     log(f"{c.repo}#{c.n} job: {job['kind']}")
+    pr = job["kind"] == "pr-review"
     try:
         if job["kind"] == "start":
             begin(c, "plan", job["title"])
             pin(c)
             plan(c, job["title"], job["body"], resume=False)
+        elif pr:
+            begin(c, "pr-review", job.get("title"))
+            pin(c)
+            review_pr(c, job)
         else:
             phase = labels_of(c.repo, c.n)
             # approving again after an error resumes at the first unticked task
@@ -1107,10 +1214,18 @@ def handle(job):
         msg = f"Cancelled from the Rookery UI by @{cancelled}." if cancelled else str(e)
         step(c.repo, "error", message=msg[-2000:])
         try:
-            comment(c, f"Agent error:\n\n```\n{msg}\n```")
-            set_phase(c, "rookery:error")
+            if pr:
+                # never set_phase() on a PR: `gh issue` cannot see it, and a phase label
+                # there would let a later `approve` comment run implement() on it
+                gh(c.repo, "pr", "comment", str(c.n), "--body-file", "-", input=f"Agent error:\n\n```\n{msg}\n```")
+            else:
+                comment(c, f"Agent error:\n\n```\n{msg}\n```")
+                set_phase(c, "rookery:error")
         finally:
             finish(c.repo, "cancelled" if cancelled else "failed")
+    finally:
+        if pr:
+            pr_cleanup(c, job)
 
 
 def submit(job):
@@ -1169,18 +1284,38 @@ def enqueue(event, p):
     repo = p.get("repository", {}).get("full_name")
     if repo not in REPOS:
         return
-    if event == "pull_request" and p["action"] == "closed":
-        m = re.fullmatch(r"feature/issue-(\d+)", p["pull_request"]["head"]["ref"])
-        if m and p["pull_request"]["user"]["login"] == ME:  # our PRs only
-            submit({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
+    sender = (p.get("sender") or {}).get("login", "").lower()
+    # a PR review spends the repo's cap: the same gate as `approve`
+    may = lambda user: user != ME and can_write(repo, user)
+    me = lambda u: (u or {}).get("login", "").lower() == AGENT_USER.lower()
+    if event == "pull_request":
+        pr, act = p["pull_request"], p["action"]
+        review = lambda **k: submit({"kind": "pr-review", "repo": repo, "n": pr["number"], "title": pr["title"],
+                                     "by": sender, **k})
+        if act == "closed":
+            m = re.fullmatch(r"feature/issue-(\d+)", pr["head"]["ref"])
+            if m and pr["user"]["login"] == ME:  # our PRs only
+                submit({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
+        elif act == "labeled" and p["label"]["name"] == REVIEW_LABEL and may(sender):
+            review(label=True)
+        elif act == "review_requested" and me(p.get("requested_reviewer")) and may(sender):
+            review(requested=True)
         return
     n = p.get("issue", {}).get("number")
     # `labeled` only: an issue created with the label fires `opened` *and* `labeled`,
     # both before the first job sets a phase — reacting to both plans it twice.
-    if event == "issues" and p["action"] == "labeled":
-        if p["label"]["name"] == TRIGGER and not labels_of(repo, n) & set(PHASES):
+    # Assigning AGENT_USER (on a repo that made it a collaborator) is the same as the label.
+    if event == "issues" and (p["action"] == "labeled" and p["label"]["name"] == TRIGGER
+                              or p["action"] == "assigned" and me(p.get("assignee"))):
+        if not labels_of(repo, n) & set(PHASES):
             submit({"kind": "start", "repo": repo, "n": n,
                       "title": p["issue"]["title"], "body": p["issue"]["body"] or ""})
+    elif event == "issue_comment" and p["action"] == "created" and "pull_request" in p["issue"]:
+        # on a PR only a mention means anything: never a `continue` job, phase label or not
+        user = p["comment"]["user"]["login"].lower()
+        if (note := mention(p["comment"]["body"])) is not None and may(user):
+            submit({"kind": "pr-review", "repo": repo, "n": n, "title": p["issue"]["title"], "by": user,
+                    "note": note, "comment": p["comment"]["id"]})
     elif event == "issue_comment" and p["action"] == "created":
         user = p["comment"]["user"]["login"].lower()
         # approvals and replies alike: only people who can write to *this* repo
@@ -1194,9 +1329,12 @@ def main():
     sync()
 
     if len(sys.argv) > 2:
-        # dry run, no webhook: `agent.py owner/repo 12 [comment...]`
+        # dry run, no webhook: `agent.py owner/repo 12 [comment...]`; a comment with @AGENT_USER
+        # reviews PR 12, as that comment on a PR would (minus the 👀: there is no comment id)
         repo, n = sys.argv[1], int(sys.argv[2])
-        if len(sys.argv) > 3:
+        if (note := mention(" ".join(sys.argv[3:]))) is not None:
+            handle({"kind": "pr-review", "repo": repo, "n": n, "note": note})
+        elif len(sys.argv) > 3:
             handle({"kind": "continue", "repo": repo, "n": n, "body": " ".join(sys.argv[3:])})
         else:
             iss = json.loads(gh(repo, "issue", "view", str(n), "--json", "title,body"))

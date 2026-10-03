@@ -211,3 +211,19 @@ says they are "in the PR body".
 - **Given up:** the PR description can miss the summary of work done in an earlier attempt.
 - **Revisit when:** a reviewer misses it. Each task's and write step's reply could go in its
   commit body, and the PR body be rebuilt from `git log`; the issue comment's wording is one line.
+
+## 14. PR review refuses pull requests from forks
+
+**Decided 3 October 2026** (pr-review.md §7).
+
+`review_pr()` stops with "Rookery does not review pull requests from forks yet" when
+`isCrossRepository` is true.
+
+- **Gained:** the reviewer, which runs with Bash under `bypassPermissions`, only reads code
+  pushed by someone with write access: the trust the issue flow already relies on. A fork's
+  diff can carry injected instructions, and #7 means an injected agent can act as the App on
+  every installation.
+- **Given up:** open-source repos cannot ask Rookery to review contributor PRs, which is
+  where a review helps most.
+- **Revisit when:** #7 is fixed (a second user for `claude`, or the sandbox). Then a fork PR
+  can be fetched the same way, `refs/pull/<n>/head` already covers it.
