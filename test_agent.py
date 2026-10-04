@@ -29,6 +29,9 @@ assert not agent.MARKER.search("**STATUS: review-ok** but see below")
 # a PR comment addresses Rookery by @AGENT_USER, never in a quote or code; the rest is the note
 assert agent.mention("@Rookery-Agent look hard at the migration") == "look hard at the migration"
 assert agent.mention("hey @rookery-agent") == "hey" and agent.mention("@rookery-agent") == ""
+for ask in ("@rookery-agent review again\r\n", "@rookery-agent please re-review this PR, thanks!", "PTAL @rookery-agent"):
+    assert agent.mention(ask) == "", ask   # only asking: no note, so an unchanged head is not reviewed twice
+assert agent.mention("@rookery-agent review again, check the tests") == "review again, check the tests"
 for text in ("@rookery-agent-x look", "me@rookery-agent", "> @rookery-agent look\n\nthanks", "see `@rookery-agent`",
              "```\n@rookery-agent\n```", "~~~\n@rookery-agent", "approve", ""):
     assert agent.mention(text) is None, text
@@ -210,9 +213,12 @@ for n in (1, 2):
     git(clone, "worktree", "add", "-q", "-B", f"feature/issue-{n}", str(agent.wt_root("o/r") / f"issue-{n}"), "origin/main")
 wt1 = agent.wt_root("o/r") / "issue-1"
 git(wt1, "commit", "-q", "--allow-empty", "-m", "work")    # committed, not pushed
+agent.memory_file("o/r").parent.mkdir(parents=True)
+agent.memory_file("o/r").write_text("notes", encoding="utf-8")
 
 agent.offboard("o/r")
 assert clone.exists() and wt1.exists(), "offboard must refuse while a branch is unpushed"
+assert agent.memory_file("o/r").exists(), "and keeps the notes with it"
 agent.drop_worktree("o/r", 1)
 assert wt1.exists(), "drop_worktree must keep an unpushed worktree"
 agent.drop_worktree("o/r", 2)
@@ -222,6 +228,7 @@ git(wt1, "push", "-q", str(origin), "feature/issue-1:feature/issue-1")  # as imp
 git(wt1, "update-ref", "refs/remotes/origin/feature/issue-1", "feature/issue-1")  # ...then the ref
 agent.offboard("o/r")
 assert not clone.exists() and not agent.wt_root("o/r").exists(), "pushed work: the disk is freed"
+assert not agent.memory_file("o/r").exists(), "a repo that left takes its notes with it"
 
 # startup: every repo of every installation, across pages, with its default branch
 seen = []
@@ -331,7 +338,7 @@ assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
 # deny rules see the hook-rewritten command: the RTK forms must be denied too
 assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
-# a task resumes its session on approve-again; the review and after steps start one per job
+assert "Bash(rtk proxy:*)" in argv[0], "rtk proxy runs a command raw: none of the four would match it"# a task resumes its session on approve-again; the review and after steps start one per job
 sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
 real_caps, agent.check_caps = agent.check_caps, lambda repo: None   # caps are tested above
 def sid(**k):
@@ -405,6 +412,38 @@ with agent.closing(agent.db()) as con:
 assert based["sha"] == git(up, "rev-parse", "HEAD").strip() and based["skills"] == ["verify"], "base_sha logged"
 assert based["sources"] == {"verify": ".claude/skills"}, "which source won"
 assert "--agents" not in argv[0] and "--model" in argv[0], "no workflow.json: tasks run as no agent"
+assert "Notes Rookery kept" not in "".join(argv[0]) and "memory" not in based, "no notes yet: nothing said"
+
+# the repo's notes: read once by pin(), logged, appended after CLAUDE.md for every call in the job
+agent.memory_file("o/r").parent.mkdir(parents=True, exist_ok=True)
+agent.memory_file("o/r").write_text("- build: make", encoding="utf-8")
+agent.RUN_CAP = 99
+def pinned(**over):
+    argv.clear()
+    agent.begin(pc, "plan", "t")
+    try:
+        agent.pin(pc)
+        agent.active["o/r"].update(over)
+        agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: task-done"})
+        agent.claude(pc, "p", key="task-0", slot={**agent.WORKFLOW["task"], "instructions": "Step rule."})
+    finally:
+        agent.sh = real_sh
+        job = agent.active["o/r"]["job"]
+        agent.finish("o/r", "ok")
+    with agent.closing(agent.db()) as con:
+        base_ = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'", (job,)).fetchone()[0])
+    return next((x for x in argv[0] if x.startswith("--append-system-prompt=")), ""), base_
+sysp, base_ = pinned()
+assert sysp.index("Use tabs.") < sysp.index(agent.MEMORY_NOTE + "- build: make") < sysp.index("Step rule."), sysp
+assert base_["memory"] == "13, " + __import__("hashlib").sha256(b"- build: make").hexdigest()[:12], base_
+agent.MEMORY = False   # MEMORY=0: neither read nor written
+sysp, base_ = pinned()
+assert "Notes Rookery kept" not in sysp and "memory" not in base_
+agent.MEMORY = True
+agent.memory_file("o/r").write_text("n" * (64 * 1024 - 5), encoding="utf-8")
+sysp, base_ = pinned()
+assert "Notes Rookery kept" not in sysp and base_["memory"].startswith("left out"), "over 64 KB: left out, never fatal"
+agent.memory_file("o/r").unlink()
 
 # .rookery/workflow.json on base: slots name skills and add instructions; agents are plugin agents
 merge({".rookery/workflow.json": json.dumps({
@@ -431,10 +470,12 @@ agent.claude(pc, "p", key="task-0", slot="task")
 agent.sh = real_sh
 plan_argv, task_argv = argv
 assert plan_argv[plan_argv.index("--agent") + 1] == "rk:planmaker" and "--model" not in plan_argv, plan_argv
-assert plan_argv[2] == "p\n\nUse the `rk:repo-recon` skill.", "an enabled skill is named, or it never fires"
+assert plan_argv[2] == "p\n\nUse the `rk:repo-recon` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:verify`"), \
+    "an enabled skill is named, or it never fires; the repo's others are offered"
 sysp = next(x for x in plan_argv if x.startswith("--append-system-prompt="))
 assert "Use tabs." in sysp and sysp.endswith("One migration per task."), "instructions follow the persona"
-assert task_argv[2].endswith("`rk:verify` skill.\n\nUse the `rk:systematic-debugging` skill.")
+assert task_argv[2].endswith("Use the `rk:systematic-debugging` skill.\n\n"
+                             + agent.OFFER_SKILLS.format(names="`rk:repo-recon`")), "never the catalog's, never twice"
 assert "One migration" not in "".join(task_argv), "a slot's instructions are its own"
 job_id = a["job"]
 agent.finish("o/r", "ok")
@@ -521,7 +562,7 @@ argv[:] = []
 agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: check-ok"})
 assert agent.claude(pc, "p", key="step-sec", slot=a["workflow"]["after"][0]) == ("check-ok", "")
 agent.sh = real_sh
-assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and argv[0][2] == "p\n\nUse the `rk:verify` skill."
+assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and argv[0][2] == "p\n\nUse the `rk:verify` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:repo-recon`")
 assert next(x for x in argv[0] if x.startswith("--append-system-prompt=")).endswith("OWASP only.")
 with agent.closing(agent.db()) as con:
     based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'",
@@ -615,6 +656,25 @@ agent.sh = real_sh
 assert cwds == [wt7], cwds
 agent.drop_pr_worktree(pc7)
 assert not wt7.exists() and "pr-7" not in git(clone, "worktree", "list")
+# the review prompt carries the diff whole, minus lockfiles, cut at a file boundary past DIFF_CAP
+git(up, "checkout", "-q", "-b", "feat17")
+for name, text in {"a.txt": "a\n", "b.txt": "b" * 300 + "\n", "c.txt": "c\n", "package-lock.json": "{}\n",
+                   "web/yarn.lock": "x\n"}.items():
+    (up / name).parent.mkdir(exist_ok=True)
+    (up / name).write_text(text, encoding="utf-8")
+git(up, "add", "-A"), git(up, "commit", "-qm", "feat17"), git(up, "push", "-q", "origin", "HEAD:refs/pull/17/head")
+git(up, "checkout", "-q", "main")
+pc17 = agent.Ctx("o/r", 17, clone, "main")
+wt17 = agent.pr_worktree(pc17, "main")
+d17 = agent.pr_diff(wt17, "main")
+assert "package-lock.json |" in d17 and "+{}" not in d17 and "+x" not in d17, "the stat names lockfiles, the diff skips them"
+assert "+a\n" in d17 and "+c\n" in d17 and "read them with Read" not in d17, d17
+real_cap, agent.DIFF_CAP = agent.DIFF_CAP, 400
+d17 = agent.pr_diff(wt17, "main")
+agent.DIFF_CAP = real_cap
+assert "+a\n" in d17 and "+bbb" not in d17 and "+c\n" not in d17, "cut whole files, at the first that does not fit"
+assert d17.endswith("read them with Read:\n\n- b.txt\n- c.txt"), d17[-120:]
+agent.drop_pr_worktree(pc17)
 
 # <owner>/.rookery: the owner's defaults, under the repo's own config and over the built-in
 oup = agent.WORKSPACE / "org-up"
@@ -729,28 +789,47 @@ agent.claude = real_claude
 
 # PR review: one comment-type review; a failure is a PR comment, never a phase label on the PR
 ghs, apis, made, ran = [], [], [], []
-prv = {"title": "Fix", "body": "", "baseRefName": "dev", "isCrossRepository": False, "state": "OPEN"}
+prv = {"title": "Fix", "body": "", "baseRefName": "dev", "isCrossRepository": False, "state": "OPEN",
+       "headRefOid": "abc1234def"}
 def fake_gh(repo, *a, input=None, check=True):
     ghs.append((a, input))
     return json.dumps(prv) if a[:2] == ("pr", "view") else ""
 def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=None):
-    assert "look at the migration" in prompt and "`git diff origin/dev...HEAD`" in prompt, prompt
-    ran.append((key, slot, per_job, wt))
+    assert "`git diff origin/dev...HEAD`" in prompt and "THE DIFF" in prompt, prompt
+    assert f"This worktree, {Path('pr-8').absolute()}, is" in prompt, "no first turn spent finding it"
+    ran.append((key, slot, per_job, wt, "look at the migration" in prompt))
     return "changes-needed", "bug in x.py"
 nope = lambda *a, **k: (_ for _ in ()).throw(AssertionError("gh issue … / a phase label on a PR"))
-saved = agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase, agent.comment
+saved = (agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase,
+         agent.comment, agent.pr_diff)
 agent.gh, agent.claude, agent.labels_of, agent.set_phase, agent.comment = fake_gh, fake_claude, nope, nope, nope
 agent.api = lambda m, path, bearer, data=None: apis.append((m, path, data)) or {}
 agent.pr_worktree = lambda c, base: made.append(("add", base)) or Path("pr-8")
 agent.drop_pr_worktree = lambda c: made.append(("drop",))
+agent.pr_diff = lambda wt, base: "THE DIFF"   # tested on a real repo above
 job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob", "note": "look at the migration",
         "comment": 55, "label": True, "requested": True}
 agent.handle(job_)
-assert ran == [("pr-review", "pr-review", True, Path("pr-8"))] and made == [("add", "dev"), ("drop",)]
+assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
 assert (("pr", "review", "8", "--comment", "--body-file", "-"), "**changes-needed** · rk:pr-reviewer\n\nbug in x.py") in ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis
+assert drain()[-1]["kind"] == "memory", "a finished review teaches the repo's notes"
+# the same head again, with no note: no claude call, one comment, the trigger still cleaned up
+ghs.clear(), apis.clear(), made.clear(), ran.clear()
+agent.handle({**job_, "note": "", "comment": None, "requested": None})
+assert not ran and not made, "nothing new to look at"
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert ghs[1][1].startswith("Already reviewed at `abc1234`."), ghs[1][1]
+skipped_job = drain()[-1]   # its memory job finds no claude call to learn from: see the memory tests
+# a note, or a new head, reviews again
+ghs.clear()
+agent.handle({**job_, "note": "and the tests?", "comment": None, "label": None, "requested": None})
+prv["headRefOid"] = "fff0000"
+agent.handle({**job_, "note": "", "comment": None, "label": None, "requested": None})
+assert [r[4] for r in ran] == [False, False] and len(made) == 4, ran
+drain()
 ghs.clear(), apis.clear(), made.clear(), ran.clear()
 prv["isCrossRepository"] = True
 agent.handle({**job_, "comment": None, "requested": None})
@@ -759,9 +838,84 @@ assert not ran and not made, "a fork is refused before anything runs"
 assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
 assert "from forks" in ghs[1][1]
 with agent.closing(agent.db()) as con:
-    assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE act = 'pr-review' ORDER BY id")] == ["ok", "failed"]
+    assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE act = 'pr-review' ORDER BY id")] == \
+        ["ok", "ok", "ok", "ok", "failed"]
 (agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase,
- agent.comment), agent.claude = saved, real_claude
+ agent.comment, agent.pr_diff), agent.claude = saved, real_claude
+
+# repo memory: digest() reads a job's transcripts back, keeping calls and errors, never contents
+agent.CLAUDE_HOME = agent.WORKSPACE / "claude-home"
+(agent.CLAUDE_HOME / "projects" / "-ws-o-r").mkdir(parents=True)
+line = lambda kind, *content: json.dumps({"type": kind, "message": {"content": list(content)}})
+(agent.CLAUDE_HOME / "projects" / "-ws-o-r" / "sid-1.jsonl").write_text("\n".join([
+    line("user", {"type": "text", "text": "the task prompt"}),
+    line("assistant", {"type": "text", "text": "Let me look."},
+         {"type": "tool_use", "name": "Read", "input": {"file_path": "src/app.py"}}),
+    line("user", {"type": "tool_result", "content": "SECRET FILE CONTENTS", "is_error": False}),
+    line("assistant", {"type": "tool_use", "name": "Bash", "input": {"command": "npm test \\\n  " + "-x " * 100}}),
+    line("user", {"type": "tool_result", "is_error": True,
+                  "content": [{"type": "text", "text": "\n".join(f"err {i}" for i in range(8))}]}),
+    "not json",
+    line("assistant", {"type": "text", "text": "Done.\nSTATUS: task-done" + "z" * 4000})]), encoding="utf-8")
+mc = agent.Ctx("o/r", 30, Path("."), "main")
+agent.begin(mc, "implement")
+agent.step("o/r", "claude", key="task-0", status="task-done", usd=0.1, sid="sid-1")
+agent.step("o/r", "claude", key="task-1", status="failed", usd=0.1, sid="gone")   # no transcript: skipped
+agent.step("o/r", "claude", key="old", status="task-done", usd=0.1)               # logged before sid was
+learned = agent.active["o/r"]["job"]
+agent.finish("o/r", "failed")
+dg = agent.digest(learned)
+assert dg.startswith("## task-0 (STATUS: task-done)\n- Read: src/app.py\n- Bash: npm test \\ -x -x"), dg[:120]
+assert "SECRET" not in dg and "the task prompt" not in dg, "no file contents, no prompt"
+assert "    ! err 4" in dg and "err 5" not in dg, "a failed call's first 5 lines"
+assert max(len(l) for l in dg.splitlines()) <= 3000 + len("Reply:") and "\nReply:\nDone." in dg, "the last reply, cut"
+assert "Let me look" not in dg and "task-1" not in dg and "## old" not in dg, dg[-200:]
+agent.DIGEST_CAP, real_dcap = 500, agent.DIGEST_CAP
+assert agent.digest(learned).startswith("(earlier calls cut)") and len(agent.digest(learned)) < 600
+agent.DIGEST_CAP = real_dcap
+
+# remember(): one haiku call, one turn, no tools, in an empty dir; the orchestrator writes the notes
+notes_f, replies, argv = agent.memory_file("o/r"), [], []
+agent.worktree = lambda c: (_ for _ in ()).throw(AssertionError("the memory call needs no worktree"))
+agent.check_caps = lambda repo: None
+def fake_sh(*a, **k):
+    argv.append((a, k["cwd"]))
+    assert not os.listdir(k["cwd"]), "an empty cwd: nothing to read or edit"
+    return json.dumps({"result": replies.pop(0), "total_cost_usd": 0.01})
+real_sh_, agent.sh = agent.sh, fake_sh
+agent.comment = agent.set_phase = nope   # a side channel: never a comment or a label
+memjob = {"kind": "memory", "repo": "o/r", "n": 30, "job": learned}
+replies.append("<notes>\n- Tests: `npm test`, needs `-x`.\n</notes>\nSTATUS: memory-updated")
+agent.handle(memjob)
+assert notes_f.read_text(encoding="utf-8") == "- Tests: `npm test`, needs `-x`."
+cmd, cwd = argv[0]
+assert cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--max-turns") + 1] == "1", cmd
+assert cmd[cmd.index("--tools") + 1] == "" and "--agent" not in cmd and "Bash(rtk proxy:*)" in cmd
+assert not [x for x in cmd if x.startswith(("--plugin-dir", "--append-system-prompt"))], "nothing steers it"
+prompt_ = cmd[2]
+assert "npm test" in prompt_ and "<current-notes>\n\n</current-notes>" in prompt_
+assert "At most 8000\ncharacters" in prompt_, "the cap is in the prompt"
+for bad in ["no marker at all", "STATUS: memory-updated", "<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated",
+            "<notes>x</notes>\nSTATUS: plan-ready"]:
+    replies.append(bad)
+    agent.handle(memjob)
+    assert notes_f.read_text(encoding="utf-8") == "- Tests: `npm test`, needs `-x`.", f"kept after: {bad[:30]}"
+replies.append("<notes>stale</notes>\nSTATUS: memory-unchanged")
+agent.handle(memjob)
+assert notes_f.read_text(encoding="utf-8").startswith("- Tests"), "unchanged writes nothing"
+assert "- Tests: `npm test`" in argv[-1][0][2], "the next call sees the current notes"
+with agent.closing(agent.db()) as con:
+    mem = con.execute("SELECT id, status FROM jobs WHERE act = 'memory' ORDER BY id").fetchall()
+    rem = con.execute("SELECT detail FROM steps WHERE what = 'remembered'").fetchall()
+assert [s for _, s in mem] == ["ok", "failed", "failed", "failed", "failed", "ok"], mem
+assert len(rem) == 1 and json.loads(rem[0][0])["source"] == learned and json.loads(rem[0][0])["chars"] == len(notes_f.read_text(encoding="utf-8"))
+calls_before = len(argv)
+agent.handle(skipped_job)   # the skipped review: no claude call, so no memory run at all
+with agent.closing(agent.db()) as con:
+    assert con.execute("SELECT COUNT(*) FROM jobs WHERE act = 'memory'").fetchone()[0] == len(mem)
+assert len(argv) == calls_before
+agent.sh, agent.check_caps = real_sh_, real_caps
+(agent.labels_of, agent.set_phase, agent.comment) = saved[4:7]
 
 # parallel repos: a worker per repo, one job at a time within it
 import threading  # noqa: E402
@@ -956,6 +1110,25 @@ assert cat["systematic-debugging"]["source"] == "obra/superpowers@8ca22db", "\"s
 assert cat["systematic-debugging"]["url"].startswith("https://github.com/obra/superpowers/tree/8ca22db")
 assert all(s["description"] for s in cat.values())
 
+# repo notes: read by anyone who sees the repo, cleared only by a writer, another tenant's is a 404
+assert req("GET", "/api/repos/o/other/memory", sid=sid)[0] == 404
+m_ = body(req("GET", "/api/repos/o/r/memory", sid=sid))
+assert (m_["notes"], m_["run"], m_["cap"], m_["enabled"]) == ("", None, 8000, True), m_
+agent.memory_file("o/r").parent.mkdir(parents=True, exist_ok=True)
+agent.memory_file("o/r").write_text("- build: make", encoding="utf-8")
+rc = agent.Ctx("o/r", 4, Path("."), "main")
+agent.begin(rc, "memory")
+agent.step("o/r", "remembered", chars=13, sha="x", source=1)
+agent.finish("o/r", "ok")
+m_ = body(req("GET", "/api/repos/o/r/memory", sid=sid))
+assert m_["notes"] == "- build: make" and m_["chars"] == 13 and m_["run"]["id"], m_
+assert req("DELETE", "/api/repos/o/r/memory", sid=sid)[0] == 403, "no CSRF token"
+assert req("DELETE", "/api/repos/o/other/memory", sid=sid, csrf=me["csrf"])[0] == 404
+assert req("DELETE", "/api/repos/o/r/memory", sid=dave, csrf=body(req("GET", "/api/me", sid=dave))["csrf"])[0] == 403,     "seeing is not steering"
+assert agent.memory_file("o/r").exists()
+assert req("DELETE", "/api/repos/o/r/memory", sid=sid, csrf=me["csrf"])[0] == 204
+assert not agent.memory_file("o/r").exists() and body(req("GET", "/api/repos/o/r/memory", sid=sid))["run"] is None
+
 # POSTs need the session's CSRF token; logout ends the session server-side
 assert req("POST", "/auth/logout", sid=sid)[0] == 403
 assert req("POST", "/auth/logout", sid=sid, csrf="wrong")[0] == 403
@@ -1017,6 +1190,8 @@ def slow_implement(c):
     agent.sh(sys.executable, "-c", "import time; time.sleep(60)", track=c.repo)  # stands in for claude
     raise AssertionError("the process was not killed")
 agent.implement = slow_implement
+agent.submit = submitted.append
+submitted.clear()
 th = _t.Thread(target=real_handle, args=({"kind": "continue", "repo": "o/r", "n": 6, "body": "approve"},))
 t0 = time.time()
 th.start()
@@ -1036,6 +1211,7 @@ assert body(req("GET", f"/api/runs/{job}", sid=bob))["status"] == "cancelled"
 assert posted == ["Agent error:\n\n```\nCancelled from the Rookery UI by @bob.\n```"], posted
 assert [s["label"] for s in body(req("GET", f"/api/runs/{job}", sid=bob))["steps"] if s["what"] == "phase"]     == ["rookery:error"]
 assert req("POST", f"/api/runs/{job}/cancel", sid=bob, csrf=csrf(bob))[0] == 409, "no longer running"
+assert not submitted, "a cancelled job teaches the notes nothing"
 agent.begin(agent.Ctx("o/r", 6, Path("."), "main"), "implement")   # cancelled between tasks:
 assert agent.cancel("o/r", agent.active["o/r"]["job"], "bob")        # nothing to kill, but
 assert "Cancelled" in capped("o/r"), "the next claude call never starts"

@@ -52,6 +52,23 @@ repos can share an issue number.
 worktrees (`offboard()`). Both refuse — log and skip — when `unpushed()` finds a branch
 with commits on no remote-tracking ref. The push goes to a URL, which updates no such
 ref, so `implement()` records `refs/remotes/origin/<branch>` itself right after it.
+`offboard()` also deletes the repo's notes (below).
+
+**Repo memory.** One notes file per repo at `memory_file()` =
+`$WORKSPACE/memory/<owner>_<repo>.md`, never in the target repo. After every
+plan/reply/implement/pr-review job that ends `ok` or `failed` (not cancelled), `handle()`
+submits a `memory` job to the repo's queue → `remember()`: `digest()` reads that job's
+`claude` steps back from their transcripts (`CLAUDE_HOME/projects/*/<sid>.jsonl`, found by the
+`sid` each `claude` step logs) and keeps tool calls, failed calls' first lines and each last
+reply — never file contents or successful output — up to `DIGEST_CAP`; one `MEMORY_SLOT` call
+(haiku, `--max-turns 1`, `--tools ""`, empty temp cwd, no plugin, `REMEMBER` prompt) returns the
+notes between `<notes>` tags; the orchestrator checks the `STATUS` and `MEMORY_CAP` and writes
+the file. A failed check keeps the old notes; a memory job never comments or sets a label.
+`pin()` reads the file into `active[repo]["memory"]`, logs its size and sha in the `base` step,
+and `claude()` appends it (`MEMORY_NOTE`) between `CLAUDE.md` and the slot instructions; if the
+three would pass 64 KB, the notes are left out for that job, never failing it. `MEMORY=0`
+turns off reading and writing. The portal's `GET`/`DELETE /api/repos/<o>/<r>/memory` shows
+and clears them (clear needs `can_write()`).
 
 **State lives on GitHub and in the target repo, not here.** The `rookery:*` labels _are_ the
 state machine (`PHASES`), advanced only via `set_phase()`, which removes stale phase labels.
@@ -83,6 +100,8 @@ through those tasks does not need the same model.
 `skills` and `instructions`, from the target repo's `.rookery/workflow.json` on base with
 `WORKFLOW` filling what it leaves out (the default enables no skills). Enabled skills are
 named in the prompt (`USE_SKILL`) — a skill that is merely installed almost never fires.
+The repo's and owner's other skills (not the catalog's) are listed as an offer
+(`OFFER_SKILLS`), so a repo with skills but no `workflow.json` still gets them used.
 `instructions` go into `--append-system-prompt` after `CLAUDE.md`, under the same 64 KB cap.
 The catalog in `skills/` (see `skills/README.md`) is copied into the plugin only when a slot
 names it; `.rookery/skills` beats `.claude/skills` beats the catalog, and the `base` step
@@ -135,11 +154,17 @@ the rest of the comment is the note), the `REVIEW_LABEL` label, or a review requ
 comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`.
-`pr_cleanup()` removes the label / review request either way. Assigning `AGENT_USER` to an
+A note made only of `ASKING` words ("review again", "PTAL") is no note.
+`PR_REVIEW` carries the worktree's absolute path and `pr_diff()`: the stat, then the diff
+without lockfiles, cut at a file boundary before `DIFF_CAP` with the rest named for `Read`.
+The orchestrator runs it, so the operator's RTK hook (which drops hunk lines) never touches
+it. The `posted` step records the PR's head; a trigger without a note at a head that an `ok`
+job already posted at (`reviewed_at()`) makes no `claude` call, only an "Already reviewed"
+comment. `pr_cleanup()` removes the label / review request either way. Assigning `AGENT_USER` to an
 issue is the same as `rookery:trigger`.
 
-**Run log.** `handle()` opens a `jobs` row per plan/reply/implement (`begin()`), and the
-pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost, tick,
+**Run log.** `handle()` opens a `jobs` row per plan/reply/implement/pr-review/memory (`begin()`), and the
+pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost/sid, tick,
 commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
 ok/failed/cancelled; a restart marks leftovers `interrupted`. `active[repo]` is the job a
 worker is running — one per repo.
@@ -175,7 +200,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   `--disallowed-tools Bash(git push:*) Bash(gh:*)` enforces it (deny rules beat
   `bypassPermissions`). The agent never publishes. Deny rules match the command *after*
   `PreToolUse` hooks rewrite it, so the server's RTK hook needs the `rtk git push` / `rtk gh`
-  forms denied too — keep all four, and add the rewritten form of any new rule.
+  forms denied too, and `rtk proxy` (it runs a command raw, unrewritten) — keep all five,
+  and add the rewritten form of any new rule.
 - **No MCP in any `claude` call: `--strict-mcp-config`, no `--mcp-config`.** Without it
   the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
   connectors of the account the CLI is logged in with reach every tenant's agent
@@ -214,6 +240,12 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
   replayable: session rows are keyed by the cookie's sha256, and no token is stored.
+- **The orchestrator writes repo notes; the model never does.** `remember()` writes
+  `memory_file()` from a checked reply (`STATUS` marker, `<notes>` tags, `MEMORY_CAP`), and
+  the memory call has no tools and an empty cwd. A memory job never comments or labels:
+  its failure must not look like a failed run. The notes are advisory to the agent
+  (`MEMORY_NOTE`: code and `CLAUDE.md` win), and any agent on the box can edit any
+  repo's file (trade-offs #15).
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
   regex on issue comments. Visibility comes from the user's own installations; anything
   that steers a repo (cancel, a config PR) needs `can_write()`. Someone else's run or repo

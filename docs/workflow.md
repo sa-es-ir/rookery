@@ -90,7 +90,9 @@ Rookery ignores a mention in a quote (`> …`) or in code. Thus a reply that quo
 
 Rookery adds a 👀 reaction when the review starts: to your comment for a mention, or to the pull request for the label or a review request. Then it posts one review of type comment on the pull request. The first line gives the verdict, `review-ok` or `changes-needed`, and the agent. The review is advisory. It does not approve the pull request and it does not block a merge.
 
-To review again, for example after new commits, ask again.
+To review again, for example after new commits, ask again. If the pull request has no new commits since the last review, Rookery does not review it again. It writes a comment that tells you this. To get a new review of the same commits, mention `@rookery-agent` with a note that tells Rookery what to examine. A note such as "review again" or "please review" is not sufficient, because it does not give new information.
+
+Rookery gives the reviewer the full diff of the pull request. Lock files are not in it. If the diff is more than 100,000 characters, Rookery gives the reviewer the first files and a list of the other files. The reviewer reads those files itself.
 
 Rookery does not review a pull request from a fork. It writes a comment that tells you this.
 

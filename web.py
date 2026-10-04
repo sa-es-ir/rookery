@@ -222,6 +222,20 @@ def workflow(s, repo):
             "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
 
 
+def memory(s, repo):
+    """A visible repo's notes, their size, and the run that last wrote them. None for a repo the
+    session can't see: the notes are that tenant's."""
+    if repo not in visible(s):
+        return None
+    f = agent.memory_file(repo)
+    notes = f.read_text(encoding="utf-8") if f.exists() else ""
+    with closing(agent.db()) as con:
+        last = con.execute("SELECT j.id, j.ended FROM jobs j JOIN steps s ON s.job = j.id WHERE j.repo = ? "
+                           "AND s.what = 'remembered' ORDER BY j.id DESC LIMIT 1", (repo,)).fetchone()
+    return {"repo": repo, "enabled": agent.MEMORY, "notes": notes, "chars": len(notes), "cap": agent.MEMORY_CAP,
+            "run": last and notes and {"id": last[0], "at": last[1]} or None}
+
+
 def catalog():
     """skills/: each SKILL.md's description, plus slot and source from the README's table,
     which is where the pinned upstream commit is written down. "same" repeats the row above."""
@@ -252,7 +266,7 @@ def route(method, url, headers, body=b""):
         s = session(jar)
         if not s:
             return js(401, {"error": "not signed in"})
-        if method == "POST" and not hmac.compare_digest(headers.get("X-CSRF-Token", ""), s["csrf"]):
+        if method in ("POST", "DELETE") and not hmac.compare_digest(headers.get("X-CSRF-Token", ""), s["csrf"]):
             return js(403, {"error": "missing or wrong X-CSRF-Token"})
         if method == "POST" and path == "/auth/logout":
             with closing(agent.db()) as con, con:
@@ -282,6 +296,18 @@ def route(method, url, headers, body=b""):
                 return js(201, {"url": agent.propose(repo, files, s["login"])})
             except Exception as e:   # the check the next job would fail, or git/gh saying no
                 return js(422, {"error": str(e)})
+        if method in ("GET", "DELETE") and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/memory", path)):
+            mem = memory(s, m.group(1))
+            if not mem:
+                return js(404, {"error": "no such repo"})
+            if method == "GET":
+                return js(200, mem)
+            # the notes steer every run on the repo: clearing them needs what cancel needs
+            if not agent.can_write(mem["repo"], s["login"]):
+                return js(403, {"error": f"clearing the notes needs write access to {mem['repo']}"})
+            agent.memory_file(mem["repo"]).unlink(missing_ok=True)
+            log(f"{mem['repo']} notes cleared by {s['login']}")
+            return 204, [], b""
         if method == "GET" and path == "/api/skills":
             return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":
@@ -316,6 +342,9 @@ def route(method, url, headers, body=b""):
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.reply(self.safe("GET"))
+
+    def do_DELETE(self):
+        self.reply(self.safe("DELETE"))
 
     def do_POST(self):
         size = int(self.headers.get("Content-Length", 0))

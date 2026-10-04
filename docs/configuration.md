@@ -76,7 +76,9 @@ Rookery reads the reviewer from the base branch, not from the pull request. Thus
 
 ## Skills
 
-A skill runs only when a slot names it. A skill that is in the repository but not in a slot does not run.
+When a slot names a skill, Rookery tells the agent to use that skill in each step of the slot.
+
+Rookery also gives the agent a list of the other skills in `.rookery/skills/`, `.claude/skills/` and `<owner>/.rookery`. The agent uses a skill from this list only when the description of the skill agrees with the work. If a skill must run each time, name it in the slot.
 
 If two skills have the same name, Rookery uses the first one that it finds in this order:
 
