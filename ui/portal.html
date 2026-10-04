@@ -128,10 +128,17 @@ main{min-width:0}
 .idle{margin-top:24px;font-size:13px;color:var(--fog);font-weight:300;max-width:680px}
 
 /* propose a change: a Feature Card. Its Ember CTA opens a PR — the view's one primary action */
-.edit{background:var(--surface);border-radius:16px;padding:28px 32px;margin-top:40px;max-width:760px;
+.edit,.mem{background:var(--surface);border-radius:16px;padding:28px 32px;margin-top:40px;max-width:760px;
   display:flex;flex-direction:column;gap:16px}
-.edit h3{font-size:20px;font-weight:400;letter-spacing:-.17px}
-.edit .note{font-size:14px;color:var(--fog);font-weight:300;margin-top:6px}
+.edit h3,.mem h3{font-size:20px;font-weight:400;letter-spacing:-.17px}
+.edit .note,.mem .note{font-size:14px;color:var(--fog);font-weight:300;margin-top:6px}
+/* the repo's notes: a Feature Card like the editor, read-only, its one action a ghost Clear */
+.mem pre{margin:0;background:var(--panel);border-radius:8px;padding:14px 16px;max-height:320px;overflow:auto;
+  font:400 12px/1.6 var(--mono);letter-spacing:0;color:var(--ash);white-space:pre-wrap;word-break:break-word}
+.mem .row{display:flex;gap:20px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--fog)}
+.mem .row b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
+.mem .row a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
+.mem .row .ghost{margin-left:auto}
 .files{display:flex;gap:6px;flex-wrap:wrap}
 .files button{background:transparent;border:1px solid var(--smoke);border-radius:8px;padding:5px 12px;cursor:pointer;
   font:400 12px var(--mono);letter-spacing:0;color:var(--fog)}
@@ -192,7 +199,7 @@ main{min-width:0}
   .step .what{grid-column:2;grid-row:2}
   .gate .box{padding:36px 24px}
   .gate h1{font-size:40px}
-  .edit{padding:20px}
+  .edit,.mem{padding:20px}
   .edit .row .cta{margin-left:0;width:100%}
 }
 [hidden]{display:none!important}
@@ -280,7 +287,7 @@ function h(tag, attrs, ...kids){
 
 async function call(path, opts = {}){
   const r = await fetch(path, {credentials: 'same-origin', ...opts,
-    headers: {...(opts.method === 'POST' ? {'X-CSRF-Token': state.me.csrf} : {}), ...(opts.headers || {})}});
+    headers: {...(['POST', 'DELETE'].includes(opts.method) ? {'X-CSRF-Token': state.me.csrf} : {}), ...(opts.headers || {})}});
   if (r.status === 401){ signedOut(); throw new Error('signed out'); }
   const body = r.status === 204 ? null : await r.json();
   if (!r.ok) throw new Error(body && body.error || r.statusText);
@@ -290,17 +297,19 @@ async function call(path, opts = {}){
 function signedOut(){ $('#app').hidden = true; $('#gate').hidden = false; state.me = null; }
 
 const LBL = {running: 'live', ok: 'ok', failed: 'err', cancelled: 'err', interrupted: 'err'};
-const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation', 'pr-review': 'PR review'};
+const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation', 'pr-review': 'PR review',
+  memory: 'repo notes'};
 
 // the one line the whole page exists for: where a run is, or where it stopped
 function where(r){
   const t = r.task && ('task ' + r.task.i + ' of ' + r.task.of);
-  const doing = {implement: 'starting', 'pr-review': 'reviewing'}[r.act] || 'planning';
+  const doing = {implement: 'starting', 'pr-review': 'reviewing', memory: 'updating notes'}[r.act] || 'planning';
   if (r.status === 'running') return t ? 'Running ' + t : doing[0].toUpperCase() + doing.slice(1);
   if (r.status === 'failed') return t ? 'Failed at ' + t : 'Failed while ' + doing;
   if (r.status === 'cancelled') return 'Cancelled' + (t ? ' at ' + t : '');
   if (r.status === 'interrupted') return 'Interrupted by a restart' + (t ? ' at ' + t : '');
-  return {implement: 'Done — draft PR opened', plan: 'Plan posted', 'pr-review': 'Review posted'}[r.act] || 'Plan revised';
+  return {implement: 'Done — draft PR opened', plan: 'Plan posted', 'pr-review': 'Review posted',
+    memory: 'Notes checked'}[r.act] || 'Plan revised';
 }
 
 function progress(r){
@@ -361,7 +370,8 @@ function stepView(s){
     phase: () => ['Label ', h('span', {class: 'lbl'}, s.label)],
     base: () => ['Read CLAUDE.md and skills from ', h('span', {class: 'mono'}, s.branch),
       h('small', null, s.sha.slice(0, 12) + (s.skills.length ? ' · ' + s.skills.join(', ') : '')
-        + (s.org ? ' · owner defaults ' + s.org.replace(/@(\w{12})\w*$/, '@$1') : ''))],
+        + (s.org ? ' · owner defaults ' + s.org.replace(/@(\w{12})\w*$/, '@$1') : '')
+        + (s.memory ? ' · notes ' + s.memory : ''))],
     task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
     claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
     tick: () => ['Ticked task ' + s.i + ' in tasks.md'],
@@ -376,9 +386,11 @@ function stepView(s){
       ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url],
     error: () => ['Stopped', h('pre', null, s.message)],
     posted: () => ['Posted the review → ' + s.verdict],
+    skipped: () => ['Already reviewed at ', h('span', {class: 'mono'}, s.head.slice(0, 7)), ' — no claude call'],
+    remembered: () => ['Wrote the repo notes', h('small', null, s.chars + ' chars · ' + s.sha + ' · from run ' + s.source)],
   }[s.what] || (() => [s.what]);
   const cls = s.what === 'task' || s.what === 'step' ? 'task' : s.what === 'error' || s.what === 'reverted' || s.status === 'failed' ? 'bad'
-    : s.what === 'commit' || s.what === 'pr' || s.what === 'posted' ? 'good' : '';
+    : s.what === 'commit' || s.what === 'pr' || s.what === 'posted' || s.what === 'remembered' ? 'good' : '';
   return h('div', {class: 'step ' + cls}, h('time', null, clock(s.at)), h('div', {class: 'rail'}, h('i')),
     h('div', {class: 'what'}, t()));
 }
@@ -501,7 +513,32 @@ async function flow(){
     idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
+    notes(repo),
     editor(w));
+}
+
+/* --- the repo's notes: what Rookery learned from earlier runs, kept on its server, not in the repo.
+   Loaded beside the workflow. A model wrote the text from what agents did: h() only. --- */
+function notes(repo){
+  const box = h('div', {class: 'mem'}, h('p', {class: 'note'}, 'Reading the notes…'));
+  call('/api/repos/' + repo + '/memory').then(m => {
+    const clear = async () => {
+      if (!confirm('Clear the notes for ' + repo + '?\n\nThe next run starts with none, and Rookery writes new ones from it.')) return;
+      try { await call('/api/repos/' + repo + '/memory', {method: 'DELETE'}); toast('Notes cleared'); box.replaceWith(notes(repo)); }
+      catch (e) { toast(e.message); }
+    };
+    box.replaceChildren(
+      h('div', null, h('h3', null, 'Repo notes'),
+        h('p', {class: 'note'}, !m.enabled ? 'Off on this Rookery (MEMORY=0): no run reads or writes notes.'
+          : 'After each run, Rookery reads what the agent did and keeps short notes for the next run: commands, layout, traps. '
+            + 'Every agent on this repo reads them. They stay on Rookery\'s server, never in your repo.')),
+      m.notes ? h('pre', null, m.notes) : h('p', {class: 'note'}, 'No notes yet. The next finished run writes the first ones.'),
+      h('div', {class: 'row'},
+        h('span', null, 'Size ', h('b', null, m.chars + ' / ' + m.cap)),
+        m.run && h('span', null, 'Written by ', h('a', {href: '#run/' + m.run.id}, 'run ' + m.run.id)),
+        m.notes && h('button', {class: 'ghost', onclick: clear}, 'Clear notes')));
+  }).catch(e => box.replaceChildren(h('p', {class: 'note'}, e.message)));
+  return box;
 }
 
 /* --- propose a change. Edits stay in this tab until "Open pull request"; then the server checks

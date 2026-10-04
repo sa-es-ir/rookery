@@ -227,3 +227,49 @@ says they are "in the PR body".
   where a review helps most.
 - **Revisit when:** #7 is fixed (a second user for `claude`, or the sandbox). Then a fork PR
   can be fetched the same way, `refs/pull/<n>/head` already covers it.
+
+## 15. Any agent on the box can change any repo's notes
+
+**Decided 3 October 2026** (repo-memory.md §3.8).
+
+Repo notes are files in `$WORKSPACE/memory/`, owned by the same user that runs `claude`.
+An agent working on repo A can edit the notes of repo B, and B's next run reads them in its
+system prompt.
+
+- **Gained:** notes with no new storage, no new user and no new service.
+- **Given up:** tenant isolation for the notes. This adds to #7; it is not a new class of
+  problem, since the same agent can already read `app.pem`.
+- **Revisit when:** #7 is fixed (a second user for `claude`, or the sandbox). The same fix
+  covers the notes.
+
+## 16. Repo notes steer runs without a human review
+
+**Decided 3 October 2026** (repo-memory.md §3.8).
+
+A haiku call writes the notes from a run's transcripts, and the next run reads them. No
+person reviews them first, unlike `CLAUDE.md` and `.rookery/`, which change only by a merge.
+
+- **Gained:** the notes stay current with no work for anyone.
+- **Given up:** "what steers the agent is reviewed" now has an exception. The limits: the
+  notes come only from runs that a person with write access started, they are per repo, the
+  prompt says the code and `CLAUDE.md` win, and the portal shows them and can clear them.
+- **Revisit when:** a bad note causes a bad run. Then: hand edits in the portal, or notes
+  that change only by a PR, like config.
+
+## 17. A PR review's findings become repo notes
+
+**Decided 3 October 2026** (seen in prod on sa-es-ir/Mantis-Frontend#110).
+
+`handle()` submits a `memory` job after a `pr-review` job as after any other job. The
+reviewer's findings are about one diff, so `REMEMBER` records them as "Known Traps": the
+rich-text length bug, the double polling interval, a missing `@types/dompurify`. When the
+PR fixes them or closes, the notes are stale, and every later job reads them as advice.
+A later review can raise them again on a PR that does not touch that code.
+
+- **Gained:** one rule for all jobs. A review also finds real repo facts (layout, stack,
+  conventions), and those notes are good.
+- **Given up:** notes that hold only lasting facts. The cost of a bad note is a wrong
+  finding or a wasted task, not a failed job.
+- **Revisit when:** next change to the memory flow. Then: no `memory` job after a
+  `pr-review` (smallest change), or a `REMEMBER` rule for pr-review jobs that records repo
+  facts and never findings about the diff.
