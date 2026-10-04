@@ -113,9 +113,16 @@ DEPLOY.md step 5 "Known ceiling").
   the agent.
 - **Given up:** a prompt-injected agent can sign its own JWT with `openssl` and act as the
   App on every installation, not just the repo it was working on. The key outranks any
-  token minted from it, and the deny rules don't cover `openssl` + `curl`.
+  token minted from it, and the deny rules don't cover `openssl` + `curl`. Since #18 that
+  includes Workflows RW: CI that runs with a repo's secrets.
 - **Revisit when:** before onboarding anyone outside the invite list. The small fix is to
   run `claude` as a second user that can't read `/opt/rookery`; the real fix is the sandbox.
+- **Outcome, 4 October 2026: the small fix is live** (DEPLOY.md §5b, `RUN_AS`). `claude`
+  runs as `rookery-run` via sudo; checked on the server that it can't read `app.pem`,
+  `.env`, `rookery.db`, the notes or `rookery`'s home, and gets none of `.env` in its
+  environment (before, `WEBHOOK_SECRET` was in it). The clone's `.git` stays read-only to
+  it, since its hooks and config run when the orchestrator commits. Still open: tenants'
+  worktrees share one user (the sandbox), and #18's workflow push needs no key at all.
 
 ## 8. Port 80 on the origin answers anyone
 
@@ -241,6 +248,9 @@ system prompt.
   problem, since the same agent can already read `app.pem`.
 - **Revisit when:** #7 is fixed (a second user for `claude`, or the sandbox). The same fix
   covers the notes.
+- **Outcome, 4 October 2026: fixed with #7.** `memory/` is mode 700 and owned by `rookery`;
+  `rookery-run` can neither read nor write it. Notes still reach the agent through its
+  system prompt, so #16 stands.
 
 ## 16. Repo notes steer runs without a human review
 
@@ -273,3 +283,24 @@ A later review can raise them again on a PR that does not touch that code.
 - **Revisit when:** next change to the memory flow. Then: no `memory` job after a
   `pr-review` (smallest change), or a `REMEMBER` rule for pr-review jobs that records repo
   facts and never findings about the diff.
+
+## 18. The App asks for Claude's GitHub App permissions, not only what it uses
+
+**Decided 4 October 2026.**
+
+The App now has Actions RW, Checks RW, Discussions RW, Workflows RW and Commit statuses R
+on top of Contents, Issues and Pull requests RW and Metadata R. Webhooks (repository hooks),
+which Claude's App also asks for, stays off. `agent.py` calls
+none of the new APIs. Workflows does change one behaviour: a branch that edits
+`.github/workflows/*` now pushes, where before GitHub refused it and the run ended in
+`rookery:error`.
+
+- **Gained:** a task can change CI. Later features (read CI results, re-run a workflow,
+  post check runs) need no new permission, so installs don't have to accept one again.
+- **Given up:** least privilege. #7 now covers writing workflows (they run with the repo's
+  secrets). The install screen asks for
+  more than Rookery does. Worse, and not fixed by #7's fixes: the orchestrator's own push
+  now carries any workflow edit the agent made, and a `push`-triggered workflow runs the
+  version on the pushed branch, with the repo's secrets, before a human reads the PR.
+- **Revisit when:** #7 is fixed, or a tenant questions the install screen. Then: drop what
+  is still unused, keeping Workflows only if tasks are meant to edit CI.

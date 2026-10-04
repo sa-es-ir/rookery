@@ -32,6 +32,7 @@ Make a `.env` file next to `agent.py`:
 | `PORT` | The port. The default is 8787. |
 | `RUN_CAP`, `USD_CAP` | Optional. The daily limits. The defaults are 30 and 20. |
 | `REPOS_ONLY` | Optional. Rookery works only on these repositories, for example `owner/a,owner/b`. |
+| `RUN_AS` | Optional, Linux only. Rookery runs Claude as this user. This user cannot read the private key. Step 5b of DEPLOY.md shows the setup. |
 
 Set the callback URL of the App to `PUBLIC_URL/auth/callback`. Set the Setup URL to `PUBLIC_URL/auth/login`. Do not select *Request user authorization (OAuth) during installation*. If you select it, sign-in fails.
 

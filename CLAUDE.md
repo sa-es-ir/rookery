@@ -240,6 +240,13 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
   replayable: session rows are keyed by the cookie's sha256, and no token is stored.
+- **With `RUN_AS` set (the server), every `claude` call runs as that user via `sudo`**
+  (DEPLOY.md §5b): it can't read `app.pem`, `.env`, `rookery.db` or the notes, and `sudo`
+  drops our env. Worktrees are shared through its group (`shared()`, umask 002); **the
+  clone's `.git` never is** — its hooks and config run when the orchestrator commits, so a
+  writable `.git` hands the agent our user back. `sealed()` keeps each worktree's `.git`
+  pointer read-only for the same reason. A new path that runs `claude` goes through
+  `claude()`, and one that reads what it wrote reads as `RUN_AS` (`digest()`).
 - **The orchestrator writes repo notes; the model never does.** `remember()` writes
   `memory_file()` from a checked reply (`STATUS` marker, `<notes>` tags, `MEMORY_CAP`), and
   the memory call has no tools and an empty cwd. A memory job never comments or labels:

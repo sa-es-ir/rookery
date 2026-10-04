@@ -10,7 +10,10 @@ user it runs as.
 ## 0. Before you start
 
 - A **GitHub App** (step 5): permissions Contents RW, Issues RW, Pull requests RW,
-  Metadata R; events Issues + Issue comment + Pull request; installed on the target repo. Its App ID,
+  Metadata R — what `agent.py` uses — plus Actions RW, Checks RW, Discussions RW,
+  Workflows RW and Commit statuses R, Claude's own GitHub App's set minus Webhooks
+  (unused today; see trade-offs #18); events Issues + Issue comment + Pull request;
+  installed on the target repo. Its App ID,
   private key `.pem` and webhook secret are all the GitHub credentials the box gets —
   no PAT, no `gh auth login`.
 - The **target** repo the agent will work on. Never this one.
@@ -125,9 +128,62 @@ long-lived personal token the agent could read; `gh auth status` should say
 "not logged in". Who may approve is not configured here: anyone with write, maintain or
 admin on the issue's repo can, looked up per comment.
 
-Known ceiling: the agent runs as the same user that can read `app.pem`, and the key
-outranks any token minted from it. The deny rules stop `gh` and `git push`, not
-`openssl` + `curl`. Closing that needs the sandbox, not this file.
+Without step 5b the agent runs as the same user that can read `app.pem`, and the key
+outranks any token minted from it: the deny rules stop `gh` and `git push`, not
+`openssl` + `curl`, and with Workflows RW the key can also push CI that reads a repo's
+secrets (trade-offs #7). Do step 5b.
+
+## 5b. A second user for the agent — server, root
+
+`claude` runs as `rookery-run`, which can't read `app.pem`, `.env`, `rookery.db`, the notes
+or `rookery`'s home. The orchestrator starts every call with `sudo -u rookery-run` when
+`RUN_AS` is set; unset, everything runs as `rookery` as before.
+
+```bash
+adduser --disabled-password --gecos "" rookery-run
+usermod -aG rookery-run rookery          # we read its transcripts and share the worktrees
+cat > /etc/sudoers.d/rookery-run <<'EOF'
+Defaults:rookery !use_pty, !lecture
+rookery ALL=(rookery-run) NOPASSWD: ALL
+EOF
+chmod 440 /etc/sudoers.d/rookery-run && visudo -cf /etc/sudoers.d/rookery-run
+```
+
+`!use_pty` is load-bearing: with a pty sudo moves the command into a new session, and
+cancel (`pkill -s` on the job's session) would miss it.
+
+Then step 7 (CLI, `/login`, RTK) **as `rookery-run`**, not `rookery`, plus
+`git config --global safe.directory '*'` (the worktrees are `rookery`'s). On a box that
+already ran as `rookery`: move `~/.claude/.credentials.json` across rather than copy it
+(two copies revoke each other on refresh), and copy `~/.claude.json` and
+`~/.claude/projects/` so in-flight sessions resume. Then:
+
+```bash
+W=/opt/rookery/work
+mkdir -p $W/repos $W/memory && chown rookery:rookery $W/repos $W/memory
+chmod 700 $W/memory; chmod 600 $W/rookery.db $W/memory/* 2>/dev/null
+for d in $W/*_*; do    # existing worktree roots; new ones are set up by agent.py
+  chgrp -R rookery-run "$d"; chmod -R g+rwX "$d"; find "$d" -type d -exec chmod g+s {} +
+  find "$d" -mindepth 2 -maxdepth 2 -name .git -type f -exec chmod 644 {} +
+done
+echo RUN_AS=rookery-run >> /opt/rookery/.env && systemctl restart rookery
+```
+
+What it rests on: the worktrees are shared through the `rookery-run` group (both sides
+`umask 002`), but each clone's `.git` is not — the agent can read it, never write it. Its
+config and hooks run when the orchestrator commits, so a writable `.git` would hand the
+agent `rookery` again. The same goes for a worktree's `.git` pointer file (mode 644). A
+side effect: the agent can't `git add`, `stash` or commit at all, which the TASK prompt
+asked of it anyway. Check it:
+
+```bash
+sudo -u rookery sudo -n -u rookery-run cat /opt/rookery/app.pem   # Permission denied
+grep Groups /proc/$(systemctl show -p MainPID --value rookery)/status   # includes rookery-run's gid
+```
+
+Known ceilings: every tenant's worktrees are still one user's (the sandbox fixes that), and
+a directory the agent creates without group write (an explicit `mkdir -m 700`) blocks its
+removal by `drop_worktree()` — it logs and the directory stays.
 
 ## 6. Git identity — server, rookery
 

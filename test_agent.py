@@ -338,7 +338,15 @@ assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system
 assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
 # deny rules see the hook-rewritten command: the RTK forms must be denied too
 assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
-assert "Bash(rtk proxy:*)" in argv[0], "rtk proxy runs a command raw: none of the four would match it"# a task resumes its session on approve-again; the review and after steps start one per job
+assert "Bash(rtk proxy:*)" in argv[0], "rtk proxy runs a command raw: none of the four would match it"
+# RUN_AS: the same argv, run as that user through sudo (DEPLOY.md §5b); unset, no sudo
+assert "sudo" not in argv[0], argv
+agent.RUN_AS = "rookery-run"
+argv.clear(), agent.claude(c._replace(repo="o/runas"), "p", key="task-0")   # its own cap
+agent.RUN_AS = ""
+assert argv[0][:5] == ("sudo", "-n", "-H", "-u", "rookery-run"), argv
+assert argv[0][argv[0].index("claude"):][1:3] == ("-p", "p") and "Bash(rtk proxy:*)" in argv[0], argv
+# a task resumes its session on approve-again; the review and after steps start one per job
 sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
 real_caps, agent.check_caps = agent.check_caps, lambda repo: None   # caps are tested above
 def sid(**k):

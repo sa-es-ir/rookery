@@ -119,8 +119,15 @@ LOCKFILES = (":(exclude)*package-lock.json", ":(exclude)*.lock")
 MEMORY = os.environ.get("MEMORY", "1") != "0"
 MEMORY_CAP = 8_000    # characters of notes
 DIGEST_CAP = 12_000   # characters of one job's digest, what the memory call reads
+# a second OS user every `claude` call runs as (DEPLOY.md §5b): it can't read app.pem, .env or
+# rookery.db, so an injected agent can't mint tokens for every installation. Its group shares
+# the worktrees with us, never the clone's .git — its config and hooks run when we commit.
+# "" = the agent runs as this user (local dev, Windows).
+RUN_AS = os.environ.get("RUN_AS", "")
+if RUN_AS:
+    os.umask(0o002)   # what we check out in a worktree stays writable by RUN_AS's group
 # where the CLI writes session transcripts, <sid>.jsonl under projects/<cwd>/
-CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path(f"~{RUN_AS}").expanduser() / ".claude")
 
 queues = {}                  # repo -> its job queue; a worker thread per queue
 qlock = threading.Lock()     # guards queues, so a worker never exits past a new job
@@ -372,6 +379,9 @@ def kill(p):
     """The whole tree: claude's own tool subprocesses would otherwise outlive it."""
     if os.name == "nt":
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+    elif RUN_AS:
+        # p is sudo (root's, not ours to signal); with !use_pty claude stays in its session
+        subprocess.run(["sudo", "-n", "-u", RUN_AS, "pkill", "-KILL", "-s", str(p.pid)], capture_output=True)
     else:
         os.killpg(p.pid, signal.SIGKILL)
 
@@ -404,11 +414,27 @@ def worktree(c):
     wt = wt_root(c.repo) / f"issue-{c.n}"
     if not wt.exists():
         log(f"#{c.n} creating worktree {wt} from origin/{c.base}")
-        wt.parent.mkdir(parents=True, exist_ok=True)
+        shared(wt.parent)
         fetch(c.repo, c.path, c.base)
         sh("git", "worktree", "add", "-B", f"feature/issue-{c.n}", str(wt),
            f"origin/{c.base}", cwd=c.path)
+        sealed(wt)
     return wt
+
+
+def shared(d):
+    """wt_root: RUN_AS edits the worktrees under it through the group. setgid, so what either
+    user makes there stays in that group."""
+    d.mkdir(parents=True, exist_ok=True)
+    if RUN_AS:
+        shutil.chown(d, group=RUN_AS)
+        os.chmod(d, 0o2775)
+
+
+def sealed(wt):
+    """The worktree's `.git` file names the gitdir our git trusts: RUN_AS may not rewrite it."""
+    if RUN_AS:
+        os.chmod(wt / ".git", 0o644)
 
 
 def frontmatter(p, keys, where):
@@ -741,6 +767,11 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
         # no agent (implementation tasks, by default), so the model is set here
         model = s.get("model", "sonnet")
         cmd += ["--model", model]
+    if RUN_AS:
+        # sudo resets the env (nothing of .env reaches the agent) and PATH; the umask keeps
+        # what the agent writes in a worktree writable by us, who tick, commit and clean up
+        cmd = ["sudo", "-n", "-H", "-u", RUN_AS, "--", "sh", "-c",
+               'umask 002; export PATH="$HOME/.local/bin:$PATH"; exec "$@"', "sh", *cmd]
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
     wt, out, m = wt or worktree(c), "", None
@@ -1126,8 +1157,9 @@ def pr_worktree(c, base):
     fetch(c.repo, c.path, f"+refs/pull/{c.n}/head:refs/remotes/origin/pr/{c.n}")
     fetch(c.repo, c.path, base)
     wt = drop_pr_worktree(c)
-    wt.parent.mkdir(parents=True, exist_ok=True)
+    shared(wt.parent)
     sh("git", "worktree", "add", "--detach", str(wt), f"origin/pr/{c.n}", cwd=c.path)
+    sealed(wt)
     return wt
 
 
@@ -1244,7 +1276,10 @@ def digest(job):
             log(f"job {job}: no transcript for claude {s.get('key')} — skipped")
             continue
         lines, reply = [f"## {s.get('key')} (STATUS: {s.get('status')})"], ""
-        for raw in found[0].read_text(encoding="utf-8", errors="replace").splitlines():
+        # the CLI writes transcripts 0600: RUN_AS's, read as RUN_AS
+        text = sh("sudo", "-n", "-u", RUN_AS, "cat", str(found[0])) if RUN_AS else \
+            found[0].read_text(encoding="utf-8", errors="replace")
+        for raw in text.splitlines():
             try:
                 o = json.loads(raw)
             except ValueError:
@@ -1284,6 +1319,7 @@ def remember(job):
     try:
         old = f.read_text(encoding="utf-8") if f.exists() else ""
         with tempfile.TemporaryDirectory() as tmp:   # its cwd: nothing to read, nothing to edit
+            os.chmod(tmp, 0o755)   # mkdtemp's 0700 would shut RUN_AS out of its own cwd
             status, text = claude(c, REMEMBER.format(repo=c.repo, cap=MEMORY_CAP, notes=old, digest=d),
                                   key="memory", slot=MEMORY_SLOT, per_job=True, wt=Path(tmp))
         if status == "memory-updated":
