@@ -187,6 +187,16 @@ run cannot disagree; an unseen repo is a 404. `fetch()` holds a per-repo lock, s
 GET fetches from an HTTP thread while the repo's worker may be fetching. `GET /api/skills`
 reads `skills/` plus the slot/source table in `skills/README.md`.
 
+**Providers.** `PROVIDER` (default `claude`, the CLI's own `/login`) picks the backend
+behind every `claude` call from `PROVIDERS`; the harness stays the `claude` CLI, so every
+invariant holds. Another backend is an Anthropic-compatible endpoint: `provider_env()` gives
+`ANTHROPIC_BASE_URL`, its key as `ANTHROPIC_API_KEY` and the `opus`/`sonnet`/`haiku` aliases'
+models, passed as `env=` (none at all for `claude`, so its env is unchanged), through `sudo`
+by the `env_keep` line (DEPLOY.md §5b). An unknown provider or a missing key fails startup.
+The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
+`price` table, and a model not in it fails the call. The `base` and `claude` steps log
+`provider`. Plan and spikes: `ai-plans/providers.md`.
+
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
 cached and re-minted with under 10 minutes left, since an implementation outlives the 1h
@@ -236,7 +246,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
-  in `web.py`. A user's OAuth token lives only inside `callback()`: never stored, never in
+  in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`) is popped too, used or
+  not; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
   replayable: session rows are keyed by the cookie's sha256, and no token is stored.

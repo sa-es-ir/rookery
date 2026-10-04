@@ -1,2 +1,0 @@
-Read access to commit statuses and metadata
-Read and write access to actions, checks, code, discussions, issues, pull requests, repository hooks, and workflows

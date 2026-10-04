@@ -45,7 +45,39 @@ for line in (HERE / ".env").read_text(encoding="utf-8").splitlines() if (HERE / 
 REPOS = {}
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE / "work"))
 # the `claude` CLI must use the claude.ai login; a stale key in the env fails it.
+# Another backend's key reaches it only through provider_env().
 os.environ.pop("ANTHROPIC_API_KEY", None)
+# Backends behind the `claude` CLI (ai-plans/providers.md). "claude" is its own /login: no
+# overrides at all. Others: an Anthropic-compatible endpoint, the .env var holding its key,
+# what the CLI's aliases (agents' `model: opus`, tasks' `--model sonnet`, memory's haiku)
+# resolve to there, and USD per million tokens (input, cache hit, output) at peak, so
+# USD_CAP can trip early, never late. The CLI itself prices any model as Claude (S-b).
+PROVIDERS = {
+    "claude": {},
+    "deepseek": {"url": "https://api.deepseek.com/anthropic", "key": "DEEPSEEK_API_KEY",
+                 "models": {"opus": "deepseek-v4-pro", "sonnet": "deepseek-flash", "haiku": "deepseek-flash"},
+                 "price": {"deepseek-v4-pro": (1.32, 0.044, 3.96), "deepseek-flash": (0.30, 0.006, 1.20)}},
+}
+PROVIDER = os.environ.get("PROVIDER", "claude")
+# every provider's key is popped, used or not: the claude subprocess inherits os.environ
+PROVIDER_KEY = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}.get(PROVIDER, "")
+
+
+def provider_env():
+    """-> the env overrides for one claude call; {} for the CLI's own login. Raises on a
+    backend that can't run: a misconfigured one must never fall back to the operator's login."""
+    if PROVIDER not in PROVIDERS:
+        raise RuntimeError(f"PROVIDER={PROVIDER!r} is not one of {', '.join(PROVIDERS)}")
+    p = PROVIDERS[PROVIDER]
+    if not p:
+        return {}
+    if not PROVIDER_KEY:
+        raise RuntimeError(f"PROVIDER={PROVIDER} needs {p['key']} in .env")
+    return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": PROVIDER_KEY,
+            **{f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL": m for a, m in p["models"].items()}}
+
+
+provider_env()   # fails startup, not the first job
 # GitHub credentials reach gh/git through env= per call, never os.environ, so the
 # claude subprocess (which inherits os.environ) cannot read them.
 for k in ("GH_TOKEN", "GITHUB_TOKEN"):
@@ -401,10 +433,24 @@ def check_caps(repo):
 
 
 def cost_of(out):
+    """-> USD of one call: the CLI's own figure on Claude, the provider's `price` table
+    elsewhere. A model the table lacks raises — no quiet guess."""
     try:
-        return float(json.loads(out).get("total_cost_usd") or 0)
+        d = json.loads(out)
     except ValueError:
         return 0.0
+    price = PROVIDERS[PROVIDER].get("price")
+    if not price:
+        return float(d.get("total_cost_usd") or 0)
+    usd = 0.0
+    for m, u in (d.get("modelUsage") or {}).items():
+        if m not in price:
+            raise RuntimeError(f"no {PROVIDER} price for model {m!r}: add it to PROVIDERS in agent.py")
+        i, hit, o = price[m]
+        # a cache write is billed as a plain input token there
+        usd += ((u.get("inputTokens", 0) + u.get("cacheCreationInputTokens", 0)) * i
+                + u.get("cacheReadInputTokens", 0) * hit + u.get("outputTokens", 0) * o) / 1e6
+    return usd
 
 
 # --- claude ------------------------------------------------------------------
@@ -539,7 +585,7 @@ def pin(c):
     else:
         said = f"{len(notes)}, {hashlib.sha256(notes.encode()).hexdigest()[:12]}" if notes else ""
     a["memory"] = notes
-    step(c.repo, "base", branch=c.base, sha=a["sha"], skills=sorted(a["sources"]), sources=a["sources"],
+    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=PROVIDER, skills=sorted(a["sources"]), sources=a["sources"],
          agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
          **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}),
          **({"memory": said} if said else {}))
@@ -774,25 +820,29 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
                'umask 002; export PATH="$HOME/.local/bin:$PATH"; exec "$@"', "sh", *cmd]
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    wt, out, m = wt or worktree(c), "", None
+    # None = inherit, as before providers: PROVIDER=claude runs the exact env it always ran.
+    # Through sudo these need the sudoers env_keep line (DEPLOY.md §5b).
+    env = {**os.environ, **pe} if (pe := provider_env()) else None
+    wt, out, m, usd = wt or worktree(c), "", None, 0.0
     try:
         try:
-            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, track=c.repo)
+            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, env=env, track=c.repo)
         except RuntimeError as e:
             # a previous run already created this session (it crashed, or we are being
             # re-run): the id is derived from repo#issue/key, so pick that session up.
             if resume or "already in use" not in str(e):
                 raise
             log(f"#{c.n} session {sid} exists — resuming it")
-            out = sh(*cmd, "--resume", sid, cwd=wt, track=c.repo)
+            out = sh(*cmd, "--resume", sid, cwd=wt, env=env, track=c.repo)
+        usd = cost_of(out)   # an unpriced model raises here; the run still counts below
         text = json.loads(out).get("result", "")
         m = MARKER.search(text)
     finally:
         # a failed call still counts as a run; its cost is lost with its stdout
-        record(c.repo, cost_of(out))
+        record(c.repo, usd)
         # sid: digest() finds the session's transcript by it
         step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
-             usd=cost_of(out), agent=s["agent"], skills=s["skills"], model=model, sid=sid)
+             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=PROVIDER, sid=sid)
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")

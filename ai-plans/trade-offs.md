@@ -304,3 +304,21 @@ none of the new APIs. Workflows does change one behaviour: a branch that edits
   version on the pushed branch, with the repo's secrets, before a human reads the PR.
 - **Revisit when:** #7 is fixed, or a tenant questions the install screen. Then: drop what
   is still unused, keeping Workflows only if tasks are meant to edit CI.
+
+## 19. A non-Claude `PROVIDER` sends every tenant's code to that backend
+
+**Decided 4 October 2026.** (`ai-plans/providers.md`)
+
+With `PROVIDER=deepseek`, every `claude` call goes to DeepSeek. That includes each tenant's
+code, issues and CLAUDE.md. The choice is per instance, not per tenant.
+
+- **Gained:** each call costs about 1/20 of Opus, with no proxy and no change to the harness.
+- **Given up:**
+  - Tenants choose nothing. They must be told before the switch.
+  - WebSearch and WebFetch run on Anthropic's side, so expect them to fail. The agent gets a tool error and continues.
+  - The prompts were tuned on Claude, so expect more marker misses (`rookery:error`).
+  - The key is in the agent's process env. A prompt-injected agent can read it with `env`
+    and send it out. The `/login` credentials file has the same exposure today.
+  - `cost_of()` uses peak prices, so `USD_CAP` trips up to 2x early in off-peak hours.
+- **Revisit when:** a friend brings their own key (phase 2 in the plan: per owner), or S-d
+  shows a marker-miss rate that is too high.

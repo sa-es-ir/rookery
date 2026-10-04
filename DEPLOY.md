@@ -144,6 +144,7 @@ adduser --disabled-password --gecos "" rookery-run
 usermod -aG rookery-run rookery          # we read its transcripts and share the worktrees
 cat > /etc/sudoers.d/rookery-run <<'EOF'
 Defaults:rookery !use_pty, !lecture
+Defaults:rookery env_keep += "ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL"
 rookery ALL=(rookery-run) NOPASSWD: ALL
 EOF
 chmod 440 /etc/sudoers.d/rookery-run && visudo -cf /etc/sudoers.d/rookery-run
@@ -151,6 +152,9 @@ chmod 440 /etc/sudoers.d/rookery-run && visudo -cf /etc/sudoers.d/rookery-run
 
 `!use_pty` is load-bearing: with a pty sudo moves the command into a new session, and
 cancel (`pkill -s` on the job's session) would miss it.
+
+The `env_keep` line lets a non-Claude `PROVIDER` (below) reach the agent. sudo keeps those
+variables only when the orchestrator sets them, so with `PROVIDER=claude` it changes nothing.
 
 Then step 7 (CLI, `/login`, RTK) **as `rookery-run`**, not `rookery`, plus
 `git config --global safe.directory '*'` (the worktrees are `rookery`'s). On a box that
@@ -184,6 +188,24 @@ grep Groups /proc/$(systemctl show -p MainPID --value rookery)/status   # includ
 Known ceilings: every tenant's worktrees are still one user's (the sandbox fixes that), and
 a directory the agent creates without group write (an explicit `mkdir -m 700`) blocks its
 removal by `drop_worktree()` — it logs and the directory stays.
+
+### Another model provider — optional
+
+By default every `claude` call uses the CLI's own `/login`. To send them to DeepSeek
+instead, add to `/opt/rookery/.env` and restart:
+
+```bash
+PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...
+```
+
+Before you do this, tell the tenants: their code goes to DeepSeek (trade-offs #19). With
+`RUN_AS` set, the sudoers file needs the `env_keep` line from §5b. Without it, the CLI
+uses `rookery-run`'s `/login`, and the first call fails with `no deepseek price for model
+claude-…`. An unknown `PROVIDER`, or no key for it, stops the service at startup.
+
+To switch back, set `PROVIDER=claude` (or delete the line) and restart. Sessions resume
+across the switch in both directions, so issues that are in progress continue.
 
 ## 6. Git identity — server, rookery
 

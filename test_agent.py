@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 
-os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="")  # before import: .env only fills unset keys
+os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="", PROVIDER="claude")  # before import: .env only fills unset keys
 import agent  # noqa: E402
 
 real_sh, real_handle = agent.sh, agent.handle
@@ -304,6 +304,32 @@ agent.PAUSED = agent.WORKSPACE / "PAUSED"
 agent.RUN_CAP, agent.USD_CAP = 3, 1.0
 assert agent.cost_of('{"result": "x", "total_cost_usd": 0.25}') == 0.25
 assert agent.cost_of("claude crashed") == 0.0
+
+# providers: claude is the CLI's own login, untouched; another backend is env= only, priced by us
+assert agent.PROVIDER == "claude" and agent.provider_env() == {}
+assert "DEEPSEEK_API_KEY" not in os.environ, "every provider key is popped, used or not"
+agent.PROVIDER, agent.PROVIDER_KEY = "deepseek", "sk-test"
+assert agent.provider_env() == {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "sk-test",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro", "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash"}
+use = {"inputTokens": 1_000_000, "cacheCreationInputTokens": 1_000_000, "cacheReadInputTokens": 1_000_000,
+       "outputTokens": 1_000_000}
+out = json.dumps({"total_cost_usd": 99, "modelUsage": {"deepseek-flash": use, "deepseek-v4-pro": use}})
+assert abs(agent.cost_of(out) - (0.30 * 2 + 0.006 + 1.20 + 1.32 * 2 + 0.044 + 3.96)) < 1e-9, "ours, not the CLI's"
+try:
+    agent.cost_of(json.dumps({"modelUsage": {"deepseek-chat": use}}))
+    raise AssertionError("an unpriced model is never guessed")
+except RuntimeError as e:
+    assert "deepseek-chat" in str(e)
+for p, key in (("deepseek", ""), ("nope", "k")):   # never a quiet fallback to the operator's login
+    agent.PROVIDER, agent.PROVIDER_KEY = p, key
+    try:
+        agent.provider_env()
+        raise AssertionError(p)
+    except RuntimeError:
+        pass
+agent.PROVIDER, agent.PROVIDER_KEY = "claude", ""
 agent.check_caps("o/r")                      # nothing used yet
 agent.record("o/r", 0.25), agent.record("o/r", 0.25)
 agent.record("o/other", 5.0)                 # another repo's spend is its own
@@ -346,6 +372,16 @@ argv.clear(), agent.claude(c._replace(repo="o/runas"), "p", key="task-0")   # it
 agent.RUN_AS = ""
 assert argv[0][:5] == ("sudo", "-n", "-H", "-u", "rookery-run"), argv
 assert argv[0][argv[0].index("claude"):][1:3] == ("-p", "p") and "Bash(rtk proxy:*)" in argv[0], argv
+# PROVIDER=claude inherits the env exactly as before; another backend's overrides go in env=, never argv
+envs, done = [], json.dumps({"result": "STATUS: task-done", "modelUsage": {}})
+agent.sh = lambda *a, **k: envs.append(k["env"]) or argv.append(a) or done
+agent.claude(c._replace(repo="o/prov"), "p", key="task-0")
+agent.PROVIDER, agent.PROVIDER_KEY = "deepseek", "sk-test"
+argv.clear(), agent.claude(c._replace(repo="o/prov"), "p", key="task-0")
+agent.PROVIDER, agent.PROVIDER_KEY = "claude", ""
+assert envs[0] is None and envs[1]["ANTHROPIC_API_KEY"] == "sk-test" and envs[1]["PATH"] == os.environ["PATH"]
+assert "sk-test" not in str(argv), argv
+agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
 # a task resumes its session on approve-again; the review and after steps start one per job
 sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
 real_caps, agent.check_caps = agent.check_caps, lambda repo: None   # caps are tested above
