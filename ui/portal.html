@@ -427,7 +427,7 @@ const SLOT = {
 };
 // an `after` step from workflow.json, by its mode
 const STEP = {
-  check: ['Check', 'rookery:implementing', 'Read-only: Rookery reverts any edit it leaves and flags the run. Its findings go into the PR body; changes-needed flags the run, it never blocks the push.'],
+  check: ['Check', 'rookery:implementing', 'Read-only: Rookery reverts any edit it leaves and flags the run. Its findings go into the PR body; changes-needed sets rookery:changes-wanted, it never blocks the push.'],
   write: ['Write', 'rookery:implementing', 'May edit. Rookery commits its work as one commit; approving again skips it once that commit is on the branch.'],
 };
 // what the wire after a node says: tasks end ticked, a check either way, a write step done
@@ -502,7 +502,9 @@ async function flow(){
       wire('', 'split'),
       h('div', {class: 'fork'},
         end('ok', 'rookery:done', w.after.some(s => s.mode === 'check') ? 'review-ok, and every check check-ok' : 'review-ok'),
-        end('err', 'rookery:error', 'changes-needed, or a failure at any step. approve again resumes at the first unticked task.'))),
+        end('', 'rookery:changes-wanted', 'changes-needed from the reviewer or a check. approve again runs them again.')),
+      h('p', {class: 'fail'}, 'A failure at any step: ', h('span', {class: 'lbl err'}, 'rookery:error'),
+        ' and the error as a comment. approve again resumes at the first unticked task.')),
     h('div', {class: 'flow'},
       fixed('you', 'Ask for a review', '@' + w.agent_user,
         'Mention it in a comment on any pull request of this repo (the rest of the comment is your note), add rookery:pr-review, or request its review. From someone with write access.'),

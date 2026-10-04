@@ -74,7 +74,7 @@ button{font:inherit}
 .flow .who{font-size:14px;color:var(--fog)}
 .flow .who b{font-weight:400;color:#fff;font-family:var(--mono);font-size:13px;letter-spacing:0}
 .flow .note{font-size:14px;color:var(--ash);font-weight:300}
-.flow .note code,.flow .again code{font-family:var(--mono);font-size:12px;letter-spacing:0;color:#fff}
+.flow .note code,.flow .again code,.flow .fail code{font-family:var(--mono);font-size:12px;letter-spacing:0;color:#fff}
 .flow .again{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;padding-top:12px;
   border-top:1px dashed var(--smoke);font-size:13px;color:var(--fog)}
 .flow .again::before{content:"\21BB";font-size:15px;color:#077ac7}
@@ -94,6 +94,7 @@ button{font:inherit}
 .flow .fork .node{padding:14px 18px;gap:6px}
 .flow .fork .node::before{content:"";position:absolute;left:30px;top:-22px;height:22px;width:2px;background:rgb(107,33,239)}
 .flow .fork .note{font-size:13px;color:var(--fog)}
+.flow .fail{margin-top:16px;line-height:2.2;font-size:13px;color:var(--fog)}
 @media(max-width:600px){
   .flow{padding-right:32px}
   .flow .node{padding:16px 18px}

@@ -232,8 +232,9 @@ footer .links a:hover{color:#fff}
       <div class="wire split"></div>
       <div class="fork">
         <div class="node bot"><span class="lbl ok">rookery:done</span><p class="note">review-ok</p></div>
-        <div class="node bot"><span class="lbl err">rookery:error</span><p class="note">changes-needed, or a failure at any step. <code>approve</code> again resumes at the first unticked task.</p></div>
+        <div class="node bot"><span class="lbl">rookery:changes-wanted</span><p class="note">changes-needed from the reviewer or a check. <code>approve</code> again runs them again.</p></div>
       </div>
+      <p class="fail">A failure at any step: <span class="lbl err">rookery:error</span> and the error as a comment. <code>approve</code> again resumes at the first unticked task.</p>
     </div>
   </div>
 </div></section>

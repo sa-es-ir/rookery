@@ -619,7 +619,7 @@ assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
 assert "## sec · rk:verify\n\nno holes\n\n_Rookery reverted" in body_ and "## docs\n\nwrote docs" in body_
 assert body_.index("## sec") < body_.index("## docs") < body_.index("## Review")
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
-assert phases[-1] == "rookery:error" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
+assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again
 calls.clear()
 agent.implement(pc)
@@ -785,6 +785,14 @@ assert not agent.active, "a finished job is no longer active"
 agent.step("o/r", "claude", key="x")            # outside a job: nothing is written
 with agent.closing(agent.db()) as con:
     assert con.execute("SELECT COUNT(*) FROM steps").fetchone()[0] == len(steps)
+# approve on a flagged run re-runs implement(), like approve after an error
+reran, saved_impl, saved_sub = [], agent.implement, agent.submit
+agent.implement, agent.submit = lambda c: reran.append(c.n), lambda job: None
+agent.labels_of = lambda repo, n: {"rookery:changes-wanted"}
+agent.handle({"kind": "continue", "repo": "o/r", "n": 5, "body": "approve"})
+assert reran == [5], "approve on rookery:changes-wanted re-checks"
+agent.implement, agent.submit = saved_impl, saved_sub
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
 agent.claude = real_claude
 
 # PR review: one comment-type review; a failure is a PR comment, never a phase label on the PR

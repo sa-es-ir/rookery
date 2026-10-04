@@ -458,20 +458,6 @@ non-matching comment falls through to the `elif` and is fed back as developer fe
 another planning round, another comment, no implementation. It looks like the agent
 ignored you when it actually re-planned.
 
-### `rookery:error` also means "the reviewer wants changes"
-
-A run that ends `claude review -> changes-needed` pushes the branch, opens the draft PR,
-and *then* sets `rookery:error`. Nothing crashed — the label is overloaded, because the
-review is advisory and only flags.
-
-Tell the two apart by the comment on the issue, not the label: a real failure posts
-`Agent error:` with a traceback; a `changes-needed` verdict posts a short "the reviewer
-wants changes" line pointing at the **Review** section of the PR body.
-
-Commenting `approve` again on that issue resumes the task loop at the first unticked box —
-with every box already ticked, that is a no-op and it simply re-reviews. Fix the flagged
-code yourself, or reply with feedback to get another planning round.
-
 ### `OAuth access token has been revoked`
 
 Mid-run, `claude failed (1)` with `api_error_status: 401` and

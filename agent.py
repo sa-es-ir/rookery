@@ -77,7 +77,8 @@ ASKING = {"please", "pls", "plz", "can", "could", "you", "kindly", "review", "re
           "once", "more", "one", "another", "time", "this", "it", "the", "pr", "pull", "request", "ptal", "now",
           "take", "a", "look", "check", "do", "thanks", "thank", "thx"}
 PHASES = ["rookery:planning", "rookery:awaiting-input", "rookery:awaiting-approval",
-          "rookery:implementing", "rookery:reviewing", "rookery:done", "rookery:error"]
+          "rookery:implementing", "rookery:reviewing", "rookery:done", "rookery:changes-wanted",
+          "rookery:error"]
 APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
 # alone on its line; markdown bold around it is tolerated (prod: `**STATUS: review-ok**`)
 MARKER = re.compile(r"^(?:\*\*)?STATUS:(?:\*\*)?[ \t]*([\w-]+)[ \t]*(?:\*\*)?[ \t]*$", re.M)
@@ -1063,7 +1064,8 @@ def implement(c):
         wanting.append("the reviewer")
     comment(c, f"Draft PR: {url}" if not wanting else
             f"Draft PR: {url}\n\nChanges wanted by {', '.join(wanting)} — see their sections in the PR body.")
-    set_phase(c, "rookery:error" if wanting else "rookery:done")
+    # the run finished: an advisory verdict is not a failure, so not rookery:error
+    set_phase(c, "rookery:changes-wanted" if wanting else "rookery:done")
 
 
 def after_steps(c, wt, after):
@@ -1406,8 +1408,10 @@ def handle(job):
             review_pr(c, job)
         else:
             phase = labels_of(c.repo, c.n)
-            # approving again after an error resumes at the first unticked task
-            if APPROVE.match(job["body"]) and phase & {"rookery:awaiting-approval", "rookery:error"}:
+            # approving again after an error resumes at the first unticked task; after
+            # changes-wanted every box is ticked, so it re-runs the checks and the review
+            if APPROVE.match(job["body"]) and phase & {"rookery:awaiting-approval", "rookery:error",
+                                                       "rookery:changes-wanted"}:
                 begin(c, "implement")
                 pin(c)
                 implement(c)

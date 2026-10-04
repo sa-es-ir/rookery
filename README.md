@@ -100,8 +100,8 @@ is already the right shape for them.
 The reviewer is **advisory**. Its findings go into the PR body under
 `## Review`, and the draft PR opens whatever the verdict — work is never left
 stranded in a local worktree. A `changes-needed` verdict only lands
-`rookery:error` so somebody looks. Blocking and self-fixing variants are specced
-but deliberately unbuilt.
+`rookery:changes-wanted` so somebody looks — not `rookery:error`, since nothing
+failed. Blocking and self-fixing variants are specced but deliberately unbuilt.
 
 Each role sets its model in its frontmatter (`model: opus`); tasks run on sonnet.
 
@@ -143,7 +143,7 @@ each with its own agent:
 
 | Mode | May edit | Replies | Then |
 | --- | --- | --- | --- |
-| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings go into the PR body under `## <agent>`; `changes-needed` sets `rookery:error` but never blocks the push. Runs again on every `approve` |
+| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings go into the PR body under `## <agent>`; `changes-needed` sets `rookery:changes-wanted` but never blocks the push. Runs again on every `approve` |
 | `write` | yes | `step-done` / `failed` | Rookery commits `#<n> step <agent>`; `approve` again skips a step whose commit is on the branch. `failed` stops the run like a failed task |
 
 A skill runs only when a slot names it. An invalid file, or a name that matches
@@ -183,7 +183,8 @@ Add the `rookery:trigger` label to an issue, then follow the `rookery:*` label:
 | `rookery:implementing` | working through `tasks.md` |
 | `rookery:reviewing` | the reviewer is reading the finished diff |
 | `rookery:done` | draft PR is open, review clean |
-| `rookery:error` | the exception is the last comment, or the reviewer wants changes; fix, unlabel, re-trigger |
+| `rookery:changes-wanted` | draft PR is open, the reviewer or a check wants changes; `approve` re-runs them |
+| `rookery:error` | the exception is the last comment; fix, then `approve` resumes |
 
 Only people with write access to the repo can move an issue along, and approval is a regex
 (`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from

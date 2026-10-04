@@ -13,7 +13,8 @@ Rookery keeps the state of an issue in its labels. Each issue has one `rookery:*
 | `rookery:implementing` | Rookery does the tasks. | Wait. |
 | `rookery:reviewing` | The reviewer reads the full change. | Wait. |
 | `rookery:done` | The draft pull request is open and the review found no problems. | Review the pull request. |
-| `rookery:error` | The run stopped, or a check wants changes. | Read the last comment. |
+| `rookery:changes-wanted` | The draft pull request is open. The reviewer or a check step wants changes. | Read the findings in the pull request body. Fix the code, or comment `approve` to do the checks and the review again. |
+| `rookery:error` | The run stopped because of an error. | Read the last comment. |
 
 ## Planning
 
@@ -56,7 +57,7 @@ A plan can have a maximum of 15 tasks. For a larger change, divide the issue int
 
 After the last task, Rookery runs the extra steps of the repository, if there are any. Then the reviewer agent reads the full change. The [Configuration](configuration.md) page tells you how to add steps.
 
-The review is advisory. Rookery pushes the branch and opens the draft pull request for all results. If the reviewer or a check step wants changes, the label is `rookery:error` and the findings are in the pull request body.
+The review is advisory. Rookery pushes the branch and opens the draft pull request for all results. If the reviewer or a check step wants changes, the label is `rookery:changes-wanted` and the findings are in the pull request body. This label does not mean that the run failed.
 
 ## When a run fails
 

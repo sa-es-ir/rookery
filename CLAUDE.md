@@ -82,7 +82,7 @@ verdict instead of looking again.
 Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rookery:awaiting-input`
 (a reply re-enters `plan(resume=True)`, same session) or `rookery:awaiting-approval` → an
 `approve` comment from someone with write access → `implement()` → `rookery:reviewing` → `rookery:done` /
-`rookery:error`.
+`rookery:changes-wanted` (a `changes-needed` verdict) / `rookery:error`.
 
 **Named roles are plugin agents, `--agent rk:<name>`.** `planmaker` runs `plan()`,
 `reviewer` runs the review pass; implementation tasks deliberately run as _no_ agent — the
@@ -134,7 +134,7 @@ step dict itself. `after_steps()` runs them in order between the task loop and t
 <agent>` (`--allow-empty`) and skipped on re-approve once that subject is on the branch. A
 reply outside the mode's `MODES` pair, or a write step's `failed`, raises. Each step's reply
 goes into the PR body as `## <agent>`; any check's `changes-needed` or reverted edit sets
-`rookery:error` like the reviewer's. The reviewer's own leftovers are reverted too, so no
+`rookery:changes-wanted` like the reviewer's. The reviewer's own leftovers are reverted too, so no
 later write step or task commits them. A branch touching `STEERING` gets `CONFIG_WARNING` at
 the top of the PR body. Approving again after a run that opened the PR (a check flagged it)
 posts that run's sections as a comment on the open PR, since `gh pr create` refuses a second.
@@ -265,7 +265,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   then delete.
 - **The review is advisory and runs once**, after the task loop and before the push. The
   branch is pushed and the draft PR opened either way, so work is never stranded in a local
-  worktree; `changes-needed` only sets `rookery:error`. Escalating it to a blocking gate or a
+  worktree; `changes-needed` only sets `rookery:changes-wanted` — never `rookery:error`, which
+  means the run failed. `approve` on it re-runs the checks and the review. Escalating it to a blocking gate or a
   fix loop is specced in the plan doc — a fix loop needs its own bound, because a reviewer
   that appends tasks breaks "every tick strictly reduces the open count". `after` steps keep
   the same shape: checks are advisory, and neither mode appends tasks.
