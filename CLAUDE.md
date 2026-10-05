@@ -157,8 +157,10 @@ detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
 findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, table,
 collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `safe-to-merge` with a
-`high` finding, fails the job. The implement-flow `reviewer` and checks are still free text
-(trade-offs #20).
+`high` finding, fails the job. The implement-flow `reviewer` uses the same JSON and renderer
+(`REVIEW_VERDICTS`: `review-ok` / `changes-needed`, a `###` header under `## 🤖 Reviewer agent`);
+the `after` checks too (`CHECK_VERDICTS`: `check-ok` / `changes-needed`, under the step's
+header). A bad reply fails the job before the push, like a missing marker (trade-offs #20).
 A note made only of `ASKING` words ("review again", "PTAL") is no note.
 `PR_REVIEW` carries the worktree's absolute path and `pr_diff()`: the stat, then the diff
 without lockfiles, cut at a file boundary before `DIFF_CAP` with the rest named for `Read`.

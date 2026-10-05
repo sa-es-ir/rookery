@@ -324,7 +324,7 @@ input is processed in real time, not stored and not used for training (providers
 - **Revisit when:** a friend brings their own key (phase 2 in the plan: per owner), or S-d
   shows a marker-miss rate that is too high.
 
-## 20. Only the PR review has a fixed format
+## 20. Only the PR review has a fixed format (revisited)
 
 **Decided 5 October 2026.** (`ai-plans/pr-review-format.md`)
 
@@ -337,3 +337,9 @@ still post free text into the PR body.
 - **Given up:** two review styles. A DeepSeek `reviewer` section in a Rookery PR is still long.
 - **Revisit when:** the PR review format has run in production without marker or JSON
   failures. Then: same JSON and renderer for `REVIEW` and `CHECK`, verdicts unchanged.
+
+**Update 5 October 2026.** The implement-flow `reviewer` now uses the same JSON and
+`render_review()` (`REVIEW_VERDICTS`, verdicts unchanged), before the PR format had run long
+in production. A bad reply fails the run before the push, so re-approve re-runs the review.
+The `after` checks followed the same day (`CHECK_VERDICTS`). Every review is now one format;
+the risk taken is a JSON failure in either one stopping the push.

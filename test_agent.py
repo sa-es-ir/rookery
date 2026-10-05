@@ -132,6 +132,13 @@ for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it
         raise AssertionError(why)
     except RuntimeError as e:
         assert why in str(e), e
+# the implement-flow reviewer: same JSON, its own two verdicts, the same consistency rule
+try:
+    agent.render_review("review-ok", '<review>{"summary": "s", "findings": [{"severity": "high", "title": "t"}]}'
+                        '</review>', "rk:x", verdicts=agent.REVIEW_VERDICTS)
+    raise AssertionError("review-ok with a high finding")
+except RuntimeError as e:
+    assert "says review-ok but has a high finding" in str(e), e
 
 # planning writes agent-plans/<n>/ and nothing else — the rest is reverted
 import subprocess  # noqa: E402
@@ -672,12 +679,12 @@ def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False)
         assert prompt.startswith("Check the finished work") and slot["agent"] == "sec"
         (wt / "CLAUDE.md").write_text("tampered\n", encoding="utf-8")
         (wt / "scratch.txt").write_text("x", encoding="utf-8")
-        return "check-ok", "no holes"
+        return "check-ok", '<review>{"summary": "No holes.", "findings": []}</review>'
     if key == "step-docs":
         (wt / "docs.md").write_text("docs\n", encoding="utf-8")
         return "step-done", "wrote docs"
     (wt / "review.txt").write_text("x", encoding="utf-8")   # the reviewer is read-only too
-    return "review-ok", "fine"
+    return "review-ok", '<review>{"summary": "Fine.", "findings": [{"severity": "low", "title": "nit"}]}</review>'
 real_gh, real_claude = agent.gh, agent.claude
 agent.claude, agent.comment = fake_claude, lambda c, body: said.append(body)
 agent.set_phase = lambda c, phase: phases.append(phase)
@@ -702,9 +709,12 @@ assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not
 assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
 body_ = prs[0]
 assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
-assert "## 🤖 Sec agent · check · rk:verify\n\nno holes\n\n_Rookery reverted" in body_, body_
+assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\nNo holes.\n\n<sub>rk:sec · rk:verify</sub>\n\n" \
+       "_Rookery reverted" in body_, body_
 assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
 assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
+assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\nFine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
+    "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again

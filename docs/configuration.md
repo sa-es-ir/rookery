@@ -107,7 +107,7 @@ The portal shows the catalog in **Skills**.
 
 | Mode | Can change files | Replies | Result |
 | --- | --- | --- | --- |
-| `check` | No. Rookery reverts all changes and marks the run. | `check-ok` or `changes-needed` | The findings go into the pull request body. `changes-needed` sets `rookery:changes-wanted`. The push continues. |
+| `check` | No. Rookery reverts all changes and marks the run. | `check-ok` or `changes-needed` | The agent gives its findings as JSON. Rookery writes them into the pull request body as a verdict and a table. `changes-needed` sets `rookery:changes-wanted`. The push continues. |
 | `write` | Yes | `step-done` or `failed` | Rookery commits the change as `#<n> step <agent>`. `failed` stops the run. |
 
 When you approve again, Rookery does not repeat a `write` step that has a commit on the branch. It runs each `check` step again.

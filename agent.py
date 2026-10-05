@@ -915,9 +915,26 @@ The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
 
 Read only: do not edit, do not commit, do not use gh.
 
-Reply with exactly one line `STATUS: review-ok` or `STATUS: changes-needed`,
-plus the findings as markdown, worst first. This text is posted verbatim into
-the pull request body, so write it for the person about to read the diff.
+Reply with exactly one line that gives your verdict:
+`STATUS: review-ok` when nothing you found should stop a merge, or
+`STATUS: changes-needed` when something breaks.
+
+Then give your findings as JSON between <review> and </review>, with no code
+fence:
+
+<review>
+{{"summary": "one sentence: whether the work does what the plan asked, and is sound",
+ "findings": [{{"severity": "high", "where": "path/to/file.py:42",
+               "title": "one line: what is wrong",
+               "detail": "why it matters and what fixes it, three sentences at most"}}]}}
+</review>
+
+`severity` is `high` (it breaks something, or work the plan asked for is
+missing), `medium` (it can break, or a path that can break has no test) or
+`low` (worth a look). Put the worst first, ten at most. Sound work has an empty
+`findings` list. Rookery turns this JSON into the review section of the pull
+request body, for the person about to read the diff. It posts nothing outside
+the tags.
 """
 
 CHECK = """Check the finished work for GitHub issue #{n} before it goes to a
@@ -930,10 +947,24 @@ The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
 Read only: do not edit, do not commit, do not use gh. Rookery reverts any edit
 you leave behind.
 
-Reply with exactly one line `STATUS: check-ok` or `STATUS: changes-needed`,
-plus the findings as markdown, worst first. This text is posted verbatim into
-the pull request body under your name, so write it for the person about to
-read the diff.
+Reply with exactly one line that gives your verdict:
+`STATUS: check-ok` when nothing you found should stop a merge, or
+`STATUS: changes-needed` when something breaks.
+
+Then give your findings as JSON between <review> and </review>, with no code
+fence:
+
+<review>
+{{"summary": "one sentence: what you checked and whether the work passes",
+ "findings": [{{"severity": "high", "where": "path/to/file.py:42",
+               "title": "one line: what is wrong",
+               "detail": "why it matters and what fixes it, three sentences at most"}}]}}
+</review>
+
+`severity` is `high` (it breaks something), `medium` (it can break) or `low`
+(worth a look). Put the worst first, ten at most. Sound work has an empty
+`findings` list. Rookery turns this JSON into your section of the pull request
+body, for the person about to read the diff. It posts nothing outside the tags.
 """
 
 WRITE = """The tasks for GitHub issue #{n} are done and committed. You run after
@@ -1133,6 +1164,9 @@ def implement(c):
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
                              key="review", slot="review", per_job=True)
     keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
+    s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
+    review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
+                           verdicts=REVIEW_VERDICTS, level="###")
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
     # an explicit https URL, so the push is the App's even when origin is ssh
@@ -1192,12 +1226,16 @@ def after_steps(c, wt, after):
         reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
         if reverted:
             step(c.repo, "reverted", agent=name, paths=reverted)
-            msg += f"\n\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._"
         if status not in MODES[mode]:
             raise RuntimeError(f"step {name} replied `STATUS: {status}`; a {mode} step replies "
                                f"{' or '.join(MODES[mode])}.")
         if status == "failed":
             raise RuntimeError(f"step {name} reported failed:\n\n{msg}")
+        if mode == "check":
+            msg = render_review(status, msg, " · ".join(f"rk:{k}" for k in [name, *s["skills"]]),
+                                verdicts=CHECK_VERDICTS, level="###")
+        if reverted:
+            msg += f"\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._\n"
         if mode == "write":
             sh("git", "add", "-A", cwd=wt)
             sh("git", "commit", "--allow-empty", "-m", subject, cwd=wt)
@@ -1319,19 +1357,24 @@ def review_pr(c, job):
 # PR review verdicts → the header of the posted review; the order is best first
 PR_VERDICTS = {"safe-to-merge": "🟢 Safe to merge", "minor-changes": "🟡 Minor changes",
                "changes-needed": "🔴 Changes needed"}
+# the implement-flow reviewer and checks keep two: implement(), MODES and rookery:changes-wanted key off them
+REVIEW_VERDICTS = {"review-ok": "🟢 Looks good", "changes-needed": "🔴 Changes needed"}
+CHECK_VERDICTS = {"check-ok": "🟢 Looks good", "changes-needed": "🔴 Changes needed"}
 SEVERITY = {"high": "🔴", "medium": "🟡", "low": "⚪"}
 REVIEW_JSON = re.compile(r"<review>\s*(?:```(?:json)?\s*)?(.*?)\s*(?:```\s*)?</review>", re.S)
 # cut, never failed: the review is already paid for (ai-plans/pr-review-format.md)
 REVIEW_CAPS = {"findings": 10, "title": 150, "where": 120, "summary": 600, "answer": 600, "detail": 800}
 
 
-def render_review(verdict, text, by):
-    """The PR reviewer's STATUS and <review> JSON → the markdown posted on the PR. A reply
-    off that shape raises: parsed, never inferred, like the STATUS marker."""
+def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
+    """A reviewer's STATUS and <review> JSON → the markdown posted on the PR, or into the
+    PR body under `level`. A reply off that shape raises: parsed, never inferred, like the
+    STATUS marker."""
     def bad(why):
-        return RuntimeError(f"the PR reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
-    if verdict not in PR_VERDICTS:
-        raise bad(f"has `STATUS: {verdict}`; it replies {', '.join(PR_VERDICTS)}")
+        return RuntimeError(f"the reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
+    best = next(iter(verdicts))   # best first
+    if verdict not in verdicts:
+        raise bad(f"has `STATUS: {verdict}`; it replies {', '.join(verdicts)}")
     m = REVIEW_JSON.search(text)
     if not m:
         raise bad("has no <review> JSON")
@@ -1343,15 +1386,15 @@ def render_review(verdict, text, by):
     if not isinstance(r, dict) or not isinstance(r.get("summary"), str) or not isinstance(fs, list) or not all(
             isinstance(f, dict) and f.get("severity") in SEVERITY and isinstance(f.get("title"), str) for f in fs):
         raise bad("has <review> JSON without a summary, or with a finding that has no title or severity")
-    if verdict == "safe-to-merge" and any(f["severity"] == "high" for f in fs):
-        raise bad("says safe-to-merge but has a high finding")
+    if verdict == best and any(f["severity"] == "high" for f in fs):
+        raise bad(f"says {best} but has a high finding")
 
     def cut(s, cap, cell=False):
         s = str(s or "").strip()
         if cell:   # one table cell: one line, and a | would end the cell
             s = " ".join(s.split()).replace("|", "\\|")
         return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
-    out = [f"## {PR_VERDICTS[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
+    out = [f"{level} {verdicts[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
     if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
         out.append("> **Your note:** " + answer.replace("\n", "\n> "))
     shown = fs[:REVIEW_CAPS["findings"]]

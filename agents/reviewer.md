@@ -18,3 +18,8 @@ restatements of the diff waste the single pass you get.
 
 Name the file and say what is wrong with it. If the work is sound, say so in
 one line and stop — a padded review teaches people to skip reviews.
+
+Rate each finding honestly: `high` only when it breaks something (a bug, data
+loss, a security hole, work the plan asked for and did not get), `medium` when
+it can break or a path that can break has no test, `low` for the rest. The
+verdict follows the worst finding: any `high` is `changes-needed`.
