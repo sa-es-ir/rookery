@@ -98,6 +98,41 @@ for name in cat:
 assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
 assert agent.MARKER.search("STATUS: changes-needed\nbug in foo.py").group(1) == "changes-needed"
 
+# PR review: the model returns JSON, the orchestrator writes the markdown and holds the caps
+import json  # noqa: E402
+
+
+def rv(verdict, review, raw=False):
+    return agent.render_review(verdict, review if raw else f"prose\n<review>{json.dumps(review)}</review>", "rk:x")
+out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
+                           "findings": [{"severity": "medium", "where": "a.py:3", "title": "a | b\nc",
+                                         "detail": "why"}, {"severity": "low", "title": "nit"}]})
+assert out.startswith("## 🟡 Minor changes\n\nMostly fine.\n\n> **Your note:** yes\n> it is\n\n"), out
+assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
+assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
+assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
+out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
+assert out == "## 🟢 Safe to merge\n\nSound.\n\n<sub>rk:x</sub>\n", "no note, no findings: header and summary only"
+out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
+                                                               "detail": "d" * 900}] * 12})
+assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
+assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
+fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
+assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
+for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
+                             ("safe-to-merge", "no tags here", "no <review> JSON"),
+                             ("safe-to-merge", "<review>{nope</review>", "does not parse"),
+                             ("safe-to-merge", {"findings": []}, "without a summary"),
+                             ("minor-changes", {"summary": "s", "findings": [{"severity": "huge", "title": "t"}]},
+                              "no title or severity"),
+                             ("safe-to-merge", {"summary": "s", "findings": [{"severity": "high", "title": "t"}]},
+                              "safe-to-merge but has a high finding")]:
+    try:
+        rv(verdict, review, raw=isinstance(review, str))
+        raise AssertionError(why)
+    except RuntimeError as e:
+        assert why in str(e), e
+
 # planning writes agent-plans/<n>/ and nothing else — the rest is reverted
 import subprocess  # noqa: E402
 
@@ -850,7 +885,7 @@ def fake_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False,
     assert "`git diff origin/dev...HEAD`" in prompt and "THE DIFF" in prompt, prompt
     assert f"This worktree, {Path('pr-8').absolute()}, is" in prompt, "no first turn spent finding it"
     ran.append((key, slot, per_job, wt, "look at the migration" in prompt))
-    return "changes-needed", "bug in x.py"
+    return "changes-needed", '<review>{"summary": "Breaks x.", "findings": [{"severity": "high", "title": "bug in x.py"}]}</review>'
 nope = lambda *a, **k: (_ for _ in ()).throw(AssertionError("gh issue … / a phase label on a PR"))
 saved = (agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase,
          agent.comment, agent.pr_diff)
@@ -863,7 +898,9 @@ job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob",
         "comment": 55, "label": True, "requested": True}
 agent.handle(job_)
 assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
-assert (("pr", "review", "8", "--comment", "--body-file", "-"), "**changes-needed** · rk:pr-reviewer\n\nbug in x.py") in ghs
+assert (("pr", "review", "8", "--comment", "--body-file", "-"),
+        "## 🔴 Changes needed\n\nBreaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
+        "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis

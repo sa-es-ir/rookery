@@ -89,7 +89,25 @@ Only a person with write, maintain or admin access can ask for a review. A revie
 
 Rookery ignores a mention in a quote (`> …`) or in code. Thus a reply that quotes an earlier request does not start a second review.
 
-Rookery adds a 👀 reaction when the review starts: to your comment for a mention, or to the pull request for the label or a review request. Then it posts one review of type comment on the pull request. The first line gives the verdict, `review-ok` or `changes-needed`, and the agent. The review is advisory. It does not approve the pull request and it does not block a merge.
+Rookery adds a 👀 reaction when the review starts: to your comment for a mention, or to the pull request for the label or a review request. Then it posts one review of type comment on the pull request. The review is advisory. It does not approve the pull request and it does not block a merge.
+
+The review always has the same shape:
+
+1. The verdict at the top:
+
+   | Verdict | Meaning |
+   | --- | --- |
+   | 🟢 Safe to merge | The reviewer found nothing that must stop a merge. |
+   | 🟡 Minor changes | Some changes are worth making, but nothing breaks. |
+   | 🔴 Changes needed | Something breaks: a bug, a security hole, or a change that does not do what the pull request says. |
+
+2. One sentence about the change.
+3. The answer to your note, if you wrote one.
+4. A table of findings, worst first, with a maximum of 10. Each finding has a severity (🔴 high, 🟡 medium or ⚪ low), a file and line, and one line about the problem.
+5. More information about the findings, in a collapsed **Details** section.
+6. The agent that made the review, at the bottom.
+
+The format is the same for all model providers. Rookery makes the review from data that the reviewer returns, and Rookery limits the length of each part.
 
 To review again, for example after new commits, ask again. If the pull request has no new commits since the last review, Rookery does not review it again. It writes a comment that tells you this. To get a new review of the same commits, mention `@rookery-agent` with a note that tells Rookery what to examine. A note such as "review again" or "please review" is not sufficient, because it does not give new information.
 

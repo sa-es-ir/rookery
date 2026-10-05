@@ -21,3 +21,9 @@ If the person who asked left a note, answer it first.
 
 Name the file and line, and say what is wrong. If the change is sound, say so
 in one line and stop — a padded review teaches people to skip reviews.
+
+Rate each finding honestly: `high` only when it breaks something (a bug, data
+loss, a security hole, the change not doing what it says), `medium` when it can
+break or a path that can break has no test, `low` for the rest. The verdict
+follows the worst finding: any `high` is `changes-needed`, and
+`safe-to-merge` means you would merge it as it is.

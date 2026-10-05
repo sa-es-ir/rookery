@@ -153,7 +153,12 @@ the rest of the comment is the note), the `REVIEW_LABEL` label, or a review requ
 `AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `review_pr()` 👀s the
 comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
-(`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`.
+(`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
+`PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
+findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, table,
+collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `safe-to-merge` with a
+`high` finding, fails the job. The implement-flow `reviewer` and checks are still free text
+(trade-offs #20).
 A note made only of `ASKING` words ("review again", "PTAL") is no note.
 `PR_REVIEW` carries the worktree's absolute path and `pr_diff()`: the stat, then the diff
 without lockfiles, cut at a file boundary before `DIFF_CAP` with the rest named for `Read`.

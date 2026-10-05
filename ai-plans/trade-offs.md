@@ -322,3 +322,17 @@ code, issues and CLAUDE.md. The choice is per instance, not per tenant.
   - `cost_of()` uses peak prices, so `USD_CAP` trips up to 2x early in off-peak hours.
 - **Revisit when:** a friend brings their own key (phase 2 in the plan: per owner), or S-d
   shows a marker-miss rate that is too high.
+
+## 20. Only the PR review has a fixed format
+
+**Decided 5 October 2026.** (`ai-plans/pr-review-format.md`)
+
+The on-request PR review returns JSON that the orchestrator renders: a verdict header, a
+findings table and collapsed details. The implement-flow `reviewer` and the `after` checks
+still post free text into the PR body.
+
+- **Gained:** one change to prove in production before it touches the label state machine
+  (`review-ok` / `changes-needed` drive `rookery:changes-wanted`).
+- **Given up:** two review styles. A DeepSeek `reviewer` section in a Rookery PR is still long.
+- **Revisit when:** the PR review format has run in production without marker or JSON
+  failures. Then: same JSON and renderer for `REVIEW` and `CHECK`, verdicts unchanged.

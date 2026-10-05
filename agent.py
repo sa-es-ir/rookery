@@ -965,9 +965,27 @@ below. If it touches agent-plans/, the plan it was built from is in the diff.
 
 Read only: do not edit, do not commit, do not use gh.
 
-Reply with exactly one line `STATUS: review-ok` or `STATUS: changes-needed`,
-plus the findings as markdown, worst first. This text is posted verbatim as a
-review on the pull request, so write it for the person about to read the diff.
+Reply with exactly one line that gives your verdict:
+`STATUS: safe-to-merge` when nothing you found should stop a merge,
+`STATUS: minor-changes` when something is worth a fix but nothing breaks, or
+`STATUS: changes-needed` when something breaks.
+
+Then give your findings as JSON between <review> and </review>, with no code
+fence:
+
+<review>
+{{"summary": "one sentence: what the change does and whether it is sound",
+ "answer": "your answer to the note, or an empty string when there is no note",
+ "findings": [{{"severity": "high", "where": "path/to/file.py:42",
+               "title": "one line: what is wrong",
+               "detail": "why it matters and what fixes it, three sentences at most"}}]}}
+</review>
+
+`severity` is `high` (it breaks something), `medium` (it can break, or a path
+that can break has no test) or `low` (worth a look). Put the worst first, ten
+at most. A sound change has an empty `findings` list. Rookery turns this JSON
+into the review it posts, for the person about to read the diff. It posts
+nothing outside the tags.
 """
 
 # what pin() reads from base: a PR that changes any of it steers Rookery once merged
@@ -1287,12 +1305,66 @@ def review_pr(c, job):
                                key="pr-review", slot="pr-review", per_job=True, wt=wt)
     finally:
         drop_pr_worktree(c)
-    if verdict not in ("review-ok", "changes-needed"):
-        raise RuntimeError(f"the PR reviewer replied `STATUS: {verdict}`; it replies review-ok or changes-needed.")
     s = (active[c.repo].get("workflow") or WORKFLOW)["pr-review"]
-    top = f"**{verdict}** · rk:{s['agent']}" + "".join(f" · rk:{k}" for k in s["skills"])
-    gh(c.repo, "pr", "review", str(c.n), "--comment", "--body-file", "-", input=f"{top}\n\n{text}")
+    by = " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]])
+    gh(c.repo, "pr", "review", str(c.n), "--comment", "--body-file", "-", input=render_review(verdict, text, by))
     step(c.repo, "posted", verdict=verdict, head=head)
+
+
+# PR review verdicts → the header of the posted review; the order is best first
+PR_VERDICTS = {"safe-to-merge": "🟢 Safe to merge", "minor-changes": "🟡 Minor changes",
+               "changes-needed": "🔴 Changes needed"}
+SEVERITY = {"high": "🔴", "medium": "🟡", "low": "⚪"}
+REVIEW_JSON = re.compile(r"<review>\s*(?:```(?:json)?\s*)?(.*?)\s*(?:```\s*)?</review>", re.S)
+# cut, never failed: the review is already paid for (ai-plans/pr-review-format.md)
+REVIEW_CAPS = {"findings": 10, "title": 150, "where": 120, "summary": 600, "answer": 600, "detail": 800}
+
+
+def render_review(verdict, text, by):
+    """The PR reviewer's STATUS and <review> JSON → the markdown posted on the PR. A reply
+    off that shape raises: parsed, never inferred, like the STATUS marker."""
+    def bad(why):
+        return RuntimeError(f"the PR reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
+    if verdict not in PR_VERDICTS:
+        raise bad(f"has `STATUS: {verdict}`; it replies {', '.join(PR_VERDICTS)}")
+    m = REVIEW_JSON.search(text)
+    if not m:
+        raise bad("has no <review> JSON")
+    try:
+        r = json.loads(m.group(1))
+    except ValueError as e:
+        raise bad(f"has <review> JSON that does not parse ({e})") from None
+    fs = r.get("findings") if isinstance(r, dict) else None
+    if not isinstance(r, dict) or not isinstance(r.get("summary"), str) or not isinstance(fs, list) or not all(
+            isinstance(f, dict) and f.get("severity") in SEVERITY and isinstance(f.get("title"), str) for f in fs):
+        raise bad("has <review> JSON without a summary, or with a finding that has no title or severity")
+    if verdict == "safe-to-merge" and any(f["severity"] == "high" for f in fs):
+        raise bad("says safe-to-merge but has a high finding")
+
+    def cut(s, cap, cell=False):
+        s = str(s or "").strip()
+        if cell:   # one table cell: one line, and a | would end the cell
+            s = " ".join(s.split()).replace("|", "\\|")
+        return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
+    out = [f"## {PR_VERDICTS[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
+    if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
+        out.append("> **Your note:** " + answer.replace("\n", "\n> "))
+    shown = fs[:REVIEW_CAPS["findings"]]
+    if shown:
+        rows = ["| # | Severity | Where | Finding |", "|---|---|---|---|"]
+        for i, f in enumerate(shown, 1):
+            where = cut(f.get("where"), REVIEW_CAPS["where"], cell=True).replace("`", "")
+            rows.append(f"| {i} | {SEVERITY[f['severity']]} {f['severity']} | {f'`{where}`' if where else ''} "
+                        f"| {cut(f['title'], REVIEW_CAPS['title'], cell=True)} |")
+        if len(fs) > len(shown):
+            rows.append(f"\n{len(fs) - len(shown)} more findings not shown.")
+        out.append("\n".join(rows))
+        details = [f"**{i}. {cut(f['title'], REVIEW_CAPS['title'], cell=True)}**\n\n"
+                   f"{cut(f['detail'], REVIEW_CAPS['detail'])}" for i, f in enumerate(shown, 1) if f.get("detail")]
+        if details:
+            out.append("<details><summary>Details</summary>\n\n" + "\n\n".join(details) + "\n\n</details>")
+    out.append(f"<sub>{by}</sub>")
+    return "\n\n".join(out) + "\n"
 
 
 def pr_cleanup(c, job):
