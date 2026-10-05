@@ -150,7 +150,9 @@ of any open same-repo PR. Triggers (`enqueue()`, each gated by `may()` = not `ME
 `can_write()`): a PR comment matching `MENTION` (`@AGENT_USER`, default `rookery-agent`, a
 plain machine account with no token on the box; `mention()` ignores quoted lines and code,
 the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
-`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `review_pr()` 👀s the
+`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
+on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
+no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
 comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is

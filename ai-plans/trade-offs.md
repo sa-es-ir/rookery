@@ -361,3 +361,50 @@ not include the provider.
     provider row. The caps have the same exposure. With `RUN_AS` it cannot read the file.
 - **Revisit when:** a resumed session fails after a switch. Then: add the provider to the
   `uuid5` key, at the cost of a fresh plan session.
+
+## 22. An owner's own key is in the agent's process env
+
+**Decided 5 October 2026.** (`ai-plans/byok.md` §4.4)
+
+An owner's API key reaches `claude` as `ANTHROPIC_API_KEY` in that call's `env=`, the same
+path as the operator's keys (#19). Every tenant's agent runs as `rookery-run`, and repos run
+in parallel.
+
+- **Gained:** no new moving part: the same `env=` and sudoers `env_keep` line as today.
+- **Given up:** a prompt-injected agent can read its own owner's key with `env`, and any
+  other tenant's key from a concurrent `claude` process (`/proc/<pid>/environ`), and send
+  it out. The key outlives the job.
+- **Revisit when:** a key is set by someone the operator does not know personally. Then: a
+  local proxy on `127.0.0.1` that swaps a per-call token for the key (byok.md §4.4, about
+  50 lines), or one sandbox user per owner.
+
+## 23. Any tenant's agent can read the operator's subscription login
+
+**Decided 5 October 2026.** (`ai-plans/byok.md` §5)
+
+The `/login` credentials are in `rookery-run`'s home. `OWN` stops Rookery from running a
+non-`OWN` owner's job on the subscription. It does not stop that owner's agent from reading
+the credentials file.
+
+- **Gained:** no second sandbox user and no server work in this change.
+- **Given up:** a prompt-injected agent in any repo can take the operator's subscription
+  token and use it somewhere else.
+- **Revisit when:** before an owner outside `OWN` is onboarded. Then: phase C, a
+  `RUN_AS_OWN` user that alone holds the `/login` and runs only `claude`-backend calls.
+
+## 24. Own keys: personal accounts only, master key on the box, caps unchanged
+
+**Decided 5 October 2026.** (`ai-plans/byok.md` §4)
+
+- **Gained:** "who may manage an owner's keys" is `login == owner`, with no new App
+  permission and no org-role lookup.
+- **Given up:**
+  - An org cannot bring its own key. It runs on the operator's choice (admin page).
+  - `KEY_SECRET` is in `.env` next to `rookery.db`. Encryption protects the database in
+    backups and in local runs, not against a root compromise.
+  - `RUN_CAP` / `USD_CAP` still stop an owner who pays with their own key.
+  - If spike K-d fails, a bad key is found only when the first job fails with the
+    provider's error.
+- **Revisit when:** an org asks for its own key (then: org admins through
+  `GET /orgs/<org>/memberships/<login>`, which needs the App's "Organization members: read"
+  permission), or an owner hits a cap on their own key.

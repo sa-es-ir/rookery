@@ -112,6 +112,13 @@ REVIEW_LABEL = "rookery:pr-review"   # on a PR: review it once. Never a PHASES l
 # the name people use for Rookery: a plain machine account, no token for it on the box
 AGENT_USER = os.environ.get("AGENT_USER", "rookery-agent")
 MENTION = re.compile(rf"(?<![\w-])@{re.escape(AGENT_USER)}(?![\w-])", re.I)
+# a label on the wrong kind of item: say so and remove it, so adding the right one is a clean event
+WRONG_LABEL = {
+    TRIGGER: f"`{TRIGGER}` plans an issue. It does nothing on a pull request, so I removed it. "
+             f"To get a review of this pull request, add `{REVIEW_LABEL}` or mention `@{AGENT_USER}`.",
+    REVIEW_LABEL: f"`{REVIEW_LABEL}` reviews a pull request. It does nothing on an issue, so I removed it. "
+                  f"To plan this issue, add `{TRIGGER}`.",
+}
 # a mention made only of these words asks for a review and says nothing more: no note
 ASKING = {"please", "pls", "plz", "can", "could", "you", "kindly", "review", "re-review", "rereview", "again",
           "once", "more", "one", "another", "time", "this", "it", "the", "pr", "pull", "request", "ptal", "now",
@@ -1433,6 +1440,15 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
     return "\n\n".join(out) + "\n"
 
 
+def wrong_label(job):
+    """No run log, no claude call, no cap. TRIGGER can only be wrong on a PR, REVIEW_LABEL only on
+    an issue, and on a PR it is `gh pr …`, never `gh issue …` (it cannot resolve a PR number)."""
+    kind, n = "pr" if job["label"] == TRIGGER else "issue", str(job["n"])
+    log(f"{job['repo']}#{n} {job['label']} on the wrong kind of item: removing it")
+    gh(job["repo"], kind, "comment", n, "--body-file", "-", input=WRONG_LABEL[job["label"]])
+    gh(job["repo"], kind, "edit", n, "--remove-label", job["label"], check=False)
+
+
 def pr_cleanup(c, job):
     """Whatever triggered the review, gone: a label or a request still there means queued or
     running. Never fails the job over it."""
@@ -1618,6 +1634,8 @@ def handle(job):
         return drop_worktree(job["repo"], job["n"])
     if job["kind"] == "memory":
         return remember(job)
+    if job["kind"] == "wrong-label":
+        return wrong_label(job)
     c = ctx(job["repo"], job["n"])
     log(f"{c.repo}#{c.n} job: {job['kind']}")
     pr, learn = job["kind"] == "pr-review", None
@@ -1742,6 +1760,8 @@ def enqueue(event, p):
                 submit({"kind": "drop-worktree", "repo": repo, "n": int(m.group(1))})
         elif act == "labeled" and p["label"]["name"] == REVIEW_LABEL and may(sender):
             review(label=True)
+        elif act == "labeled" and p["label"]["name"] == TRIGGER and sender != ME:
+            submit({"kind": "wrong-label", "repo": repo, "n": pr["number"], "label": TRIGGER})
         elif act == "review_requested" and me(p.get("requested_reviewer")) and may(sender):
             review(requested=True)
         return
@@ -1754,6 +1774,9 @@ def enqueue(event, p):
         if not labels_of(repo, n) & set(PHASES):
             submit({"kind": "start", "repo": repo, "n": n,
                       "title": p["issue"]["title"], "body": p["issue"]["body"] or ""})
+    elif event == "issues" and p["action"] == "labeled" and p["label"]["name"] == REVIEW_LABEL and sender != ME:
+        # no may(): adding a label already needs triage, and the reply spends nothing
+        submit({"kind": "wrong-label", "repo": repo, "n": n, "label": REVIEW_LABEL})
     elif event == "issue_comment" and p["action"] == "created" and "pull_request" in p["issue"]:
         # on a PR only a mention means anything: never a `continue` job, phase label or not
         user = p["comment"]["user"]["login"].lower()

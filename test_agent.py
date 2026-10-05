@@ -339,8 +339,27 @@ for who, phases in [("rookery-agent", set()), ("dave", set()), ("rookery-agent",
     agent.enqueue("issues", {"action": "assigned", "assignee": {"login": who},
                              "repository": {"full_name": "o/r"}, "issue": issue})
 assert [j["kind"] for j in drain()] == ["start"]
+# a label on the wrong kind of item: a comment and the label removed, `gh pr …` on a PR; never for our own
+pr_event("labeled", "bob", label={"name": agent.TRIGGER})
+pr_event("labeled", agent.ME, label={"name": agent.TRIGGER})
+for who in ("bob", agent.ME):
+    agent.enqueue("issues", {"action": "labeled", "label": {"name": agent.REVIEW_LABEL}, "sender": {"login": who},
+                             "repository": {"full_name": "o/r"}, "issue": issue})
+wrong = drain()
+assert wrong == [{"kind": "wrong-label", "repo": "o/r", "n": 12, "label": agent.TRIGGER},
+                 {"kind": "wrong-label", "repo": "o/r", "n": 1, "label": agent.REVIEW_LABEL}], wrong
+ghs, saved_gh = [], agent.gh
+agent.gh = lambda repo, *a, input=None, check=True: ghs.append((a, input, check)) or ""
+for j in wrong:
+    agent.handle(j)
+agent.gh = saved_gh
+assert ghs == [(("pr", "comment", "12", "--body-file", "-"), agent.WRONG_LABEL[agent.TRIGGER], True),
+               (("pr", "edit", "12", "--remove-label", agent.TRIGGER), None, False),
+               (("issue", "comment", "1", "--body-file", "-"), agent.WRONG_LABEL[agent.REVIEW_LABEL], True),
+               (("issue", "edit", "1", "--remove-label", agent.REVIEW_LABEL), None, False)], ghs
+assert "add `rookery:pr-review` or mention `@rookery-agent`" in agent.WRONG_LABEL[agent.TRIGGER]
 
-# caps: runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
+# caps:runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
 agent.WORKSPACE = Path(tempfile.mkdtemp())
 agent.PAUSED = agent.WORKSPACE / "PAUSED"
 agent.RUN_CAP, agent.USD_CAP = 3, 1.0

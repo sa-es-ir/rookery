@@ -16,6 +16,8 @@ Rookery keeps the state of an issue in its labels. Each issue has one `rookery:*
 | `rookery:changes-wanted` | The draft pull request is open. The reviewer or a check step wants changes. | Read the findings in the pull request body. Fix the code, or comment `approve` to do the checks and the review again. |
 | `rookery:error` | The run stopped because of an error. | Read the last comment. |
 
+Add `rookery:trigger` to an issue only. If you add it to a pull request, Rookery removes it and writes a comment. In the same way, add `rookery:pr-review` to a pull request only. If you add it to an issue, Rookery removes it and writes a comment.
+
 ## Planning
 
 The plan agent reads the issue and the code. It writes three files in `agent-plans/<n>/`:
