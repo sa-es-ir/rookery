@@ -13,9 +13,11 @@ You add one label to an issue. Rookery reads the issue and writes a plan. You ap
 5. A reviewer agent reads the full change.
 6. Rookery pushes the branch and opens a draft pull request.
 
+```flow
+loop
 ```
-rookery:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
-```
+
+The diagram plays the loop. Select a step to stop it and see what the step does.
 
 ## What you get
 

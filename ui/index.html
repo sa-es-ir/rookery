@@ -76,7 +76,8 @@
 .sec-head h2{font-size:clamp(32px,5vw,48px);line-height:.94;letter-spacing:-.86px;margin-top:12px}
 .sec-head p{margin-top:20px;color:var(--fog);font-size:17px;font-weight:300}
 
-/* how it works — the run as a flow diagram (.flow in styles.css, shared with the portal) */
+/* how it works — the run as an animated diagram (flow.js, shared with the docs and the portal) */
+.pr-head{margin:64px 0 20px}
 @media(min-width:980px){
   .rail-grid{display:grid;grid-template-columns:.85fr 1.15fr;gap:64px;align-items:start}
   .rail-grid .sec-head{margin-bottom:0;position:sticky;top:110px}
@@ -137,7 +138,7 @@ footer .links a:hover{color:#fff}
     <a href="docs.html">Docs</a>
   </nav>
   <div class="right">
-    <a class="frost" href="https://github.com/sa-es-ir/rookery">GitHub</a>
+    <a class="frost" href="https://github.com/sa-es-ir/rookery" hidden>GitHub</a>
     <a class="cta" href="portal.html">Open portal</a>
   </div>
 </div></header>
@@ -185,57 +186,10 @@ footer .links a:hover{color:#fff}
       alone. Nothing moves past a gate until you do.</p>
   </div>
   <div>
-    <div class="legend" aria-hidden="true">
-      <span><i class="you"></i>you</span><span><i></i>agent</span>
-      <span><i class="bot"></i>rookery</span><span><i class="loop"></i>repeats</span>
-    </div>
-    <div class="flow">
-      <div class="node you">
-        <header><span class="kind">you</span><h3>Label the issue</h3><span class="lbl live">rookery:trigger</span></header>
-        <p class="note">Nothing runs until someone with write access adds the label. No polling, no autonomous pickup.</p>
-      </div>
-      <div class="wire">webhook</div>
-      <div class="node">
-        <header><span class="kind">agent</span><h3>Plan</h3><span class="lbl">rookery:planning</span></header>
-        <div class="who"><b>rk:planmaker</b> · opus</div>
-        <p class="note">Reads the repo and writes <code>plan.md</code>, <code>tasks.md</code> and
-          <code>decisions.md</code> into <code>agent-plans/&lt;n&gt;/</code>. Anything else it touches is reverted.</p>
-        <p class="again">a question → <span class="lbl">rookery:awaiting-input</span> → your reply → plans again, same session</p>
-        <span class="back"></span>
-      </div>
-      <div class="wire">STATUS: plan-ready</div>
-      <div class="node you">
-        <header><span class="kind">you</span><h3>Approve the plan</h3><span class="lbl live">rookery:awaiting-approval</span></header>
-        <p class="note">Comment <code>approve</code>, matched as text, from someone with write access on that repo —
-          never a model's judgement, never the bot. Any other reply goes back to Plan.</p>
-      </div>
-      <div class="wire">approve</div>
-      <div class="node">
-        <header><span class="kind">agent</span><h3>Work the tasks</h3><span class="lbl">rookery:implementing</span></header>
-        <div class="who">no agent · sonnet</div>
-        <p class="note">A fresh session per task, so issue 300 costs what issue 3 did.
-          <code>decisions.md</code> is the only memory that crosses between tasks.</p>
-        <p class="again">next unticked task → <code>task-done</code> → Rookery ticks and commits · at most 15</p>
-        <span class="back"></span>
-      </div>
-      <div class="wire">every box ticked</div>
-      <div class="node">
-        <header><span class="kind">agent</span><h3>Review the diff</h3><span class="lbl">rookery:reviewing</span></header>
-        <div class="who"><b>rk:reviewer</b> · opus</div>
-        <p class="note">Reads the whole change once. Advisory: its verdict flags the run, it never blocks the push.</p>
-      </div>
-      <div class="wire">either verdict</div>
-      <div class="node bot">
-        <header><span class="kind">rookery</span><h3>Push and open a draft PR</h3></header>
-        <p class="note">To <code>feature/issue-&lt;n&gt;</code>, with the plan inside. The agent never pushes, and nothing merges.</p>
-      </div>
-      <div class="wire split"></div>
-      <div class="fork">
-        <div class="node bot"><span class="lbl ok">rookery:done</span><p class="note">review-ok</p></div>
-        <div class="node bot"><span class="lbl">rookery:changes-wanted</span><p class="note">changes-needed from the reviewer or a check. <code>approve</code> again runs them again.</p></div>
-      </div>
-      <p class="fail">A failure at any step: <span class="lbl err">rookery:error</span> and the error as a comment. <code>approve</code> again resumes at the first unticked task.</p>
-    </div>
+    <div id="loop"></div>
+    <p class="fx-foot">A failure at any step: <span class="lbl err">rookery:error</span> and the error as a comment. <code>approve</code> again resumes at the first unticked task.</p>
+    <div class="eyebrow pr-head">And on any pull request</div>
+    <div id="prflow"></div>
   </div>
 </div></section>
 
@@ -308,11 +262,15 @@ footer .links a:hover{color:#fff}
     <a href="portal.html">Portal</a>
     <a href="#how">How it works</a>
     <a href="docs.html">Docs</a>
-    <a href="https://github.com/sa-es-ir/rookery">Source</a>
+    <a href="https://github.com/sa-es-ir/rookery" hidden>Source</a>
   </div>
 </div></footer>
 
+<script src="flow.js"></script>
 <script>
+Flow.draw(document.getElementById('loop'), Flow.SPECS.loop);
+Flow.draw(document.getElementById('prflow'), Flow.SPECS.pr);
+
 // The hero runs the real loop on a timer: labels advance, checkboxes tick.
 // ponytail: a script, not a state machine — it is a demo, not the product.
 const PHASES = [

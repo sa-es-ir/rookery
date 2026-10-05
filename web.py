@@ -12,6 +12,7 @@ The list is fixed for the session; signing in again refreshes it (GitHub skips t
 consent screen once authorised). The App's Setup URL points at /auth/login, so installing
 it or changing its repos lands back here signed in with the new list.
 """
+import collections
 import hashlib
 import hmac
 import json
@@ -42,6 +43,8 @@ TTL = 8 * 3600  # a session, and GitHub's own lifetime for a user token
 UI = agent.HERE / "ui"
 DOCS = agent.HERE / "docs"  # product docs as markdown, rendered by ui/docs.html; flat like ui/
 MAX_BODY = 26 * 1024 * 1024  # GitHub caps a webhook payload at 25 MB
+# GitHub logins that may open /admin.html's API; anyone else gets a 404 there, signed in or not
+ADMINS = {x.strip().lower() for x in os.environ.get("ADMINS", "").split(",") if x.strip()}
 HEADERS = [("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"),
            ("Referrer-Policy", "same-origin")]
 
@@ -93,6 +96,10 @@ def visible(s):
     return [r for r in s["repos"] if r in agent.REPOS]
 
 
+def admin(s):
+    return bool(s) and s["login"].lower() in ADMINS
+
+
 # --- GitHub login ------------------------------------------------------------
 
 def login():
@@ -125,6 +132,9 @@ def callback(q, jar):
              for i in agent.api_all("/user/installations", tok, "installations")
              for r in agent.api_all(f"/user/installations/{i['id']}/repositories", tok, "repositories")}
     log(f"{who} signed in ({len(repos)} repos in their installations)")
+    with closing(agent.db()) as con, con:
+        con.execute("INSERT INTO users VALUES (?, ?, ?, 1) ON CONFLICT(login) DO UPDATE "
+                    "SET last = excluded.last, logins = logins + 1", (who, time.time(), time.time()))
     if old := jar.get("rookery_session"):   # a refresh replaces the session, it doesn't add one
         with closing(agent.db()) as con, con:
             con.execute("DELETE FROM sessions WHERE id = ?", (digest(old.value),))
@@ -251,6 +261,37 @@ def catalog():
             for p in sorted((agent.HERE / "skills").glob("*/SKILL.md"))]
 
 
+def admin_view():
+    """Everything /admin.html shows: providers, the default, per-owner overrides, who signed in."""
+    now = time.time()
+    with closing(agent.db()) as con:
+        rows = dict(con.execute("SELECT key, value FROM settings WHERE key LIKE 'provider%'"))
+        users = con.execute("SELECT login, first, last, logins FROM users ORDER BY last DESC").fetchall()
+        # each login's newest session, swept 8h after it ends: its repo list and whether it is live
+        last = {l: (e, json.loads(r)) for l, r, e in con.execute("SELECT login, repos, expires FROM sessions ORDER BY expires")}
+    overrides = {k.split(":", 1)[1]: v for k, v in rows.items() if ":" in k}
+    count = collections.Counter(r.split("/")[0] for r in agent.REPOS)
+    return {"default": rows.get("provider", agent.PROVIDER),
+            "providers": [{"name": n, "ready": agent.ready(n), **({"key": p["key"]} if p else {})}
+                          for n, p in agent.PROVIDERS.items()],
+            "overrides": overrides,
+            "owners": [{"owner": o, "repos": count[o]} for o in sorted(set(count) | set(overrides))],
+            "users": [{"login": l, "first": f, "last": t, "logins": n, "live": l in last and last[l][0] > now,
+                       "repos": len([r for r in last[l][1] if r in agent.REPOS]) if l in last else None}
+                      for l, f, t, n in users]}
+
+
+def set_provider(owner, name, by):
+    """owner None = the default (never deleted); name None = drop that owner's override."""
+    key = f"provider:{owner}" if owner else "provider"
+    with closing(agent.db()) as con, con:
+        if name is None:
+            con.execute("DELETE FROM settings WHERE key = ?", (key,))
+        else:
+            con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, name))
+    log(f"provider for {owner or 'default'} -> {name or 'default'} by {by}")
+
+
 # --- routing -----------------------------------------------------------------
 
 def route(method, url, headers, body=b""):
@@ -264,6 +305,8 @@ def route(method, url, headers, body=b""):
 
     if path.startswith("/api/") or path == "/auth/logout":
         s = session(jar)
+        if path.startswith("/api/admin") and not admin(s):
+            return js(404, {"error": "no such endpoint"})   # not even "sign in": the page is unlinked
         if not s:
             return js(401, {"error": "not signed in"})
         if method in ("POST", "DELETE") and not hmac.compare_digest(headers.get("X-CSRF-Token", ""), s["csrf"]):
@@ -308,6 +351,23 @@ def route(method, url, headers, body=b""):
             agent.memory_file(mem["repo"]).unlink(missing_ok=True)
             log(f"{mem['repo']} notes cleared by {s['login']}")
             return 204, [], b""
+        if method == "GET" and path == "/api/admin":
+            return js(200, admin_view())
+        if method == "POST" and path == "/api/admin/provider":
+            try:
+                d = json.loads(body)
+                owner, name = d["owner"], d["provider"]
+                # the default is never dropped: provider null needs an owner
+                if not (owner is None or isinstance(owner, str) and re.fullmatch(r"[\w.-]+", owner)) \
+                        or not (name is None and owner or isinstance(name, str)):
+                    raise TypeError
+            except (ValueError, KeyError, TypeError):
+                return js(400, {"error": 'expected {"owner": null or "<owner>", "provider": "<name>", '
+                                         'or null to drop an owner\'s override}'})
+            if name is not None and not agent.ready(name):
+                return js(422, {"error": f"{name} cannot run: unknown, or its key is not in .env"})
+            set_provider(owner, name, s["login"])
+            return js(200, admin_view())
         if method == "GET" and path == "/api/skills":
             return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":
@@ -386,6 +446,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve():
+    # once: people signed in before the users table existed, from their live (or unswept) sessions
+    with closing(agent.db()) as con, con:
+        con.execute("INSERT OR IGNORE INTO users SELECT login, MIN(expires) - ?, MAX(expires) - ?, COUNT(*) "
+                    "FROM sessions GROUP BY login", (TTL, TTL))
     if not CLIENT_ID or not CLIENT_SECRET:
         log("CLIENT_ID/CLIENT_SECRET unset — the webhook works, sign-in to the UI will not")
     srv = ThreadingHTTPServer((agent.HOST, agent.PORT), Handler)

@@ -75,11 +75,13 @@ and gains what each severity means.
 
 ## 4. Out of scope, next
 
-- **The implement-flow `reviewer` and the `after` checks** (`REVIEW`, `CHECK` → PR body
-  sections `## <agent>`) get the same treatment **once this one has run in production and
-  works**: same JSON, same renderer, a section header instead of `##` page header. Their
-  verdicts stay `review-ok` / `check-ok` / `changes-needed`, since `implement()`,
-  `MODES` and the `rookery:changes-wanted` label key off them. Logged as trade-offs #20.
+- **The implement-flow `reviewer`: built 5 October 2026** — `REVIEW` asks for the same JSON,
+  `render_review(verdicts=REVIEW_VERDICTS, level="###")` writes it under `## 🤖 Reviewer agent`.
+- **The `after` checks: built 5 October 2026** — `CHECK` asks for the same JSON,
+  `render_review(verdicts=CHECK_VERDICTS, level="###")` writes it under the step's
+  `## 🤖 <Agent> agent · check` header. Verdicts stay `review-ok` / `check-ok` /
+  `changes-needed`, since `implement()`, `MODES` and the `rookery:changes-wanted` label key
+  off them. Trade-offs #20.
 - The portal does not show the PR-review verdict; nothing to change there.
 
 ## 5. Decisions

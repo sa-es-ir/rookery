@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rookery admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="rookery.png">
+<link rel="stylesheet" href="styles.css">
+<style>
+.top{height:66px;border-bottom:1px solid var(--smoke);display:flex;align-items:center;gap:16px}
+.top .who{margin-left:auto;font-size:13px;color:var(--fog)}
+.top .who b{font-weight:400;color:var(--ash)}
+main{padding:40px 0 80px;display:flex;flex-direction:column;gap:24px}
+h1{font-size:48px;line-height:.94;letter-spacing:-.86px}
+.intro{color:var(--fog);font-weight:300;max-width:70ch}
+.card{background:var(--surface);border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:18px}
+.card h2{font-size:24px;letter-spacing:-.17px;line-height:1.2}
+.card .sub{font-size:14px;color:var(--fog);font-weight:300}
+.radios{display:flex;gap:12px;flex-wrap:wrap}
+.radios label{display:flex;align-items:center;gap:10px;padding:12px 18px;border-radius:8px;cursor:pointer;
+  box-shadow:rgba(255,255,255,.1) 0 0 0 1px inset}
+.radios label:has(input:checked){box-shadow:var(--inset);color:#fff}
+.radios label:has(input:disabled){cursor:not-allowed;color:var(--fog)}
+.radios small{font:400 11px var(--mono);letter-spacing:0;color:var(--fog)}
+.table{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:400;font-size:12px;color:var(--fog);text-transform:uppercase;letter-spacing:.1em;
+  padding:0 16px 10px 0;white-space:nowrap}
+td{padding:12px 16px 12px 0;border-top:1px solid var(--smoke);white-space:nowrap}
+td.num{font-family:var(--mono);font-size:12px;letter-spacing:0}
+td .mono{color:#fff}
+select{background:var(--shell);color:var(--ash);border:1px solid var(--smoke);border-radius:8px;
+  padding:8px 12px;font:400 14px var(--font)}
+.status{font-size:13px;color:var(--fog);min-height:20px}
+.status.err{color:#ffb3a5}
+.none{color:var(--fog);font-weight:300}
+.gone{padding:120px 0;text-align:center;color:var(--fog);font-size:18px;font-weight:300}
+</style>
+<div class="wrap">
+  <header class="top">
+    <a class="logo" href="/"><span class="mark"><img src="rookery.png" alt=""></span>Rookery</a>
+    <span class="who" id="who" hidden>signed in as <b></b></span>
+  </header>
+  <main id="app" hidden>
+    <div>
+      <p class="eyebrow">Operator</p>
+      <h1>Admin</h1>
+    </div>
+    <p class="intro">The provider runs every <code class="mono">claude</code> call for an owner's repos. A change applies from the next call, also in a running job.</p>
+    <p class="status" id="status" role="status"></p>
+    <section class="card">
+      <h2>Default provider</h2>
+      <p class="sub">For every owner without an override. A provider without its key in <code class="mono">.env</code> cannot be selected.</p>
+      <div class="radios" id="default"></div>
+    </section>
+    <section class="card">
+      <h2>Owners</h2>
+      <p class="sub">The accounts and orgs the App is installed on.</p>
+      <div class="table"><table><thead><tr><th>Owner</th><th>Repos</th><th>Provider</th></tr></thead>
+        <tbody id="owners"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>Users</h2>
+      <p class="sub">Everyone who signed in to the portal.</p>
+      <div class="table"><table><thead><tr><th>Login</th><th>First seen</th><th>Last seen</th><th>Sign-ins</th>
+        <th>Session</th><th>Repos</th><th>Provider as owner</th></tr></thead>
+        <tbody id="users"></tbody></table></div>
+    </section>
+  </main>
+  <p class="gone" id="gone" hidden>Not found</p>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let csrf = '', data = null;
+
+/* DOM from data. Logins and errors go in as text only, never innerHTML. */
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})){
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e[k] = v;
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k);
+  return e;
+}
+const when = t => t ? new Date(t * 1000).toLocaleString() : '—';
+function say(msg, err){ $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
+
+async function save(owner, provider){
+  say('Saving…');
+  try {
+    const r = await fetch('/api/admin/provider', {method: 'POST', credentials: 'same-origin',
+      headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}, body: JSON.stringify({owner, provider})});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || r.statusText);
+    data = body;
+    say(`Saved: ${owner || 'default'} → ${provider || 'default (' + data.default + ')'}`);
+  } catch (e) { say(e.message, true); }
+  render();
+}
+
+function render(){
+  const d = data, mine = o => d.overrides[o];
+  $('#default').replaceChildren(...d.providers.map(p => h('label', null,
+    h('input', {type: 'radio', name: 'default', checked: p.name === d.default, disabled: !p.ready,
+                onchange: () => save(null, p.name)}),
+    p.name, p.ready ? null : h('small', null, `needs ${p.key}`))));
+  const pick = o => h('select', {'aria-label': `Provider for ${o}`, onchange: e => save(o, e.target.value || null)},
+    h('option', {value: '', selected: !mine(o)}, `Default (${d.default})`),
+    d.providers.map(p => h('option', {value: p.name, selected: mine(o) === p.name, disabled: !p.ready && mine(o) !== p.name},
+      p.ready ? p.name : `${p.name} (needs ${p.key})`)));
+  $('#owners').replaceChildren(...(d.owners.length ? d.owners.map(o => h('tr', null,
+    h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)), h('td', null, pick(o.owner))))
+    : [h('tr', null, h('td', {colspan: 3, class: 'none'}, 'No owners yet.'))]));
+  const owners = new Set(d.owners.map(o => o.owner));
+  $('#users').replaceChildren(...(d.users.length ? d.users.map(u => h('tr', null,
+    h('td', null, h('span', {class: 'mono'}, u.login)), h('td', null, when(u.first)), h('td', null, when(u.last)),
+    h('td', {class: 'num'}, String(u.logins)),
+    h('td', null, u.live ? h('span', {class: 'lbl ok'}, 'live') : h('span', {class: 'none'}, '—')),
+    h('td', {class: 'num'}, u.repos == null ? '—' : String(u.repos)),
+    h('td', null, owners.has(u.login) ? mine(u.login) || `default (${d.default})`
+      : h('span', {class: 'none'}, '—'))))
+    : [h('tr', null, h('td', {colspan: 7, class: 'none'}, 'Nobody has signed in yet.'))]));
+}
+
+(async () => {
+  try {
+    const me = await fetch('/api/me', {credentials: 'same-origin'});
+    const r = await fetch('/api/admin', {credentials: 'same-origin'});
+    if (!me.ok || !r.ok) throw 0;
+    const who = await me.json();
+    csrf = who.csrf, data = await r.json();
+    $('#who b').textContent = who.login, $('#who').hidden = false, $('#app').hidden = false;
+    render();
+  } catch { $('#gone').hidden = false; }
+})();
+</script>

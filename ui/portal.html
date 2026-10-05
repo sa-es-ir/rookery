@@ -111,8 +111,8 @@ main{min-width:0}
 .switch a:hover{color:#fff}
 .switch a[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
 
-/* workflow: the shared .flow diagram (styles.css) plus what only this view shows */
-.flow + .flow{margin-top:64px}   /* the PR review flow, under the issue flow */
+/* workflow: the shared diagram (flow.js, styles.css) plus what only this view shows */
+.pr-head{margin:56px 0 20px}   /* the PR review flow, under the issue flow */
 .flow .who .from{font-size:12px;font-family:var(--mono);letter-spacing:0}
 .flow .who .from.repo{color:#fff}
 .flow .chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -267,6 +267,7 @@ main{min-width:0}
   </main>
 </div>
 
+<script src="flow.js"></script>
 <script>
 // ponytail: polls every 4s while the tab is visible; a push channel is not worth it at this size.
 const $ = s => document.querySelector(s);
@@ -430,8 +431,6 @@ const STEP = {
   check: ['Check', 'rookery:implementing', 'Read-only: Rookery reverts any edit it leaves and flags the run. Its findings go into the PR body; changes-needed sets rookery:changes-wanted, it never blocks the push.'],
   write: ['Write', 'rookery:implementing', 'May edit. Rookery commits its work as one commit; approving again skips it once that commit is on the branch.'],
 };
-// what the wire after a node says: tasks end ticked, a check either way, a write step done
-const past = s => !s ? 'every box ticked' : s.mode === 'check' ? 'either verdict' : 'STATUS: step-done';
 
 function slotNode([title, phase, note, again], s, w){
   const ag = w.agents[s.agent] || {};
@@ -445,8 +444,7 @@ function slotNode([title, phase, note, again], s, w){
     })),
     s.instructions && h('pre', {class: 'say'}, s.instructions),
     h('p', {class: 'note'}, note),
-    again && h('p', {class: 'again'}, again()),   // a fresh element per render
-    again && h('span', {class: 'back'}));
+    again && h('p', {class: 'again'}, again()));   // a fresh element per render
 }
 
 // which layer set a slot: this repo's workflow.json, the owner's <owner>/.rookery, or Rookery
@@ -455,13 +453,9 @@ const origin = (from, w) => from === 'repo'
   : from === 'org' ? h('span', {class: 'from repo', title: "set by the owner's defaults, workflow.json in " + w.org.repo}, w.org.repo)
   : h('span', {class: 'from', title: "Rookery's default"}, 'built-in');
 
-// the steps no workflow.json can change: a human gate (you) or Rookery itself (bot)
-const fixed = (kind, title, phase, note) => h('div', {class: 'node ' + kind},
-  h('header', null, h('span', {class: 'kind'}, kind === 'bot' ? 'rookery' : 'you'), h('h3', null, title),
-    phase && h('span', {class: 'lbl live'}, phase)),
-  h('p', {class: 'note'}, note));
-const wire = (text, cls) => h('div', {class: cls ? 'wire ' + cls : 'wire'}, text || '');
-const end = (cls, phase, note) => h('div', {class: 'node bot'}, h('span', {class: 'lbl ' + cls}, phase), h('p', {class: 'note'}, note));
+// a slot as a diagram node (flow.js): the canvas shows its agent and model, the panel its full card
+const node = (def, s, w, extra) => ({who: s.agent ? 'rk:' + s.agent : 'no agent', model: s.model || 'default model',
+  detail: () => slotNode(def, s, w), ...extra});
 
 async function flow(){
   const repo = state.repo, box = $('#wf');
@@ -476,42 +470,22 @@ async function flow(){
     ...(w.config ? [editor(w)] : []));   // no config yet: still cloning
   const named = new Set([...Object.values(w.slots), ...w.after].flatMap(s => s.skills));
   const idle = Object.keys(w.skills).filter(k => !named.has(k));
+  const loop = h('div'), prs = h('div');
+  Flow.draw(loop, Flow.issue({plan: node(SLOT.plan, w.slots.plan, w), task: node(SLOT.task, w.slots.task, w),
+    review: node(SLOT.review, w.slots.review, w)},
+    w.after.map(s => node(STEP[s.mode], s, w, {title: STEP[s.mode][0], mode: s.mode, tag: s.mode}))));
+  Flow.draw(prs, Flow.pr(node(SLOT['pr-review'], w.slots['pr-review'], w), w.agent_user));
   box.replaceChildren(
     h('div', {class: 'wfacts'},
       h('span', null, 'Base ', h('b', null, w.base)),
       h('span', null, 'At ', h('b', null, w.sha.slice(0, 12))),
       h('span', null, 'CLAUDE.md ', h('b', null, w.claude_md ? (w.claude_md / 1024).toFixed(1) + ' KB' : 'none')),
       w.org && h('span', null, 'Owner defaults ', h('b', null, w.org.repo + ' @ ' + w.org.sha.slice(0, 12)))),
-    h('div', {class: 'legend', 'aria-hidden': 'true'},
-      h('span', null, h('i', {class: 'you'}), 'you'), h('span', null, h('i'), 'agent'),
-      h('span', null, h('i', {class: 'bot'}), 'rookery'), h('span', null, h('i', {class: 'loop'}), 'repeats')),
-    h('div', {class: 'flow'},
-      fixed('you', 'Label the issue', 'rookery:trigger', 'Someone with write access adds the label. Nothing runs before that.'),
-      wire('webhook'),
-      slotNode(SLOT.plan, w.slots.plan, w),
-      wire('STATUS: plan-ready'),
-      fixed('you', 'Approve the plan', 'rookery:awaiting-approval',
-        'An approve comment from someone with write access. Never the portal, never a model. Any other reply goes back to Plan.'),
-      wire('approve'),
-      slotNode(SLOT.task, w.slots.task, w),
-      ...w.after.flatMap((s, i) => [wire(past(w.after[i - 1])), slotNode(STEP[s.mode], s, w)]),
-      wire(past(w.after[w.after.length - 1])),
-      slotNode(SLOT.review, w.slots.review, w),
-      wire('either verdict'),
-      fixed('bot', 'Push and open a draft PR', null, 'To feature/issue-<n>, by Rookery. The agent never pushes, and nothing merges.'),
-      wire('', 'split'),
-      h('div', {class: 'fork'},
-        end('ok', 'rookery:done', w.after.some(s => s.mode === 'check') ? 'review-ok, and every check check-ok' : 'review-ok'),
-        end('', 'rookery:changes-wanted', 'changes-needed from the reviewer or a check. approve again runs them again.')),
-      h('p', {class: 'fail'}, 'A failure at any step: ', h('span', {class: 'lbl err'}, 'rookery:error'),
-        ' and the error as a comment. approve again resumes at the first unticked task.')),
-    h('div', {class: 'flow'},
-      fixed('you', 'Ask for a review', '@' + w.agent_user,
-        'Mention it in a comment on any pull request of this repo (the rest of the comment is your note), add rookery:pr-review, or request its review. From someone with write access.'),
-      wire('webhook'),
-      slotNode(SLOT['pr-review'], w.slots['pr-review'], w),
-      wire('either verdict'),
-      fixed('bot', 'Post the review', null, 'A comment review on the pull request, by Rookery. Advisory: it never approves and never blocks a merge. Ask again to review again.')),
+    loop,
+    h('p', {class: 'fx-foot'}, 'A failure at any step: ', h('span', {class: 'lbl err'}, 'rookery:error'),
+      ' and the error as a comment. approve again resumes at the first unticked task.'),
+    h('div', {class: 'eyebrow pr-head'}, 'On any pull request'),
+    prs,
     idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`

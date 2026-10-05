@@ -61,26 +61,31 @@ PROVIDERS = {
             "models": {"opus": "glm-5.3", "sonnet": "glm-5.3-flash", "haiku": "glm-5.3-flash"},
             "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
 }
-PROVIDER = os.environ.get("PROVIDER", "claude")
-# every provider's key is popped, used or not: the claude subprocess inherits os.environ
-PROVIDER_KEY = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}.get(PROVIDER, "")
+PROVIDER = os.environ.get("PROVIDER", "claude")   # the default until the admin page stores one
+# every provider's key is kept here, out of os.environ: the claude subprocess inherits it
+KEYS = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}
 
 
-def provider_env():
-    """-> the env overrides for one claude call; {} for the CLI's own login. Raises on a
+def ready(name):
+    """A provider a call could run on: known, and its key (if it needs one) is in .env."""
+    return name in PROVIDERS and (not PROVIDERS[name] or bool(KEYS.get(name)))
+
+
+def provider_env(name):
+    """-> the env overrides for one claude call on `name`; {} for the CLI's own login. Raises on a
     backend that can't run: a misconfigured one must never fall back to the operator's login."""
-    if PROVIDER not in PROVIDERS:
-        raise RuntimeError(f"PROVIDER={PROVIDER!r} is not one of {', '.join(PROVIDERS)}")
-    p = PROVIDERS[PROVIDER]
+    if name not in PROVIDERS:
+        raise RuntimeError(f"provider {name!r} is not one of {', '.join(PROVIDERS)}")
+    p = PROVIDERS[name]
     if not p:
         return {}
-    if not PROVIDER_KEY:
-        raise RuntimeError(f"PROVIDER={PROVIDER} needs {p['key']} in .env")
-    return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": PROVIDER_KEY,
+    if not KEYS.get(name):
+        raise RuntimeError(f"provider {name} needs {p['key']} in .env")
+    return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": KEYS[name],
             **{f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL": m for a, m in p["models"].items()}}
 
 
-provider_env()   # fails startup, not the first job
+provider_env(PROVIDER)   # fails startup, not the first job
 # GitHub credentials reach gh/git through env= per call, never os.environ, so the
 # claude subprocess (which inherits os.environ) cannot read them.
 for k in ("GH_TOKEN", "GITHUB_TOKEN"):
@@ -343,8 +348,19 @@ def db():
         CREATE TABLE IF NOT EXISTS steps (job INTEGER, at REAL, what TEXT, detail TEXT);
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, login TEXT, repos TEXT,
             csrf TEXT, expires REAL);
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS users (login TEXT PRIMARY KEY, first REAL, last REAL, logins INTEGER);
     """)
     return con
+
+
+def provider_for(repo):
+    """The repo owner's provider: its `provider:<owner>` row, else the stored default, else
+    PROVIDER. Per owner, never per actor: one issue has several, and must stay on one backend."""
+    with closing(db()) as con:
+        row = con.execute("SELECT value FROM settings WHERE key IN (?, 'provider') ORDER BY key = 'provider' LIMIT 1",
+                          (f"provider:{repo.split('/')[0]}",)).fetchone()
+    return row[0] if row else PROVIDER
 
 
 def today():
@@ -435,20 +451,20 @@ def check_caps(repo):
                            "today. It resets at 00:00 UTC; comment again after that to continue.")
 
 
-def cost_of(out):
+def cost_of(out, name):
     """-> USD of one call: the CLI's own figure on Claude, the provider's `price` table
     elsewhere. A model the table lacks raises — no quiet guess."""
     try:
         d = json.loads(out)
     except ValueError:
         return 0.0
-    price = PROVIDERS[PROVIDER].get("price")
+    price = PROVIDERS[name].get("price")
     if not price:
         return float(d.get("total_cost_usd") or 0)
     usd = 0.0
     for m, u in (d.get("modelUsage") or {}).items():
         if m not in price:
-            raise RuntimeError(f"no {PROVIDER} price for model {m!r}: add it to PROVIDERS in agent.py")
+            raise RuntimeError(f"no {name} price for model {m!r}: add it to PROVIDERS in agent.py")
         i, hit, o = price[m]
         # a cache write is billed as a plain input token there
         usd += ((u.get("inputTokens", 0) + u.get("cacheCreationInputTokens", 0)) * i
@@ -588,7 +604,7 @@ def pin(c):
     else:
         said = f"{len(notes)}, {hashlib.sha256(notes.encode()).hexdigest()[:12]}" if notes else ""
     a["memory"] = notes
-    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=PROVIDER, skills=sorted(a["sources"]), sources=a["sources"],
+    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=provider_for(c.repo), skills=sorted(a["sources"]), sources=a["sources"],
          agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
          **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}),
          **({"memory": said} if said else {}))
@@ -823,9 +839,11 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
                'umask 002; export PATH="$HOME/.local/bin:$PATH"; exec "$@"', "sh", *cmd]
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    # None = inherit, as before providers: PROVIDER=claude runs the exact env it always ran.
+    # read once: the admin page can switch it mid-call, and the env and the price must agree
+    prov = provider_for(c.repo)
+    # None = inherit, as before providers: claude runs the exact env it always ran.
     # Through sudo these need the sudoers env_keep line (DEPLOY.md §5b).
-    env = {**os.environ, **pe} if (pe := provider_env()) else None
+    env = {**os.environ, **pe} if (pe := provider_env(prov)) else None
     wt, out, m, usd = wt or worktree(c), "", None, 0.0
     try:
         try:
@@ -837,7 +855,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
                 raise
             log(f"#{c.n} session {sid} exists — resuming it")
             out = sh(*cmd, "--resume", sid, cwd=wt, env=env, track=c.repo)
-        usd = cost_of(out)   # an unpriced model raises here; the run still counts below
+        usd = cost_of(out, prov)   # an unpriced model raises here; the run still counts below
         text = json.loads(out).get("result", "")
         m = MARKER.search(text)
     finally:
@@ -845,7 +863,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
         record(c.repo, usd)
         # sid: digest() finds the session's transcript by it
         step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
-             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=PROVIDER, sid=sid)
+             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=prov, sid=sid)
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
@@ -915,9 +933,26 @@ The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
 
 Read only: do not edit, do not commit, do not use gh.
 
-Reply with exactly one line `STATUS: review-ok` or `STATUS: changes-needed`,
-plus the findings as markdown, worst first. This text is posted verbatim into
-the pull request body, so write it for the person about to read the diff.
+Reply with exactly one line that gives your verdict:
+`STATUS: review-ok` when nothing you found should stop a merge, or
+`STATUS: changes-needed` when something breaks.
+
+Then give your findings as JSON between <review> and </review>, with no code
+fence:
+
+<review>
+{{"summary": "one sentence: whether the work does what the plan asked, and is sound",
+ "findings": [{{"severity": "high", "where": "path/to/file.py:42",
+               "title": "one line: what is wrong",
+               "detail": "why it matters and what fixes it, three sentences at most"}}]}}
+</review>
+
+`severity` is `high` (it breaks something, or work the plan asked for is
+missing), `medium` (it can break, or a path that can break has no test) or
+`low` (worth a look). Put the worst first, ten at most. Sound work has an empty
+`findings` list. Rookery turns this JSON into the review section of the pull
+request body, for the person about to read the diff. It posts nothing outside
+the tags.
 """
 
 CHECK = """Check the finished work for GitHub issue #{n} before it goes to a
@@ -930,10 +965,24 @@ The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
 Read only: do not edit, do not commit, do not use gh. Rookery reverts any edit
 you leave behind.
 
-Reply with exactly one line `STATUS: check-ok` or `STATUS: changes-needed`,
-plus the findings as markdown, worst first. This text is posted verbatim into
-the pull request body under your name, so write it for the person about to
-read the diff.
+Reply with exactly one line that gives your verdict:
+`STATUS: check-ok` when nothing you found should stop a merge, or
+`STATUS: changes-needed` when something breaks.
+
+Then give your findings as JSON between <review> and </review>, with no code
+fence:
+
+<review>
+{{"summary": "one sentence: what you checked and whether the work passes",
+ "findings": [{{"severity": "high", "where": "path/to/file.py:42",
+               "title": "one line: what is wrong",
+               "detail": "why it matters and what fixes it, three sentences at most"}}]}}
+</review>
+
+`severity` is `high` (it breaks something), `medium` (it can break) or `low`
+(worth a look). Put the worst first, ten at most. Sound work has an empty
+`findings` list. Rookery turns this JSON into your section of the pull request
+body, for the person about to read the diff. It posts nothing outside the tags.
 """
 
 WRITE = """The tasks for GitHub issue #{n} are done and committed. You run after
@@ -1133,6 +1182,9 @@ def implement(c):
     verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
                              key="review", slot="review", per_job=True)
     keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
+    s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
+    review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
+                           verdicts=REVIEW_VERDICTS, level="###")
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
     # an explicit https URL, so the push is the App's even when origin is ssh
@@ -1192,12 +1244,16 @@ def after_steps(c, wt, after):
         reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
         if reverted:
             step(c.repo, "reverted", agent=name, paths=reverted)
-            msg += f"\n\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._"
         if status not in MODES[mode]:
             raise RuntimeError(f"step {name} replied `STATUS: {status}`; a {mode} step replies "
                                f"{' or '.join(MODES[mode])}.")
         if status == "failed":
             raise RuntimeError(f"step {name} reported failed:\n\n{msg}")
+        if mode == "check":
+            msg = render_review(status, msg, " · ".join(f"rk:{k}" for k in [name, *s["skills"]]),
+                                verdicts=CHECK_VERDICTS, level="###")
+        if reverted:
+            msg += f"\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._\n"
         if mode == "write":
             sh("git", "add", "-A", cwd=wt)
             sh("git", "commit", "--allow-empty", "-m", subject, cwd=wt)
@@ -1319,19 +1375,24 @@ def review_pr(c, job):
 # PR review verdicts → the header of the posted review; the order is best first
 PR_VERDICTS = {"safe-to-merge": "🟢 Safe to merge", "minor-changes": "🟡 Minor changes",
                "changes-needed": "🔴 Changes needed"}
+# the implement-flow reviewer and checks keep two: implement(), MODES and rookery:changes-wanted key off them
+REVIEW_VERDICTS = {"review-ok": "🟢 Looks good", "changes-needed": "🔴 Changes needed"}
+CHECK_VERDICTS = {"check-ok": "🟢 Looks good", "changes-needed": "🔴 Changes needed"}
 SEVERITY = {"high": "🔴", "medium": "🟡", "low": "⚪"}
 REVIEW_JSON = re.compile(r"<review>\s*(?:```(?:json)?\s*)?(.*?)\s*(?:```\s*)?</review>", re.S)
 # cut, never failed: the review is already paid for (ai-plans/pr-review-format.md)
 REVIEW_CAPS = {"findings": 10, "title": 150, "where": 120, "summary": 600, "answer": 600, "detail": 800}
 
 
-def render_review(verdict, text, by):
-    """The PR reviewer's STATUS and <review> JSON → the markdown posted on the PR. A reply
-    off that shape raises: parsed, never inferred, like the STATUS marker."""
+def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
+    """A reviewer's STATUS and <review> JSON → the markdown posted on the PR, or into the
+    PR body under `level`. A reply off that shape raises: parsed, never inferred, like the
+    STATUS marker."""
     def bad(why):
-        return RuntimeError(f"the PR reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
-    if verdict not in PR_VERDICTS:
-        raise bad(f"has `STATUS: {verdict}`; it replies {', '.join(PR_VERDICTS)}")
+        return RuntimeError(f"the reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
+    best = next(iter(verdicts))   # best first
+    if verdict not in verdicts:
+        raise bad(f"has `STATUS: {verdict}`; it replies {', '.join(verdicts)}")
     m = REVIEW_JSON.search(text)
     if not m:
         raise bad("has no <review> JSON")
@@ -1343,15 +1404,15 @@ def render_review(verdict, text, by):
     if not isinstance(r, dict) or not isinstance(r.get("summary"), str) or not isinstance(fs, list) or not all(
             isinstance(f, dict) and f.get("severity") in SEVERITY and isinstance(f.get("title"), str) for f in fs):
         raise bad("has <review> JSON without a summary, or with a finding that has no title or severity")
-    if verdict == "safe-to-merge" and any(f["severity"] == "high" for f in fs):
-        raise bad("says safe-to-merge but has a high finding")
+    if verdict == best and any(f["severity"] == "high" for f in fs):
+        raise bad(f"says {best} but has a high finding")
 
     def cut(s, cap, cell=False):
         s = str(s or "").strip()
         if cell:   # one table cell: one line, and a | would end the cell
             s = " ".join(s.split()).replace("|", "\\|")
         return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
-    out = [f"## {PR_VERDICTS[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
+    out = [f"{level} {verdicts[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
     if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
         out.append("> **Your note:** " + answer.replace("\n", "\n> "))
     shown = fs[:REVIEW_CAPS["findings"]]
@@ -1731,6 +1792,12 @@ def main():
     with closing(db()) as con, con:
         con.execute("UPDATE jobs SET status = 'interrupted', ended = ? WHERE status = 'running'", (time.time(),))
     shutil.rmtree(WORKSPACE / "plugins", ignore_errors=True)   # and so did its per-job plugin dirs
+    # a key taken out of .env after the admin page stored its provider: those jobs fail at the call
+    with closing(db()) as con:
+        for k, v in con.execute("SELECT key, value FROM settings WHERE key LIKE 'provider%'"):
+            if not ready(v):
+                log(f"{k} is {v}, which cannot run ({PROVIDERS.get(v, {}).get('key', 'unknown provider')}): "
+                    "its jobs will fail until the key is back in .env or the admin page changes it")
     import web
     web.serve()
 

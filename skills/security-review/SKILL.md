@@ -44,22 +44,18 @@ CLI argument, file, environment, message, webhook) to where it is used.
 
 ## Report
 
-For each finding:
+Each finding is one entry in the findings JSON your prompt asks for:
 
-```markdown
-### <severity>: <one-line title>
-
-`path/to/file.ext:<line>`: what is wrong, the input that reaches it, and what
-an attacker gets.
-
-Fix: the smallest change that closes it.
-```
-
-Severity is **critical** (exploitable remotely without credentials),
-**high**, **medium** or **low**. Worst first.
+- `where`: `path/to/file.ext:<line>`.
+- `title`: what is wrong, in one line.
+- `detail`: the input that reaches it, what an attacker gets, and the smallest
+  change that closes it.
+- `severity`: `high` (exploitable: an attacker gets data, access or code
+  execution), `medium` (exploitable only with conditions that are not likely)
+  or `low`. Worst first.
 
 Do not report: style, missing hardening that no input reaches, or "consider"
-items. If you found nothing, say so in one line and reply `check-ok`; that is
-a normal result for most changes.
+items. If you found nothing, give an empty findings list and reply `check-ok`;
+that is a normal result for most changes.
 
 Never edit files. Your job is the report.

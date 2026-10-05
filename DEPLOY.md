@@ -64,7 +64,7 @@ under uid 0, which is what `agent.py` uses.
 scp agent.py web.py test_agent.py root@SERVER_IP:/opt/rookery/
 scp -r agents skills docs root@SERVER_IP:/opt/rookery/
 ssh root@SERVER_IP mkdir -p /opt/rookery/ui
-scp ui/index.html ui/portal.html ui/docs.html ui/styles.css ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css ui/flow.js ui/rookery.png root@SERVER_IP:/opt/rookery/ui/
 scp .env root@SERVER_IP:/opt/rookery/
 scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
@@ -113,9 +113,13 @@ CLIENT_ID=<the App's client id>
 CLIENT_SECRET=<the App's client secret>
 PUBLIC_URL=https://HOSTNAME
 AGENT_USER=rookery-agent   # optional: the handle people @mention on a PR (default rookery-agent)
+ADMINS=your-login          # optional: GitHub logins (comma-separated) that may use /admin.html
 ```
 
 `PUBLIC_URL` being `https://` sets the `Secure` flag on the session cookie.
+
+`/admin.html` is not linked from anywhere. It lists who signed in and sets the provider
+(below) for all owners or for one owner. For anyone not in `ADMINS`, its API is a 404.
 
 Per job, `agent.py` signs a JWT with the key (`openssl`), exchanges it for a one-hour
 installation token, and hands that to `gh` and `git` through `env=` — never
@@ -213,6 +217,12 @@ claude-…`. An unknown `PROVIDER`, or no key for it, stops the service at start
 
 To switch back, set `PROVIDER=claude` (or delete the line) and restart. Sessions resume
 across the switch in both directions, so issues that are in progress continue.
+
+`PROVIDER` is only the default. `/admin.html` can change the default, or set a provider for
+one owner, with no restart; it applies from the next `claude` call. It offers a provider
+only if its key is in `.env`, so put in every key you want to select (`PROVIDER` can stay
+`claude`). If you remove a key that a stored setting uses, the startup log names the
+setting, and that owner's jobs fail until you put the key back or change the setting.
 
 ## 6. Git identity — server, rookery
 
@@ -363,7 +373,7 @@ as **root** (`rookery` is not a sudoer):
 ```bash
 scp agent.py web.py root@SERVER_IP:/opt/rookery/                 # your machine
 scp -r agents skills docs root@SERVER_IP:/opt/rookery/           # your machine, when they changed
-scp ui/index.html ui/portal.html ui/docs.html ui/styles.css root@SERVER_IP:/opt/rookery/ui/   # likewise
+scp ui/index.html ui/portal.html ui/docs.html ui/styles.css ui/flow.js root@SERVER_IP:/opt/rookery/ui/   # likewise
 chown -R rookery:rookery /opt/rookery                            # server, root
 systemctl restart rookery                                        # server, root
 ```

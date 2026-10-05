@@ -143,7 +143,7 @@ each with its own agent:
 
 | Mode | May edit | Replies | Then |
 | --- | --- | --- | --- |
-| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings go into the PR body under `## <agent>`; `changes-needed` sets `rookery:changes-wanted` but never blocks the push. Runs again on every `approve` |
+| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings (JSON, rendered by Rookery as a verdict and a table) go into the PR body under `## 🤖 <Agent> agent`; `changes-needed` sets `rookery:changes-wanted` but never blocks the push. Runs again on every `approve` |
 | `write` | yes | `step-done` / `failed` | Rookery commits `#<n> step <agent>`; `approve` again skips a step whose commit is on the branch. `failed` stops the run like a failed task |
 
 A skill runs only when a slot names it. An invalid file, or a name that matches
