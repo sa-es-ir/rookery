@@ -50,6 +50,10 @@
 .md th{text-align:left;font-weight:400;color:#fff;border-bottom:1px solid var(--smoke);padding:10px 12px}
 @media(min-width:600px){.md td code{white-space:nowrap}}
 @media(max-width:599px){.md td code{overflow-wrap:anywhere}}
+.md .md-flow{margin:8px 0 32px}
+.md .md-flow h3{font-size:17px;margin:0}   /* undo the article's h3/p/b rules inside the diagram */
+.md .md-flow p{margin:0}
+.md .md-flow b{font-weight:400}
 .md td{border-bottom:1px solid var(--smoke);padding:10px 12px;vertical-align:top}
 @media(max-width:600px){.md h1{font-size:36px}}
 </style>
@@ -63,7 +67,7 @@
     <a class="on" href="docs.html">Docs</a>
   </nav>
   <div class="right">
-    <a class="frost" href="https://github.com/sa-es-ir/rookery">GitHub</a>
+    <a class="frost" href="https://github.com/sa-es-ir/rookery" hidden>GitHub</a>
     <a class="cta" href="portal.html">Open portal</a>
   </div>
 </div></header>
@@ -73,6 +77,7 @@
   <article class="md" id="page"></article>
 </main>
 
+<script src="flow.js"></script>
 <script>
 // Pages live in docs/<name>.md and are served by web.py at /docs/<name>.md.
 const PAGES = [["overview", "Overview"], ["getting-started", "Getting started"], ["workflow", "Workflow"],
@@ -96,7 +101,10 @@ function md(src) {
       const b = [];
       for (i++; i < L.length && !L[i].startsWith("```");) b.push(L[i++]);
       i++;
-      out.push(`<pre><code>${esc(b.join("\n"))}</code></pre>`);
+      // ```flow names a diagram from flow.js (Flow.SPECS); show() draws it once the page is in the DOM
+      const flow = /^```flow\s*$/.test(l) && b.join("").trim();
+      out.push(flow && Flow.SPECS[flow] ? `<div class="md-flow" data-flow="${esc(flow)}"></div>`
+        : `<pre><code>${esc(b.join("\n"))}</code></pre>`);
     } else if (/^#{1,3} /.test(l)) {
       const n = l.indexOf(" ");
       out.push(`<h${n}>${inline(l.slice(n + 1))}</h${n}>`);
@@ -133,6 +141,7 @@ async function show() {
   for (const a of toc.children) a.classList.toggle("on", a.dataset.name === name);
   const r = await fetch(`/docs/${name}.md`);
   page.innerHTML = r.ok ? md(await r.text()) : "<p>This page is not available.</p>";
+  page.querySelectorAll("[data-flow]").forEach(d => Flow.draw(d, Flow.SPECS[d.dataset.flow]));
   document.title = `Rookery — ${PAGES.find(([n]) => n === name)[1]}`;
   scrollTo(0, 0);
 }

@@ -61,26 +61,31 @@ PROVIDERS = {
             "models": {"opus": "glm-5.3", "sonnet": "glm-5.3-flash", "haiku": "glm-5.3-flash"},
             "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
 }
-PROVIDER = os.environ.get("PROVIDER", "claude")
-# every provider's key is popped, used or not: the claude subprocess inherits os.environ
-PROVIDER_KEY = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}.get(PROVIDER, "")
+PROVIDER = os.environ.get("PROVIDER", "claude")   # the default until the admin page stores one
+# every provider's key is kept here, out of os.environ: the claude subprocess inherits it
+KEYS = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}
 
 
-def provider_env():
-    """-> the env overrides for one claude call; {} for the CLI's own login. Raises on a
+def ready(name):
+    """A provider a call could run on: known, and its key (if it needs one) is in .env."""
+    return name in PROVIDERS and (not PROVIDERS[name] or bool(KEYS.get(name)))
+
+
+def provider_env(name):
+    """-> the env overrides for one claude call on `name`; {} for the CLI's own login. Raises on a
     backend that can't run: a misconfigured one must never fall back to the operator's login."""
-    if PROVIDER not in PROVIDERS:
-        raise RuntimeError(f"PROVIDER={PROVIDER!r} is not one of {', '.join(PROVIDERS)}")
-    p = PROVIDERS[PROVIDER]
+    if name not in PROVIDERS:
+        raise RuntimeError(f"provider {name!r} is not one of {', '.join(PROVIDERS)}")
+    p = PROVIDERS[name]
     if not p:
         return {}
-    if not PROVIDER_KEY:
-        raise RuntimeError(f"PROVIDER={PROVIDER} needs {p['key']} in .env")
-    return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": PROVIDER_KEY,
+    if not KEYS.get(name):
+        raise RuntimeError(f"provider {name} needs {p['key']} in .env")
+    return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": KEYS[name],
             **{f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL": m for a, m in p["models"].items()}}
 
 
-provider_env()   # fails startup, not the first job
+provider_env(PROVIDER)   # fails startup, not the first job
 # GitHub credentials reach gh/git through env= per call, never os.environ, so the
 # claude subprocess (which inherits os.environ) cannot read them.
 for k in ("GH_TOKEN", "GITHUB_TOKEN"):
@@ -343,8 +348,19 @@ def db():
         CREATE TABLE IF NOT EXISTS steps (job INTEGER, at REAL, what TEXT, detail TEXT);
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, login TEXT, repos TEXT,
             csrf TEXT, expires REAL);
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS users (login TEXT PRIMARY KEY, first REAL, last REAL, logins INTEGER);
     """)
     return con
+
+
+def provider_for(repo):
+    """The repo owner's provider: its `provider:<owner>` row, else the stored default, else
+    PROVIDER. Per owner, never per actor: one issue has several, and must stay on one backend."""
+    with closing(db()) as con:
+        row = con.execute("SELECT value FROM settings WHERE key IN (?, 'provider') ORDER BY key = 'provider' LIMIT 1",
+                          (f"provider:{repo.split('/')[0]}",)).fetchone()
+    return row[0] if row else PROVIDER
 
 
 def today():
@@ -435,20 +451,20 @@ def check_caps(repo):
                            "today. It resets at 00:00 UTC; comment again after that to continue.")
 
 
-def cost_of(out):
+def cost_of(out, name):
     """-> USD of one call: the CLI's own figure on Claude, the provider's `price` table
     elsewhere. A model the table lacks raises — no quiet guess."""
     try:
         d = json.loads(out)
     except ValueError:
         return 0.0
-    price = PROVIDERS[PROVIDER].get("price")
+    price = PROVIDERS[name].get("price")
     if not price:
         return float(d.get("total_cost_usd") or 0)
     usd = 0.0
     for m, u in (d.get("modelUsage") or {}).items():
         if m not in price:
-            raise RuntimeError(f"no {PROVIDER} price for model {m!r}: add it to PROVIDERS in agent.py")
+            raise RuntimeError(f"no {name} price for model {m!r}: add it to PROVIDERS in agent.py")
         i, hit, o = price[m]
         # a cache write is billed as a plain input token there
         usd += ((u.get("inputTokens", 0) + u.get("cacheCreationInputTokens", 0)) * i
@@ -588,7 +604,7 @@ def pin(c):
     else:
         said = f"{len(notes)}, {hashlib.sha256(notes.encode()).hexdigest()[:12]}" if notes else ""
     a["memory"] = notes
-    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=PROVIDER, skills=sorted(a["sources"]), sources=a["sources"],
+    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=provider_for(c.repo), skills=sorted(a["sources"]), sources=a["sources"],
          agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
          **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}),
          **({"memory": said} if said else {}))
@@ -823,9 +839,11 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
                'umask 002; export PATH="$HOME/.local/bin:$PATH"; exec "$@"', "sh", *cmd]
     check_caps(c.repo)
     log(f"#{c.n} claude {key}{' (resume)' if resume else ''} — this takes a while...")
-    # None = inherit, as before providers: PROVIDER=claude runs the exact env it always ran.
+    # read once: the admin page can switch it mid-call, and the env and the price must agree
+    prov = provider_for(c.repo)
+    # None = inherit, as before providers: claude runs the exact env it always ran.
     # Through sudo these need the sudoers env_keep line (DEPLOY.md §5b).
-    env = {**os.environ, **pe} if (pe := provider_env()) else None
+    env = {**os.environ, **pe} if (pe := provider_env(prov)) else None
     wt, out, m, usd = wt or worktree(c), "", None, 0.0
     try:
         try:
@@ -837,7 +855,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
                 raise
             log(f"#{c.n} session {sid} exists — resuming it")
             out = sh(*cmd, "--resume", sid, cwd=wt, env=env, track=c.repo)
-        usd = cost_of(out)   # an unpriced model raises here; the run still counts below
+        usd = cost_of(out, prov)   # an unpriced model raises here; the run still counts below
         text = json.loads(out).get("result", "")
         m = MARKER.search(text)
     finally:
@@ -845,7 +863,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
         record(c.repo, usd)
         # sid: digest() finds the session's transcript by it
         step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
-             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=PROVIDER, sid=sid)
+             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=prov, sid=sid)
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
@@ -1774,6 +1792,12 @@ def main():
     with closing(db()) as con, con:
         con.execute("UPDATE jobs SET status = 'interrupted', ended = ? WHERE status = 'running'", (time.time(),))
     shutil.rmtree(WORKSPACE / "plugins", ignore_errors=True)   # and so did its per-job plugin dirs
+    # a key taken out of .env after the admin page stored its provider: those jobs fail at the call
+    with closing(db()) as con:
+        for k, v in con.execute("SELECT key, value FROM settings WHERE key LIKE 'provider%'"):
+            if not ready(v):
+                log(f"{k} is {v}, which cannot run ({PROVIDERS.get(v, {}).get('key', 'unknown provider')}): "
+                    "its jobs will fail until the key is back in .env or the admin page changes it")
     import web
     web.serve()
 

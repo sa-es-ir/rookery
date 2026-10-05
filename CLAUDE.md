@@ -193,13 +193,22 @@ fetch, checks and plugin assembly minus the job — into a temp dir, so the page
 run cannot disagree; an unseen repo is a 404. `fetch()` holds a per-repo lock, since that
 GET fetches from an HTTP thread while the repo's worker may be fetching. `GET /api/skills`
 reads `skills/` plus the slot/source table in `skills/README.md`.
+`callback()` upserts the `users` row (first, last, sign-ins); `serve()` seeds it once from
+`sessions`. `/admin.html` (unlinked) is for `ADMINS` (`.env`, GitHub logins): `GET /api/admin`
+lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or
+one owner's override. For anyone else, signed in or not, every `/api/admin*` is a 404.
 
-**Providers.** `PROVIDER` (default `claude`, the CLI's own `/login`) picks the backend
-behind every `claude` call from `PROVIDERS`; the harness stays the `claude` CLI, so every
+**Providers.** `provider_for(repo)` picks the backend behind every `claude` call from
+`PROVIDERS`: the owner's `provider:<owner>` row in `settings`, else the stored `provider`
+default, else `PROVIDER` (`.env`, default `claude`, the CLI's own `/login`). Per owner, never
+per actor. `claude()` reads it **once** and passes it to `provider_env(name)`, `cost_of(out,
+name)` and its step, so a switch mid-call cannot price the call with the wrong table. The
+admin page stores only a `ready()` provider (key in `KEYS`); a stored one whose key left
+`.env` is logged at startup and fails that owner's calls, never falls back; the harness stays the `claude` CLI, so every
 invariant holds. Another backend is an Anthropic-compatible endpoint: `provider_env()` gives
 `ANTHROPIC_BASE_URL`, its key as `ANTHROPIC_API_KEY` and the `opus`/`sonnet`/`haiku` aliases'
 models, passed as `env=` (none at all for `claude`, so its env is unchanged), through `sudo`
-by the `env_keep` line (DEPLOY.md §5b). An unknown provider or a missing key fails startup.
+by the `env_keep` line (DEPLOY.md §5b). An unknown `PROVIDER` or a missing key fails startup.
 The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
 `price` table, and a model not in it fails the call. The `base` and `claude` steps log
 `provider`. Plan and spikes: `ai-plans/providers.md`.
@@ -254,7 +263,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
   in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
-  not; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
+  not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
   replayable: session rows are keyed by the cookie's sha256, and no token is stored.
@@ -274,7 +283,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
   regex on issue comments. Visibility comes from the user's own installations; anything
   that steers a repo (cancel, a config PR) needs `can_write()`. Someone else's run or repo
-  is a 404, not a 403.
+  is a 404, not a 403. An `/api/admin*` route is a 404 for anyone not in `ADMINS`.
 - **The portal writes config only by opening a PR**, never to base or to any branch
   `pin()` reads. `propose()` refuses any path off `CONFIG_FILE`, and a change that fails
   `steer()` never leaves the box. Merging stays a human's act on GitHub.

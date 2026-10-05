@@ -344,41 +344,58 @@ assert [j["kind"] for j in drain()] == ["start"]
 agent.WORKSPACE = Path(tempfile.mkdtemp())
 agent.PAUSED = agent.WORKSPACE / "PAUSED"
 agent.RUN_CAP, agent.USD_CAP = 3, 1.0
-assert agent.cost_of('{"result": "x", "total_cost_usd": 0.25}') == 0.25
-assert agent.cost_of("claude crashed") == 0.0
+assert agent.cost_of('{"result": "x", "total_cost_usd": 0.25}', "claude") == 0.25
+assert agent.cost_of("claude crashed", "claude") == 0.0
 
 # providers: claude is the CLI's own login, untouched; another backend is env= only, priced by us
-assert agent.PROVIDER == "claude" and agent.provider_env() == {}
+assert agent.PROVIDER == "claude" and agent.provider_env("claude") == {}
 assert "DEEPSEEK_API_KEY" not in os.environ and "ZAI_API_KEY" not in os.environ, "every provider key is popped, used or not"
-agent.PROVIDER, agent.PROVIDER_KEY = "deepseek", "sk-test"
-assert agent.provider_env() == {
+agent.KEYS.update(deepseek="sk-test", glm="sk-test")
+assert agent.provider_env("deepseek") == {
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "sk-test",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro", "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash"}
 use = {"inputTokens": 1_000_000, "cacheCreationInputTokens": 1_000_000, "cacheReadInputTokens": 1_000_000,
        "outputTokens": 1_000_000}
 out = json.dumps({"total_cost_usd": 99, "modelUsage": {"deepseek-flash": use, "deepseek-v4-pro": use}})
-assert abs(agent.cost_of(out) - (0.30 * 2 + 0.006 + 1.20 + 1.32 * 2 + 0.044 + 3.96)) < 1e-9, "ours, not the CLI's"
+assert abs(agent.cost_of(out, "deepseek") - (0.30 * 2 + 0.006 + 1.20 + 1.32 * 2 + 0.044 + 3.96)) < 1e-9, "ours, not the CLI's"
 try:
-    agent.cost_of(json.dumps({"modelUsage": {"deepseek-chat": use}}))
+    agent.cost_of(json.dumps({"modelUsage": {"deepseek-chat": use}}), "deepseek")
     raise AssertionError("an unpriced model is never guessed")
 except RuntimeError as e:
     assert "deepseek-chat" in str(e)
-agent.PROVIDER = "glm"   # spikes G-a/G-b: x-api-key works, modelUsage names are these exactly
-assert agent.provider_env() == {
+# spikes G-a/G-b: x-api-key works, modelUsage names are these exactly
+assert agent.provider_env("glm") == {
     "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_API_KEY": "sk-test",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3", "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash"}
 out = json.dumps({"modelUsage": {"glm-5.3-flash": use}})
-assert abs(agent.cost_of(out) - (0.15 * 2 + 0.03 + 0.50)) < 1e-9
-for p, key in (("deepseek", ""), ("nope", "k")):   # never a quiet fallback to the operator's login
-    agent.PROVIDER, agent.PROVIDER_KEY = p, key
+assert abs(agent.cost_of(out, "glm") - (0.15 * 2 + 0.03 + 0.50)) < 1e-9
+agent.KEYS["deepseek"] = ""
+assert [agent.ready(p) for p in ("claude", "deepseek", "glm", "nope")] == [True, False, True, False]
+for p in ("deepseek", "nope"):   # never a quiet fallback to the operator's login
     try:
-        agent.provider_env()
+        agent.provider_env(p)
         raise AssertionError(p)
     except RuntimeError:
         pass
-agent.PROVIDER, agent.PROVIDER_KEY = "claude", ""
+agent.KEYS.update(deepseek="", glm="")
+
+# the provider per owner: its override, else the stored default, else PROVIDER from .env
+def put(key, value):
+    with agent.closing(agent.db()) as con, con:
+        con.execute("DELETE FROM settings WHERE key = ?", (key,))
+        if value:
+            con.execute("INSERT INTO settings VALUES (?, ?)", (key, value))
+assert agent.provider_for("o/r") == "claude", ".env's"
+put("provider", "glm")
+assert agent.provider_for("o/r") == "glm", "the stored default beats .env"
+put("provider:o", "deepseek")
+assert agent.provider_for("o/r") == "deepseek" and agent.provider_for("acme/r") == "glm", "per owner, not per repo"
+put("provider:o", None)
+assert agent.provider_for("o/r") == "glm", "a dropped override falls back"
+put("provider", None)
+assert agent.provider_for("o/r") == "claude"
 agent.check_caps("o/r")                      # nothing used yet
 agent.record("o/r", 0.25), agent.record("o/r", 0.25)
 agent.record("o/other", 5.0)                 # another repo's spend is its own
@@ -425,11 +442,21 @@ assert argv[0][argv[0].index("claude"):][1:3] == ("-p", "p") and "Bash(rtk proxy
 envs, done = [], json.dumps({"result": "STATUS: task-done", "modelUsage": {}})
 agent.sh = lambda *a, **k: envs.append(k["env"]) or argv.append(a) or done
 agent.claude(c._replace(repo="o/prov"), "p", key="task-0")
-agent.PROVIDER, agent.PROVIDER_KEY = "deepseek", "sk-test"
+agent.KEYS["deepseek"] = "sk-test"
+put("provider:o", "deepseek")
 argv.clear(), agent.claude(c._replace(repo="o/prov"), "p", key="task-0")
-agent.PROVIDER, agent.PROVIDER_KEY = "claude", ""
 assert envs[0] is None and envs[1]["ANTHROPIC_API_KEY"] == "sk-test" and envs[1]["PATH"] == os.environ["PATH"]
 assert "sk-test" not in str(argv), argv
+# the provider is read once per call: switched after the env is built, the price is still deepseek's
+real_cost, priced = agent.cost_of, []
+def switch(*a, **k):
+    put("provider:o", "claude")   # the admin page, mid-call
+    return json.dumps({"result": "STATUS: task-done", "modelUsage": {"deepseek-flash": use}})
+agent.sh, agent.cost_of = switch, lambda out, name: priced.append(name) or real_cost(out, name)
+agent.claude(c._replace(repo="o/prov"), "p", key="task-0")
+assert priced == ["deepseek"], priced
+agent.cost_of, agent.KEYS["deepseek"] = real_cost, ""
+put("provider:o", None)
 agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
 # a task resumes its session on approve-again; the review and after steps start one per job
 sc = agent.Ctx("o/sid", 9, agent.WORKSPACE, "main")
@@ -1109,6 +1136,9 @@ with agent.closing(agent.db()) as con:
     dump = repr(con.execute("SELECT * FROM sessions").fetchall())
 assert "ghu_user" not in dump and sid not in dump, "no token and no replayable session id at rest"
 assert "ghu_user" not in os.environ.values()
+with agent.closing(agent.db()) as con, con:   # first sign-in recorded; backdated to see it kept
+    assert con.execute("SELECT login, logins FROM users").fetchall() == [("alice", 1)]
+    con.execute("UPDATE users SET first = 1")
 
 me = body(req("GET", "/api/me", sid=sid))
 assert me["login"] == "alice" and me["csrf"]
@@ -1235,6 +1265,36 @@ assert req("DELETE", "/api/repos/o/r/memory", sid=dave, csrf=body(req("GET", "/a
 assert agent.memory_file("o/r").exists()
 assert req("DELETE", "/api/repos/o/r/memory", sid=sid, csrf=me["csrf"])[0] == 204
 assert not agent.memory_file("o/r").exists() and body(req("GET", "/api/repos/o/r/memory", sid=sid))["run"] is None
+
+# admin: ADMINS only; anyone else, signed in or not, finds no such endpoint
+web.ADMINS = {"alice"}
+dcsrf = body(req("GET", "/api/me", sid=dave))["csrf"]
+assert req("GET", "/api/admin")[0] == 404, "signed out: a 404, not a 401"
+assert req("GET", "/api/admin", sid=dave)[0] == 404
+assert req("POST", "/api/admin/provider", sid=dave, csrf=dcsrf, data=b'{"owner": null, "provider": "claude"}')[0] == 404
+assert req("POST", "/api/admin/provider", sid=sid, data=b'{"owner": null, "provider": "claude"}')[0] == 403, "no CSRF"
+setp = lambda d: req("POST", "/api/admin/provider", sid=sid, csrf=me["csrf"], data=json.dumps(d).encode())
+a = body(req("GET", "/api/admin", sid=sid))
+assert a["default"] == "claude" and a["overrides"] == {} and a["owners"] == [{"owner": "o", "repos": 2}], a
+assert {p["name"]: p["ready"] for p in a["providers"]} == {"claude": True, "deepseek": False, "glm": False}
+assert next(p for p in a["providers"] if p["name"] == "glm")["key"] == "ZAI_API_KEY"
+u = a["users"][0]
+assert (u["login"], u["logins"], u["first"], u["live"], u["repos"]) == ("alice", 2, 1, True, 1), \
+    "a second sign-in adds to logins and keeps first; repos counts the served ones"
+assert setp({"owner": None, "provider": "glm"})[0] == 422, "no key in .env, no setting"
+assert setp({"owner": "acme", "provider": "nope"})[0] == 422
+for bad in ({"owner": "o/x", "provider": "claude"}, {"owner": None, "provider": None}, {"provider": "claude"},
+            {"owner": "acme", "provider": ["glm"]}, ["acme"]):
+    assert setp(bad)[0] == 400, bad
+agent.KEYS["glm"] = "k"
+a = body(setp({"owner": "acme", "provider": "glm"}))
+assert a["overrides"] == {"acme": "glm"} and agent.provider_for("acme/x") == "glm" and agent.provider_for("o/r") == "claude"
+assert {"owner": "acme", "repos": 0} in a["owners"], "an override shows with no repo served"
+assert body(setp({"owner": None, "provider": "glm"}))["default"] == "glm" and agent.provider_for("o/r") == "glm"
+assert body(setp({"owner": "acme", "provider": None}))["overrides"] == {}
+setp({"owner": None, "provider": "claude"})
+agent.KEYS["glm"], web.ADMINS = "", set()
+assert req("GET", "/api/admin", sid=sid)[0] == 404
 
 # POSTs need the session's CSRF token; logout ends the session server-side
 assert req("POST", "/auth/logout", sid=sid)[0] == 403
