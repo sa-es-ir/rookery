@@ -342,7 +342,7 @@ assert agent.cost_of("claude crashed") == 0.0
 
 # providers: claude is the CLI's own login, untouched; another backend is env= only, priced by us
 assert agent.PROVIDER == "claude" and agent.provider_env() == {}
-assert "DEEPSEEK_API_KEY" not in os.environ, "every provider key is popped, used or not"
+assert "DEEPSEEK_API_KEY" not in os.environ and "ZAI_API_KEY" not in os.environ, "every provider key is popped, used or not"
 agent.PROVIDER, agent.PROVIDER_KEY = "deepseek", "sk-test"
 assert agent.provider_env() == {
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "sk-test",
@@ -357,6 +357,13 @@ try:
     raise AssertionError("an unpriced model is never guessed")
 except RuntimeError as e:
     assert "deepseek-chat" in str(e)
+agent.PROVIDER = "glm"   # spikes G-a/G-b: x-api-key works, modelUsage names are these exactly
+assert agent.provider_env() == {
+    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_API_KEY": "sk-test",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3", "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash"}
+out = json.dumps({"modelUsage": {"glm-5.3-flash": use}})
+assert abs(agent.cost_of(out) - (0.15 * 2 + 0.03 + 0.50)) < 1e-9
 for p, key in (("deepseek", ""), ("nope", "k")):   # never a quiet fallback to the operator's login
     agent.PROVIDER, agent.PROVIDER_KEY = p, key
     try:
@@ -695,15 +702,16 @@ assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not
 assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
 body_ = prs[0]
 assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
-assert "## sec · rk:verify\n\nno holes\n\n_Rookery reverted" in body_ and "## docs\n\nwrote docs" in body_
-assert body_.index("## sec") < body_.index("## docs") < body_.index("## Review")
+assert "## 🤖 Sec agent · check · rk:verify\n\nno holes\n\n_Rookery reverted" in body_, body_
+assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
+assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again
 calls.clear()
 agent.implement(pc)
 assert calls == ["step-sec", "review"], calls
-assert len(prs) == 1 and pr_said[0][0] == "https://github.com/o/r/pull/1" and "## sec" in pr_said[0][1], \
+assert len(prs) == 1 and pr_said[0][0] == "https://github.com/o/r/pull/1" and "Sec agent" in pr_said[0][1], \
     "the re-run's sections go on the open PR"
 # STATUS is held to the step's mode
 for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "failed")]:

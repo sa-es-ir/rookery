@@ -57,6 +57,9 @@ PROVIDERS = {
     "deepseek": {"url": "https://api.deepseek.com/anthropic", "key": "DEEPSEEK_API_KEY",
                  "models": {"opus": "deepseek-v4-pro", "sonnet": "deepseek-flash", "haiku": "deepseek-flash"},
                  "price": {"deepseek-v4-pro": (1.32, 0.044, 3.96), "deepseek-flash": (0.30, 0.006, 1.20)}},
+    "glm": {"url": "https://api.z.ai/api/anthropic", "key": "ZAI_API_KEY",
+            "models": {"opus": "glm-5.3", "sonnet": "glm-5.3-flash", "haiku": "glm-5.3-flash"},
+            "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
 }
 PROVIDER = os.environ.get("PROVIDER", "claude")
 # every provider's key is popped, used or not: the claude subprocess inherits os.environ
@@ -1143,7 +1146,7 @@ def implement(c):
     # what steers the agent changes only by a human merging it (pin()): say so where they merge
     steers = sh("git", "diff", "--name-only", f"origin/{c.base}...HEAD", "--", *STEERING, cwd=wt)
     body = ((CONFIG_WARNING if steers else "")
-            + "\n\n".join(done + sections) + f"\n\n## Review\n\n{review}\n\nCloses #{c.n}"
+            + "\n\n".join(done + sections) + f"\n\n## 🤖 Reviewer agent\n\n{review}\n\nCloses #{c.n}"
             # the commit every steering input was read at; GitHub links owner/repo@sha
             f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
             + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
@@ -1201,7 +1204,9 @@ def after_steps(c, wt, after):
             step(c.repo, "commit", step=name, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
         elif status == "changes-needed" or reverted:
             wanting.append(name)
-        sections.append(f"## {name}" + "".join(f" · rk:{k}" for k in s["skills"]) + f"\n\n{msg}")
+        # an icon and "agent", so a reader sees whose words these are, not a part of the PR
+        sections.append(f"## 🤖 {name[0].upper()}{name[1:]} agent · {mode}"
+                        + "".join(f" · rk:{k}" for k in s["skills"]) + f"\n\n{msg}")
     return sections, wanting
 
 

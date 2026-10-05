@@ -199,9 +199,16 @@ PROVIDER=deepseek
 DEEPSEEK_API_KEY=sk-...
 ```
 
-Before you do this, tell the tenants: their code goes to DeepSeek (trade-offs #19). With
+For GLM (Z.ai, pay-as-you-go API only, never the Coding Plan):
+
+```bash
+PROVIDER=glm
+ZAI_API_KEY=...
+```
+
+Before you do this, tell the tenants: their code goes to DeepSeek or Z.ai (trade-offs #19). With
 `RUN_AS` set, the sudoers file needs the `env_keep` line from §5b. Without it, the CLI
-uses `rookery-run`'s `/login`, and the first call fails with `no deepseek price for model
+uses `rookery-run`'s `/login`, and the first call fails with `no <provider> price for model
 claude-…`. An unknown `PROVIDER`, or no key for it, stops the service at startup.
 
 To switch back, set `PROVIDER=claude` (or delete the line) and restart. Sessions resume

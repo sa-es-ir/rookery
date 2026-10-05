@@ -2,6 +2,7 @@
 
 **Status: phase 1 built** (4 October 2026). Spikes S-a, S-b, S-c and S-e were run on
 4 October 2026 (results in §4). S-d passed the same day. Next: deploy (DEPLOY.md, "Another model provider").
+**GLM (Z.ai): built** (5 October 2026), §8. G-a to G-e passed (§8.3). Next: deploy (DEPLOY.md, "Another model provider").
 
 ## 1. Goal
 
@@ -35,7 +36,7 @@ thing that changes is the model behind the CLI.
 - About 80% on SWE-bench Verified (aggregator numbers, not ours).
 
 Any other backend with an Anthropic-compatible endpoint (MiniMax, Kimi, GLM, OpenRouter, a
-local 9router) is one more table entry. No code changes.
+local 9router) is one more table entry. No code changes. GLM is the next one (§8).
 
 ## 3. Design
 
@@ -187,3 +188,110 @@ The same table, chosen per repo owner instead of per instance:
 lists them in `OWN`. Otherwise the job fails with "no provider key for <owner>". Same
 `env=` path, same sudoers line. The cross-tenant `/proc/<pid>/environ` exposure under one
 `rookery-run` user goes to trade-offs. Build it when a friend actually has a key.
+
+## 8. GLM (Z.ai)
+
+### 8.1 Why
+
+Researched 5 October 2026. For the same price as DeepSeek, GLM can be better at coding work.
+
+- **Price.** Z.ai prices per million tokens (docs.z.ai, 5 Oct 2026):
+
+  | model | input (cache miss) | input (cache hit) | output |
+  |---|---|---|---|
+  | `glm-5.3` | 1.40 | 0.26 | 4.40 |
+  | `glm-5.3-flash` | 0.15 | 0.03 | 0.50 |
+
+  We priced the S-d tokens (3 issues, 33 calls) again with these numbers. The opus alias
+  used 72k fresh, 355k cached and 38k output tokens. The sonnet and haiku aliases used 571k
+  fresh, 2.43M cached and 62k output tokens. Result: GLM $0.55,
+  DeepSeek $0.52, Kimi $2.14, Claude $3.72. Each model counts tokens in a different way,
+  so expect ±30%.
+- **Quality.** These are independent numbers from Artificial Analysis. No model was run in
+  Claude Code.
+
+  | | Coding Agent Index | Intelligence Index |
+  |---|---|---|
+  | GLM-5.3 (OpenCode) | 53.6 | 44.8 |
+  | DeepSeek V4 Pro (Codex) | 43.1 | 53.2 |
+  | GLM-5.3-Flash | not run | 41.8 |
+  | DeepSeek V4 Flash (Codex) | 38.7 | 34.3 (V4.1: 39.5) |
+  | Claude Code, Sonnet 5.5 at max effort | 68.4 | 56.0 |
+
+  The sonnet alias does about 85% of our tokens, and on the Intelligence Index GLM-5.3-Flash
+  beats DeepSeek's flash model. Benchmarks do not decide this. G-d decides it.
+- **Rejected: the GLM Coding Plan** (a subscription at $18–160 a month). Its usage policy
+  forbids account sharing and multi-user access, and it permits only "officially supported
+  tools". If you break these rules, Z.ai can rate-limit, freeze or ban the account. A
+  multi-tenant server breaks the sharing rule. Use only the pay-as-you-go API.
+- **Rejected: Kimi.** It is about 4× the cost of GLM, and its agent score is not better
+  (Kimi K3: 51.9).
+
+### 8.2 The entry
+
+```python
+"glm": {"url": "https://api.z.ai/api/anthropic", "key": "ZAI_API_KEY",
+        "models": {"opus": "glm-5.3", "sonnet": "glm-5.3-flash", "haiku": "glm-5.3-flash"},
+        "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
+```
+
+`ZAI_API_KEY` is popped at import, the same as `DEEPSEEK_API_KEY`. No other code changes,
+unless G-a or G-b fails.
+
+`GLM-4.7-Flash` is free and could be used for the haiku alias (memory calls). We do not use
+it: we have not read the data terms for its free tier, and the memory calls cost less than
+1 cent per issue.
+
+### 8.3 Spikes before code
+
+Do these spikes the same way as §4: run locally, keep `PROVIDER` unset, export the key by hand,
+and use `env -u ANTHROPIC_API_KEY` for the Claude-side calls.
+
+| # | Check | Pass means | If it fails |
+|---|---|---|---|
+| G-a | `claude -p "say hi" --output-format json` with `ANTHROPIC_API_KEY` set to the Z.ai key. Z.ai's guide uses `ANTHROPIC_AUTH_TOKEN` (Bearer). | The reply comes back and `modelUsage` names a GLM model: Z.ai accepts `x-api-key`. | Add an `auth` key to the entry. `"token"` sends the key as `ANTHROPIC_AUTH_TOKEN`. Add that name to the sudoers `env_keep` line (§3.3), and add a test. About 3 lines. |
+| G-b | The same call: read the `modelUsage` keys | They are exactly `glm-5.3` / `glm-5.3-flash`. `cost_of()` looks up `price` by these names. | Use the names that the reply shows as `price` keys (for example, a different case or a `[1m]` suffix). |
+| G-c | A resumed call | `cacheReadInputTokens` is above 0. If it is 0, every call costs the miss price: about 3× for GLM. | Cost and caps stay safe, because the cap trips early, not late. Record the cost in trade-offs. |
+| G-d | 3 issues on the test repo, plan → approve, the same as S-d | Count `STATUS:` marker misses and `rookery:error` runs that come from the model, and the total cost. Compare with S-d: 0 misses, $0.56. **This is the quality gate.** | Do not add the provider. |
+| G-e | An agent with `model: opus` | The call uses `glm-5.3`. | Same as S-e: stop. |
+
+Results, 5 October 2026 (local, CLI as installed):
+
+- **G-a: pass.** `ANTHROPIC_API_KEY` (`x-api-key`) works. No `auth` key. With no balance,
+  Z.ai answers 429 `[1113] Insufficient balance`, not an auth error.
+- **G-b: pass.** `modelUsage` keys are exactly `glm-5.3` and `glm-5.3-flash`.
+- **G-c: pass.** The first resumed call read only 832 of 52k input tokens from the cache.
+  The next call read 19k of 25k. The cache warms after one call, so the §8.1 estimate holds.
+- **G-d: pass.** Issues #16–#18 (the S-d specs again), PRs #19–#21. 32 calls, all
+  `provider=glm`, **0 marker misses**: 3 plan-ready, 12 task-done, 3 step-done, 4 check-ok,
+  3 review-ok, 6 memory-updated. $0.73 in all (S-d: $0.56). The 1 `failed` call was a
+  memory call that we stopped: DNS for `api.z.ai` failed on the dev box, and the CLI retried
+  for 15 minutes. The 2 `rookery:error` runs were `gh` GraphQL `EOF`s on the dev box, the
+  same as in S-d. Re-running resumed each one. All 3 ended `rookery:changes-wanted` because
+  the test repo's `sentry` check edits a file on purpose, the same as in S-d. One memory
+  reply was 8,334 characters, over `MEMORY_CAP`, so the old notes stayed. That is a model
+  miss, but it does no harm.
+  **Slower:** each call takes 2–4× the DeepSeek time (plan 149–223s against 57–82s, task
+  58–71s against 16–31s, sentry up to 232s). One issue takes about 10–13 minutes from
+  approve to PR, against about 3 minutes. Jobs are asynchronous, so the cost is queue time.
+- **G-e: pass.** An agent with `model: opus` used `glm-5.3`.
+
+Not tested again: S-c (resume across a provider switch). It tests the CLI, not the backend.
+Z.ai's guide recommends `API_TIMEOUT_MS=3000000`. Add it only if G-d shows timeouts.
+
+### 8.4 Data
+
+Zhipu AI (Beijing) makes GLM. The international API is run by a company that is
+registered in Singapore. Its API terms say that input is processed in real time, is not
+stored, and is not used for training. As with DeepSeek (§5), tenants must be told.
+Add this to `trade-offs.md` when it is built.
+
+### 8.5 Changes
+
+| File | Change |
+|---|---|
+| `agent.py` | the `glm` entry (§8.2), and `auth` only if G-a fails |
+| `test_agent.py` | `provider_env()` for `glm`, and `cost_of()` with a `glm-5.3-flash` usage |
+| `DEPLOY.md` | `.env` lines `PROVIDER=glm` and `ZAI_API_KEY=` |
+| `CLAUDE.md` | add `ZAI_API_KEY` to the provider-key invariant |
+| `ai-plans/trade-offs.md` | tenant code goes to Z.ai |

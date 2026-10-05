@@ -133,7 +133,7 @@ step dict itself. `after_steps()` runs them in order between the task loop and t
 (`keep_plans_only(keep=())`) and flag the run; a write step is committed as `#<n> step
 <agent>` (`--allow-empty`) and skipped on re-approve once that subject is on the branch. A
 reply outside the mode's `MODES` pair, or a write step's `failed`, raises. Each step's reply
-goes into the PR body as `## <agent>`; any check's `changes-needed` or reverted edit sets
+goes into the PR body as `## 🤖 <Agent> agent · <mode>` (the review as `## 🤖 Reviewer agent`); any check's `changes-needed` or reverted edit sets
 `rookery:changes-wanted` like the reviewer's. The reviewer's own leftovers are reverted too, so no
 later write step or task commits them. A branch touching `STEERING` gets `CONFIG_WARNING` at
 the top of the PR body. Approving again after a run that opened the PR (a check flagged it)
@@ -251,7 +251,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
-  in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`) is popped too, used or
+  in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
   not; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing

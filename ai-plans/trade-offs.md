@@ -309,8 +309,9 @@ none of the new APIs. Workflows does change one behaviour: a branch that edits
 
 **Decided 4 October 2026.** (`ai-plans/providers.md`)
 
-With `PROVIDER=deepseek`, every `claude` call goes to DeepSeek. That includes each tenant's
-code, issues and CLAUDE.md. The choice is per instance, not per tenant.
+With `PROVIDER=deepseek` (or `glm`), every `claude` call goes to DeepSeek (or Z.ai). That includes each tenant's
+code, issues and CLAUDE.md. The choice is per instance, not per tenant. Z.ai's API terms say
+input is processed in real time, not stored and not used for training (providers.md §8.4).
 
 - **Gained:** each call costs about 1/20 of Opus, with no proxy and no change to the harness.
 - **Given up:**
