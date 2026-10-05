@@ -200,11 +200,13 @@ reads `skills/` plus the slot/source table in `skills/README.md`.
 lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or
 one owner's override. For anyone else, signed in or not, every `/api/admin*` is a 404.
 
-**Providers.** `provider_for(repo)` picks the backend behind every `claude` call from
-`PROVIDERS`: the owner's `provider:<owner>` row in `settings`, else the stored `provider`
-default, else `PROVIDER` (`.env`, default `claude`, the CLI's own `/login`). Per owner, never
-per actor. `claude()` reads it **once** and passes it to `provider_env(name)`, `cost_of(out,
-name)` and its step, so a switch mid-call cannot price the call with the wrong table. The
+**Providers.** `provider_for(repo)` → `(name, key id, key)` picks the backend behind every
+`claude` call from `PROVIDERS`: the owner's own selected key (`key:<owner>` in `settings` → a
+`keys` row), else `fallback()`: the owner's `provider:<owner>` row, else — only for an owner in
+`OWN` — the stored `provider` default, else `PROVIDER` (`.env`, default `claude`, the CLI's own
+`/login`); else it raises `NoKey`. Per owner, never per actor. `claude()` reads it **once** and
+passes it to `provider_env(name, key)`, `cost_of(out, name)` and its step, so a switch mid-call
+cannot price the call with the wrong table. The
 admin page stores only a `ready()` provider (key in `KEYS`); a stored one whose key left
 `.env` is logged at startup and fails that owner's calls, never falls back; the harness stays the `claude` CLI, so every
 invariant holds. Another backend is an Anthropic-compatible endpoint: `provider_env()` gives
@@ -213,12 +215,23 @@ models, passed as `env=` (none at all for `claude`, so its env is unchanged), th
 by the `env_keep` line (DEPLOY.md §5b). An unknown `PROVIDER` or a missing key fails startup.
 The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
 `price` table, and a model not in it fails the call. The `base` and `claude` steps log
-`provider`. `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
+`provider`, and `key=<id>` on an owner's own key (never the key). `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
 which is popped so it cannot beat the `/login`): no `models`, no `price`, so `total_cost_usd`.
-The subscription runs only the owners in `OWN` (`.env`, unset = `ADMINS`): `provider_for()`
-raises for `claude` on any other owner — from an override or the default — and the job fails;
-`/api/admin/provider` refuses that override (422), and startup logs an old one. Plan and spikes:
-`ai-plans/providers.md`, `ai-plans/byok.md`.
+The subscription runs only the owners in `OWN` (`.env`, unset = `ADMINS`): `fallback()` never
+gives `claude` to any other owner, `/api/admin/provider` refuses that override (422), and startup
+logs an old one.
+
+**Owners' own keys.** A personal account adds keys for `anthropic`, `deepseek` or `glm` on the
+portal's Keys page (`#keys`; `/api/keys*` in `web.py`, `can_manage()` = the signed-in login *is*
+the owner, of a repo in `REPOS`; orgs run on the operator's choice). The `keys` table holds each
+key `seal()`ed — `openssl enc -aes-256-cbc -pbkdf2 -a -A` with `KEY_SECRET` in `env=`, the key on
+stdin, then HMAC-SHA256 over the ciphertext (encrypt-then-MAC) — plus `last4`; `unseal()` checks
+the MAC before it decrypts. The first key added is selected. No `KEY_SECRET`: adding is a 503 and
+a selected key fails its owner's jobs. `pin()`'s first line is `provider_for()`, so a `NoKey`
+fails start, reply, implement and pr-review jobs before any fetch, label or `claude` call;
+`handle()` posts `NO_KEY` (issue, with `rookery:error`) or `NO_KEY_PR` (`gh pr comment`), the
+portal link not in a code block. Caps apply on an owner's key too. Plan and spikes:
+`ai-plans/providers.md`, `ai-plans/byok.md`; trade-offs #22–#24.
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
@@ -270,10 +283,13 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
   in `web.py`. Every provider's key (`CLAUDE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
-  not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
+  not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. An owner's own key
+  reaches it the same way and no other; `KEY_SECRET` is popped too. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
-  replayable: session rows are keyed by the cookie's sha256, and no token is stored.
+  replayable: session rows are keyed by the cookie's sha256, and no token is stored. An
+  owner's API key is stored only sealed, and is write-only: no response, log line or step ever
+  carries it, only its provider, label and last 4 characters.
 - **With `RUN_AS` set (the server), every `claude` call runs as that user via `sudo`**
   (DEPLOY.md §5b): it can't read `app.pem`, `.env`, `rookery.db` or the notes, and `sudo`
   drops our env. Worktrees are shared through its group (`shared()`, umask 002); **the

@@ -17,14 +17,14 @@
 .side{border-right:1px solid var(--smoke);padding:20px 16px;display:flex;flex-direction:column;gap:28px}
 @media(min-width:900px){.side{position:sticky;top:0;height:100vh}}
 @media(max-width:899px){
-  /* one row: logo, the repos (which scroll on their own), sign out pinned at the end */
-  .side{flex-direction:row;align-items:center;gap:12px;padding:12px 16px;
+  /* two rows: logo and links, then the repos as a native dropdown — no sideways scrolling */
+  .side{flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:12px 16px;
     border-right:0;border-bottom:1px solid var(--smoke)}
-  .side .pick{flex:1;min-width:0}
+  .side .pick{order:1;flex:1 1 100%;min-width:0}
   .side h4,.side .bottom>span{display:none}
-  .side .repos{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
-  .side .repos::-webkit-scrollbar{display:none}
-  .shell .side .bottom{margin:0;padding:0;border:0}   /* .shell: outranks the desktop rule below */
+  .side .repos{display:none}
+  .side .mpick{display:block}
+  .shell .side .bottom{margin:0 0 0 auto;padding:0;border:0}   /* .shell: outranks the desktop rule below */
   .side .bottom .link{padding:8px 0}
   .top{padding:0 16px}
   .view{padding:20px 16px}
@@ -41,12 +41,15 @@
 .repos .name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .repos .use{margin-left:auto;flex:none;color:var(--fog);font-size:11px}
 .repos .use.hot{color:#ffb3a5}
+.mpick{display:none;width:100%;background:var(--panel);color:var(--ash);border:1px solid var(--smoke);
+  border-radius:8px;padding:8px 12px;font:400 12px var(--mono);letter-spacing:0}
+.mpick:focus{outline:none;border-color:rgb(107,33,239);box-shadow:rgb(7,122,199) 0 0 0 1px}
 .side .none{font-size:13px;color:var(--fog);padding:0 12px;font-weight:300}
 .repos .none a{display:inline;padding:0;font:inherit;color:var(--ash);text-decoration:underline;
   text-decoration-color:rgb(7,122,199);text-underline-offset:3px;white-space:normal}
 .repos .none a:hover{background:none;color:#fff}
 .side .bottom{margin-top:auto;border-top:1px solid var(--smoke);padding-top:16px;display:flex;
-  align-items:center;gap:10px;font-size:13px;color:var(--fog)}
+  align-items:center;gap:6px 10px;flex-wrap:wrap;font-size:13px;color:var(--fog)}
 .side .bottom b{font-weight:400;color:var(--ash)}
 .link{background:none;border:0;padding:0;color:var(--fog);cursor:pointer;font-size:13px}
 .link:hover{color:#fff}
@@ -166,6 +169,23 @@ main{min-width:0}
   box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 .skill .add{align-self:flex-start}
 
+/* API keys: a Feature Card per owner, like the editor; its Ember CTA saves a key */
+.keyc{margin:0 0 28px}
+.klist{display:flex;flex-direction:column;gap:8px}
+.krow{display:flex;align-items:center;gap:14px;background:var(--panel);border-radius:12px;padding:12px 16px}
+.krow:has(input:checked){box-shadow:var(--inset)}
+.krow.off{opacity:.55}
+.krow label{flex:1;min-width:0;display:flex;align-items:center;gap:14px;cursor:pointer}
+.krow.off label{cursor:default}
+.keyc .krow input{all:revert;accent-color:rgb(107,33,239);margin:0;flex:none}   /* not .edit input's box */
+.krow b{display:block;font-weight:400;color:#fff;font-size:14px;overflow-wrap:anywhere}
+.krow small{display:block;font-size:12px;color:var(--fog);font-weight:300;margin-top:2px}
+.krow .ghost{padding:6px 14px;font-size:13px;flex:none}
+.keyc .add{display:grid;grid-template-columns:190px 1fr 2fr auto;gap:10px}
+.keyc .add input,.keyc .add select{width:100%;padding:10px 14px;background:var(--panel);color:var(--ash);
+  border:1px solid var(--smoke);border-radius:8px;font:400 13px var(--mono);letter-spacing:0}
+.keyc .add select:focus{outline:none;border-color:rgb(107,33,239);box-shadow:rgb(7,122,199) 0 0 0 1px}
+
 /* skill catalog */
 .cat{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
 .skill{background:var(--surface);border-radius:16px;padding:22px 24px;display:flex;flex-direction:column;gap:10px}
@@ -201,6 +221,7 @@ main{min-width:0}
   .gate h1{font-size:40px}
   .edit,.mem{padding:20px}
   .edit .row .cta{margin-left:0;width:100%}
+  .keyc .add{grid-template-columns:1fr}
 }
 [hidden]{display:none!important}
 </style>
@@ -222,8 +243,9 @@ main{min-width:0}
     <div class="pick">
       <h4>Repos · today</h4>
       <nav class="repos" id="repos"></nav>
+      <select class="mpick" id="mpick" aria-label="Repo"></select>
     </div>
-    <div class="bottom"><span>@<b id="who"></b></span><a class="link" href="#skills">Skills</a><a class="link" href="docs.html">Docs</a>
+    <div class="bottom"><span>@<b id="who"></b></span><a class="link" href="#keys">Keys</a><a class="link" href="#skills">Skills</a><a class="link" href="docs.html">Docs</a>
       <button class="link" id="out">Sign out</button></div>
   </aside>
 
@@ -258,6 +280,14 @@ main{min-width:0}
         <span class="mono">.rookery/skills/</span> or <span class="mono">.claude/skills/</span>, or in the
         owner's <span class="mono">&lt;owner&gt;/.rookery</span>, wins. Pick a repo to add one to it.</p>
       <div class="cat" id="cat"></div>
+    </section>
+
+    <section class="view" id="keys" hidden>
+      <p class="intro">Your own API keys, for the repos of your own GitHub account. The selected key pays for
+        every Claude call on those repos, and its provider gets your code. Rookery keeps each key encrypted,
+        uses it only for your runs, and never shows it again. The daily caps still apply.
+        <a class="link" href="docs.html#keys">How keys work</a></p>
+      <div id="keyring"></div>
     </section>
 
     <section class="view" id="one" hidden>
@@ -345,6 +375,17 @@ async function repos(){
   nav.append(h('p', {class: 'none'}, ...(d.repos.length ? [] : ['No repos yet. ']),
     h('a', {href: install}, d.repos.length ? 'Add or remove repos' : 'Install Rookery on a repo'),
     ' · ', h('a', {href: '/auth/login'}, 'refresh')));
+  // phones: the same list as a dropdown. Rebuilt only when it changes, or a 4s refresh would
+  // close it under the user's finger.
+  const sel = $('#mpick'), opts = [['', 'All repos'], ...d.repos.map(r => [r.repo, r.repo + '  ' + r.runs + '/' + r.run_cap]),
+    ['#install', d.repos.length ? 'Add or remove repos…' : 'Install Rookery on a repo…'], ['#refresh', 'Refresh repo list']];
+  if (sel.dataset.sig !== JSON.stringify(opts)){
+    sel.replaceChildren(...opts.map(([v, t]) => h('option', {value: v}, t)));
+    sel.dataset.sig = JSON.stringify(opts);
+  }
+  sel.value = state.repo || '';
+  sel.onchange = () => sel.value === '#install' ? location.href = install
+    : sel.value === '#refresh' ? location.href = '/auth/login' : pick(sel.value || null);
 }
 
 function pick(repo){ state.repo = repo; state.run = null; show(); }
@@ -670,6 +711,55 @@ async function catalog(){
       ? h('a', {href: s.url, target: '_blank', rel: 'noopener'}, s.source) : s.source || ''))));
 }
 
+/* --- API keys. A key goes in once and never comes back: the server returns its provider, label
+   and last 4 characters only. Every change answers with the whole view, which is drawn again. --- */
+const PROV = {claude: 'Anthropic (Claude)', anthropic: 'Anthropic (Claude)', deepseek: 'DeepSeek', glm: 'Z.ai (GLM)'};
+const send = (path, method, body) => call(path, {method, headers: {'Content-Type': 'application/json'},
+  body: body && JSON.stringify(body)}).then(d => (keys(d), true), e => (toast(e.message), false));
+
+async function keys(d){
+  d = d || await call('/api/keys');
+  $('#keyring').replaceChildren(...(d.owners.length ? d.owners.map(o => keyCard(o, d))
+    : [h('p', {class: 'empty'}, 'Keys are for the repos of your own account, @' + state.me.login
+        + '. Rookery is not installed on any of them yet.')]));
+}
+
+function keyCard(o, d){
+  const sel = o.keys.find(k => k.id === o.selected);
+  const pick = id => () => send('/api/keys/select', 'POST', {owner: o.owner, id}).then(ok => ok || keys());
+  const row = (on, off, onchange, title, note, extra) => h('div', {class: 'krow' + (off ? ' off' : '')},
+    h('label', null, h('input', {type: 'radio', name: 'key-' + o.owner, checked: on, disabled: off, onchange}),
+      h('span', null, h('b', null, title), h('small', null, note))), extra);
+  const goes = sel ? 'Runs on this key send your code to ' + (PROV[sel.provider] || sel.provider) + '.'
+    : o.fallback ? 'Runs send your code to ' + (PROV[o.fallback] || o.fallback) + ', on the operator\'s account.'
+    : 'Rookery runs nothing on ' + o.owner + '\'s repos until you ' + (o.keys.length ? 'select' : 'add') + ' a key.';
+  return h('div', {class: 'edit keyc'},
+    h('div', null, h('h3', null, o.owner), h('p', {class: 'note'}, goes)),
+    h('div', {class: 'klist', role: 'radiogroup', 'aria-label': 'Key for ' + o.owner},
+      ...o.keys.map(k => row(k.id === o.selected, false, pick(k.id),
+        [PROV[k.provider] || k.provider, k.label, '…' + k.last4].filter(Boolean).join(' · '),
+        'Added by @' + k.by + ', ' + day(k.added),
+        h('button', {class: 'ghost', onclick: () => confirm('Remove the key ' + (k.label || k.provider) + ' …' + k.last4
+          + '?' + (k.id === o.selected ? '\n\nIt is the selected key: runs go back to Rookery\'s default.' : ''))
+          && send('/api/keys/' + k.id, 'DELETE')}, 'Remove'))),
+      row(!sel, !o.fallback, pick(null), 'Rookery\'s default',
+        o.fallback ? 'The operator\'s choice: ' + (PROV[o.fallback] || o.fallback) + '.'
+          : 'Not available for ' + o.owner + '. Add a key and select it.')),
+    d.enabled ? addKey(o, d) : h('p', {class: 'note'}, 'Adding keys is off on this Rookery: the operator has not set KEY_SECRET.'));
+}
+
+function addKey(o, d){
+  const prov = h('select', {'aria-label': 'Provider'}, d.providers.map(p => h('option', {value: p}, PROV[p] || p)));
+  const label = h('input', {placeholder: 'Label (optional)', maxlength: 40, 'aria-label': 'Label'});
+  const key = h('input', {type: 'password', placeholder: 'API key', autocomplete: 'off', spellcheck: 'false',
+    'aria-label': 'API key'});
+  return h('form', {class: 'add', onsubmit: async e => {
+    e.preventDefault();
+    if (await send('/api/keys', 'POST', {owner: o.owner, provider: prov.value, label: label.value, key: key.value.trim()}))
+      toast('Key saved');
+  }}, prov, label, key, h('button', {class: 'cta'}, 'Save key'));
+}
+
 async function stop(r){
   const after = r.act === 'pr-review' ? 'the pull request gets an error comment. Ask for a review again to rerun it.'
     : 'the issue gets an error comment and rookery:error. Commenting approve resumes at the first unticked task.';
@@ -684,21 +774,22 @@ async function stop(r){
 function toast(msg){ $('#toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').textContent = '', 6000); }
 
 /* --- navigation: #run/<id> is one run, #workflow the picked repo's workflow,
-   #skills the catalog, anything else the list --- */
+   #skills the catalog, #keys the API keys, anything else the list --- */
 function show(){
   const m = location.hash.match(/^#run\/(\d+)$/);
   state.run = m ? +m[1] : null;
-  const v = state.view = m ? 'one' : location.hash === '#skills' ? 'skills'
+  const v = state.view = m ? 'one' : location.hash === '#skills' ? 'skills' : location.hash === '#keys' ? 'keys'
     : location.hash === '#workflow' && state.repo ? 'flow' : 'list';
   if (v === 'list' && location.hash) history.replaceState(null, '', location.pathname);
-  for (const id of ['list', 'one', 'flow', 'skills']) $('#' + id).hidden = id !== v;
+  for (const id of ['list', 'one', 'flow', 'skills', 'keys']) $('#' + id).hidden = id !== v;
   const sw = $('#switch');
-  sw.hidden = !state.repo || v === 'one' || v === 'skills';
+  sw.hidden = !state.repo || v === 'one' || v === 'skills' || v === 'keys';
   sw.children[0].setAttribute('aria-current', v === 'list');
   sw.children[1].setAttribute('aria-current', v === 'flow');
-  if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : state.repo || 'Runs';
+  if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : v === 'keys' ? 'API keys' : state.repo || 'Runs';
   if (v === 'flow') flow();
   if (v === 'skills') catalog().catch(e => toast(e.message));
+  if (v === 'keys') keys().catch(e => toast(e.message));
   refresh();
 }
 

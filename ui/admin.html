@@ -53,13 +53,13 @@ select{background:var(--shell);color:var(--ash);border:1px solid var(--smoke);bo
     <p class="status" id="status" role="status"></p>
     <section class="card">
       <h2>Default provider</h2>
-      <p class="sub">For every owner without an override. A provider without its key in <code class="mono">.env</code> cannot be selected.</p>
+      <p class="sub">For every owner in <code class="mono">OWN</code> without an override. A provider without its key in <code class="mono">.env</code> cannot be selected.</p>
       <div class="radios" id="default"></div>
     </section>
     <section class="card">
       <h2>Owners</h2>
-      <p class="sub">The accounts and orgs the App is installed on.</p>
-      <div class="table"><table><thead><tr><th>Owner</th><th>Repos</th><th>Provider</th></tr></thead>
+      <p class="sub">The accounts and orgs the App is installed on. An owner's own selected key beats the override; an owner outside <code class="mono">OWN</code> with neither gets no runs.</p>
+      <div class="table"><table><thead><tr><th>Owner</th><th>Repos</th><th>Own key</th><th>Provider</th></tr></thead>
         <tbody id="owners"></tbody></table></div>
     </section>
     <section class="card">
@@ -113,19 +113,20 @@ function render(){
   // the subscription (claude) runs only the owners in OWN
   const why = (p, own) => !p.ready ? `needs ${p.key}` : p.name === 'claude' && !own ? 'not in OWN' : '';
   const pick = (o, own) => h('select', {'aria-label': `Provider for ${o}`, onchange: e => save(o, e.target.value || null)},
-    h('option', {value: '', selected: !mine(o)}, d.default === 'claude' && !own ? 'Default (claude: not in OWN, fails)' : `Default (${d.default})`),
+    h('option', {value: '', selected: !mine(o)}, own ? `Default (${d.default})` : 'None: needs an own key'),
     d.providers.map(p => h('option', {value: p.name, selected: mine(o) === p.name, disabled: !!why(p, own) && mine(o) !== p.name},
       why(p, own) ? `${p.name} (${why(p, own)})` : p.name)));
   $('#owners').replaceChildren(...(d.owners.length ? d.owners.map(o => h('tr', null,
-    h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)), h('td', null, pick(o.owner, o.own))))
-    : [h('tr', null, h('td', {colspan: 3, class: 'none'}, 'No owners yet.'))]));
+    h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)),
+    h('td', null, o.key ? h('span', {class: 'lbl ok'}, o.key) : h('span', {class: 'none'}, '—')), h('td', null, pick(o.owner, o.own))))
+    : [h('tr', null, h('td', {colspan: 4, class: 'none'}, 'No owners yet.'))]));
   const owners = new Set(d.owners.map(o => o.owner));
   $('#users').replaceChildren(...(d.users.length ? d.users.map(u => h('tr', null,
     h('td', null, h('span', {class: 'mono'}, u.login)), h('td', null, when(u.first)), h('td', null, when(u.last)),
     h('td', {class: 'num'}, String(u.logins)),
     h('td', null, u.live ? h('span', {class: 'lbl ok'}, 'live') : h('span', {class: 'none'}, '—')),
     h('td', {class: 'num'}, u.repos == null ? '—' : String(u.repos)),
-    h('td', null, owners.has(u.login) ? mine(u.login) || `default (${d.default})`
+    h('td', null, owners.has(u.login) ? (o => o.key || mine(o.owner) || (o.own ? `default (${d.default})` : 'none'))(d.owners.find(o => o.owner === u.login))
       : h('span', {class: 'none'}, '—'))))
     : [h('tr', null, h('td', {colspan: 7, class: 'none'}, 'Nobody has signed in yet.'))]));
 }

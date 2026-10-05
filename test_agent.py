@@ -411,30 +411,71 @@ def put(key, value):
         con.execute("DELETE FROM settings WHERE key = ?", (key,))
         if value:
             con.execute("INSERT INTO settings VALUES (?, ?)", (key, value))
-assert agent.provider_for("o/r") == "claude", ".env's"
+prov = lambda repo: agent.provider_for(repo)[0]
+def nokey(repo):
+    try:
+        agent.provider_for(repo)
+    except agent.NoKey as e:
+        return e.why
+assert agent.provider_for("o/r") == ("claude", None, None), ".env's"
 put("provider", "glm")
-assert agent.provider_for("o/r") == "glm", "the stored default beats .env"
+assert prov("o/r") == "glm", "the stored default beats .env"
 put("provider:o", "deepseek")
-assert agent.provider_for("o/r") == "deepseek" and agent.provider_for("acme/r") == "glm", "per owner, not per repo"
+assert prov("o/r") == "deepseek" and prov("o/x") == "deepseek", "per owner, not per repo"
 put("provider:o", None)
-assert agent.provider_for("o/r") == "glm", "a dropped override falls back"
+assert prov("o/r") == "glm", "a dropped override falls back"
 put("provider", None)
-assert agent.provider_for("o/r") == "claude"
-# the subscription only for an owner in OWN: anyone else raises, from an override or the default
-for setup in ((), (("provider:acme", "claude"),), (("provider", "glm"), ("provider:acme", "claude"))):
+assert prov("o/r") == "claude"
+# an owner outside OWN: never the operator's default, never the subscription — NoKey, not a fallback
+for setup in ((), (("provider:acme", "claude"),), (("provider", "glm"),), (("provider", "glm"), ("provider:acme", "claude"))):
     for k, v in setup:
         put(k, v)
-    try:
-        agent.provider_for("acme/r")
-        raise AssertionError(setup)
-    except RuntimeError as e:
-        assert "no provider for acme" in str(e), e
+    assert nokey("acme/r") == "no API key", setup
     for k, _ in setup:
         put(k, None)
-assert agent.provider_for("O/r") == "claude", "OWN ignores case"
+assert prov("O/r") == "claude", "OWN ignores case"
 put("provider:acme", "deepseek")
-assert agent.provider_for("acme/r") == "deepseek", "an override is the operator's explicit choice"
+assert agent.provider_for("acme/r") == ("deepseek", None, None), "an override is the operator's explicit choice"
 put("provider:acme", None)
+
+# owners' own keys: sealed with KEY_SECRET (openssl + HMAC), and the selected one beats any override
+agent.KEY_SECRET = "master-test"
+blob = agent.seal("sk-own-key-0123456789")
+assert "sk-own-key" not in blob and agent.unseal(blob) == "sk-own-key-0123456789"
+assert agent.seal("sk-own-key-0123456789") != blob, "salted: the same key seals differently"
+ct, tag = blob.rsplit(".", 1)
+for bad in (ct[:-2] + ("AA" if ct[-2:] != "AA" else "BB") + "." + tag, ct + "." + "0" * 64, ct):
+    try:
+        agent.unseal(bad)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+agent.KEY_SECRET = "another"
+try:
+    agent.unseal(blob)
+    raise AssertionError("another KEY_SECRET reads nothing")
+except ValueError:
+    pass
+agent.KEY_SECRET = "master-test"
+def addkey(owner, provider, key):
+    with agent.closing(agent.db()) as con, con:
+        return con.execute("INSERT INTO keys (owner, provider, label, secret, last4, added, by) VALUES (?, ?, '', ?, ?, 0, ?)",
+                           (owner, provider, agent.seal(key), key[-4:], owner)).lastrowid
+k1 = addkey("acme", "glm", "sk-acme-glm-0123456789")
+assert nokey("acme/r") == "no API key", "added, not selected"
+put("key:acme", str(k1))
+put("provider:acme", "deepseek")
+assert agent.provider_for("acme/r") == ("glm", k1, "sk-acme-glm-0123456789"), "who pays, chooses"
+put("key:o", str(k1))
+assert prov("o/r") == "claude", "another owner's key id selects nothing"
+put("key:o", None)
+agent.KEY_SECRET = ""
+assert nokey("acme/r") == "the selected API key cannot be read", "never a quiet fallback to the override"
+agent.KEY_SECRET = "master-test"
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM keys WHERE id = ?", (k1,))
+assert agent.provider_for("acme/r") == ("deepseek", None, None), "a deleted key falls through to the override"
+put("provider:acme", None), put("key:acme", None)
 agent.check_caps("o/r")                      # nothing used yet
 agent.record("o/r", 0.25), agent.record("o/r", 0.25)
 agent.record("o/other", 5.0)                 # another repo's spend is its own
@@ -1016,6 +1057,32 @@ with agent.closing(agent.db()) as con:
 (agent.gh, agent.api, agent.pr_worktree, agent.drop_pr_worktree, agent.labels_of, agent.set_phase,
  agent.comment, agent.pr_diff), agent.claude = saved, real_claude
 
+# an owner with nothing to run on fails at pin()'s first line: no fetch, no claude call, the keys link
+said, calls = [], []
+nk_saved = agent.gh, agent.comment, agent.set_phase, agent.fetch, agent.claude, agent.pin
+agent.pin = real_pin
+agent.comment = lambda c, b: said.append(("comment", c.n, b))
+agent.set_phase = lambda c, p: said.append(("phase", c.n, p))
+agent.gh = lambda repo, *a, input=None, check=True: said.append(a[:3] + (input,)) or ""
+agent.fetch = agent.claude = lambda *a, **k: calls.append(a)
+agent.REPOS["acme/r"] = "main"
+agent.handle({"kind": "start", "repo": "acme/r", "n": 4, "title": "t", "body": ""})
+assert not calls and [s[:2] for s in said] == [("comment", 4), ("phase", 4)] and said[1][2] == "rookery:error", said
+assert said[0][2].startswith("Agent error: no API key for **acme**. Add a key at "
+                             f"{agent.PUBLIC_URL}/portal.html#keys and select it.") and "```" not in said[0][2], said
+assert f"add `{agent.TRIGGER}` again" in said[0][2]
+said.clear()
+agent.handle({"kind": "pr-review", "repo": "acme/r", "n": 8, "note": "", "comment": None, "label": True, "requested": None})
+assert not calls and [s[:3] for s in said] == [("pr", "comment", "8"), ("pr", "edit", "8")], "a PR: no label, no gh issue"
+assert "portal.html#keys" in said[0][3] and f"add `{agent.REVIEW_LABEL}` again" in said[0][3]
+for j in drain():   # the memory jobs find no claude call to learn from
+    agent.handle(j)
+assert not calls
+with agent.closing(agent.db()) as con:
+    assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE repo = 'acme/r' ORDER BY id")] == ["failed", "failed"]
+del agent.REPOS["acme/r"]
+agent.gh, agent.comment, agent.set_phase, agent.fetch, agent.claude, agent.pin = nk_saved
+
 # repo memory: digest() reads a job's transcripts back, keeping calls and errors, never contents
 agent.CLAUDE_HOME = agent.WORKSPACE / "claude-home"
 (agent.CLAUDE_HOME / "projects" / "-ws-o-r").mkdir(parents=True)
@@ -1314,7 +1381,7 @@ assert req("POST", "/api/admin/provider", sid=dave, csrf=dcsrf, data=b'{"owner":
 assert req("POST", "/api/admin/provider", sid=sid, data=b'{"owner": null, "provider": "claude"}')[0] == 403, "no CSRF"
 setp = lambda d: req("POST", "/api/admin/provider", sid=sid, csrf=me["csrf"], data=json.dumps(d).encode())
 a = body(req("GET", "/api/admin", sid=sid))
-assert a["default"] == "claude" and a["overrides"] == {} and a["owners"] == [{"owner": "o", "repos": 2, "own": True}], a
+assert a["default"] == "claude" and a["overrides"] == {} and a["owners"] == [{"owner": "o", "repos": 2, "own": True, "key": None}], a
 assert {p["name"]: p["ready"] for p in a["providers"]} == {"claude": True, "anthropic": False, "deepseek": False, "glm": False}
 assert next(p for p in a["providers"] if p["name"] == "glm")["key"] == "ZAI_API_KEY"
 u = a["users"][0]
@@ -1327,9 +1394,9 @@ for bad in ({"owner": "o/x", "provider": "claude"}, {"owner": None, "provider": 
     assert setp(bad)[0] == 400, bad
 agent.KEYS["glm"] = "k"
 a = body(setp({"owner": "acme", "provider": "glm"}))
-assert a["overrides"] == {"acme": "glm"} and agent.provider_for("acme/x") == "glm" and agent.provider_for("o/r") == "claude"
-assert {"owner": "acme", "repos": 0, "own": False} in a["owners"], "an override shows with no repo served"
-assert body(setp({"owner": None, "provider": "glm"}))["default"] == "glm" and agent.provider_for("o/r") == "glm"
+assert a["overrides"] == {"acme": "glm"} and prov("acme/x") == "glm" and prov("o/r") == "claude"
+assert {"owner": "acme", "repos": 0, "own": False, "key": None} in a["owners"], "an override shows with no repo served"
+assert body(setp({"owner": None, "provider": "glm"}))["default"] == "glm" and prov("o/r") == "glm"
 assert body(setp({"owner": "acme", "provider": None}))["overrides"] == {}
 r = setp({"owner": "acme", "provider": "claude"})
 assert r[0] == 422 and "OWN" in body(r)["error"], "the subscription is not for acme"
@@ -1339,6 +1406,56 @@ setp({"owner": None, "provider": "claude"})
 assert body(req("GET", "/api/admin", sid=sid))["default"] == "claude", "the default may stay claude"
 agent.KEYS["glm"], web.ADMINS = "", set()
 assert req("GET", "/api/admin", sid=sid)[0] == 404
+
+# own keys: only the account itself manages them, and a key never comes back out
+agent.REPOS["alice/app"] = "main"
+seen = []
+def kreq(method, path, d=None, s=sid, c=None):
+    r = req(method, path, sid=s, csrf=c or me["csrf"], data=json.dumps(d).encode() if d is not None else b"")
+    seen.append(r[2].decode())
+    return r
+good = {"owner": "alice", "provider": "deepseek", "label": " main ", "key": "sk-alice-0123456789abcdef"}
+agent.KEY_SECRET = ""
+assert body(kreq("GET", "/api/keys")) == {"enabled": False, "providers": ["anthropic", "deepseek", "glm"],
+    "owners": [{"owner": "alice", "fallback": None, "selected": None, "keys": []}]}, "never `claude`, never o's"
+assert kreq("POST", "/api/keys", good)[0] == 503, "no KEY_SECRET, no key"
+agent.KEY_SECRET = "master-test"
+assert req("POST", "/api/keys", sid=sid, data=json.dumps(good).encode())[0] == 403, "no CSRF"
+for owner in ("o", "Alice", "dave", ["alice"]):
+    assert kreq("POST", "/api/keys", {**good, "owner": owner})[0] in (400, 404), owner
+assert kreq("POST", "/api/keys", {**good, "owner": "o"})[0] == 404, "o's keys are o's, not alice's"
+for bad in ({"provider": "claude"}, {"provider": "nope"}, {"provider": None}, {"label": "x" * 41}, {"label": 3},
+            {"key": "short"}, {"key": "sk has spaces 0123456789"}, {"key": "x" * 301}, {"key": 12345678901234567890}):
+    assert kreq("POST", "/api/keys", {**good, **bad})[0] == 422, bad
+r = kreq("POST", "/api/keys", good)
+k = body(r)["owners"][0]
+k1 = k["keys"][0]["id"]
+assert r[0] == 201 and k["selected"] == k1, "the first key is selected"
+assert {x: k["keys"][0][x] for x in ("provider", "label", "last4", "by")} == \
+    {"provider": "deepseek", "label": "main", "last4": "cdef", "by": "alice"}
+assert agent.provider_for("alice/app") == ("deepseek", k1, good["key"])
+k2 = body(kreq("POST", "/api/keys", {**good, "provider": "glm", "key": "zai-alice-0123456789abcd"}))["owners"][0]
+assert k2["selected"] == k1, "a second key is not selected by itself"
+k2 = k2["keys"][1]["id"]
+assert kreq("POST", "/api/keys/select", {"owner": "alice", "id": k2})[0] == 200 and prov("alice/app") == "glm"
+assert {"owner": "alice", "repos": 1, "own": False, "key": "glm"} in web.admin_view()["owners"]
+for d in ({"owner": "alice", "id": 999}, {"owner": "alice", "id": True}, {"owner": "alice", "id": str(k1)},
+          {"owner": "o", "id": None}):
+    assert kreq("POST", "/api/keys/select", d)[0] == 404, d
+dave_csrf = body(req("GET", "/api/me", sid=dave))["csrf"]
+assert kreq("DELETE", f"/api/keys/{k2}", s=dave, c=dave_csrf)[0] == 404, "someone else's key is a 404"
+assert kreq("POST", "/api/keys/select", {"owner": "alice", "id": None}, s=dave, c=dave_csrf)[0] == 404
+assert body(kreq("GET", "/api/keys", s=dave))["owners"] == []
+assert kreq("DELETE", f"/api/keys/{k2}")[0] == 200 and body(kreq("GET", "/api/keys"))["owners"][0]["selected"] is None
+assert nokey("alice/app") == "no API key", "the selected key removed: alice is not in OWN, so nothing runs"
+assert kreq("POST", "/api/keys/select", {"owner": "alice", "id": k1})[0] == 200 and prov("alice/app") == "deepseek"
+assert kreq("POST", "/api/keys/select", {"owner": "alice", "id": None})[0] == 200 and nokey("alice/app")
+with agent.closing(agent.db()) as con:
+    dump = repr(con.execute("SELECT * FROM keys").fetchall()) + repr(con.execute("SELECT * FROM settings").fetchall())
+assert not [x for x in seen + [dump] if "0123456789" in x], "no key in any response or at rest"
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM keys")
+del agent.REPOS["alice/app"]
 
 # POSTs need the session's CSRF token; logout ends the session server-side
 assert req("POST", "/auth/logout", sid=sid)[0] == 403

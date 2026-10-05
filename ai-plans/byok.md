@@ -1,8 +1,10 @@
 # Claude by API key, and owners' own keys (BYOK)
 
-**Status: plan, not built** (5 October 2026). Decisions in §9 taken 5 October 2026.
+**Status: phases A and B built, C deferred** (5 October 2026). Decisions in §9 taken 5 October 2026.
 §10 (wrong label) built 5 October 2026. Spike K-c passed and phase A (§3) built 5 October
-2026. K-a passed, K-d failed (no key check on save), 5 October 2026. Next: phase B.
+2026. K-a passed, K-d failed (no key check on save), 5 October 2026. Phase B (§4) built
+5 October 2026: `provider_for()` returns `(name, key id, key)` so the steps can log the id; the
+no-key check is `pin()`'s first line; the first key an owner adds is selected. Phase C deferred.
 
 ## 1. Goal
 

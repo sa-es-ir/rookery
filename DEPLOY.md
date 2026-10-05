@@ -115,7 +115,12 @@ PUBLIC_URL=https://HOSTNAME
 AGENT_USER=rookery-agent   # optional: the handle people @mention on a PR (default rookery-agent)
 ADMINS=your-login          # optional: GitHub logins (comma-separated) that may use /admin.html
 OWN=your-login,your-org    # optional: owners the /login subscription may run for (default: ADMINS)
+KEY_SECRET=<openssl rand -hex 32>   # optional: encrypts owners' own API keys; unset, the Keys page is off
 ```
+
+Back up `KEY_SECRET` with `.env`. If you lose it or change it, Rookery cannot read any stored
+owner key: those owners' jobs fail with "the selected API key cannot be read", and each owner must
+add the key again on the portal's Keys page.
 
 With neither `OWN` nor `ADMINS` set, no owner may use the subscription (`claude`): set one before
 you deploy, or every job on `claude` fails.
@@ -238,8 +243,10 @@ only if its key is in `.env`, so put in every key you want to select (`PROVIDER`
 setting, and that owner's jobs fail until you put the key back or change the setting.
 
 The `/login` subscription (`claude`) runs only the owners in `OWN`. Any other owner needs an
-override on `/admin.html` to a provider with a key (`anthropic`, `deepseek` or `glm`), or its
-jobs fail with "no provider for <owner>". The admin page does not offer `claude` for those
+override on `/admin.html` to a provider with a key (`anthropic`, `deepseek` or `glm`), or a key of
+its own selected on the portal's Keys page (personal accounts only). With neither, its jobs fail
+with "no API key for <owner>" and a link to the Keys page. Not even the stored default runs an
+owner outside `OWN`. The admin page does not offer `claude` for those
 owners, and the startup log names each old `claude` override for one of them. Before you
 deploy this, check the Owners table and set an override for every owner that must keep running.
 

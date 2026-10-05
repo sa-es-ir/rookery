@@ -73,6 +73,8 @@ To continue:
 
 Rookery continues at the task that failed. It does not repeat the tasks that are complete.
 
+If Rookery has no API key for the owner of the repository, the run does not start. The comment has a link to the **Keys** page in the portal and tells you how to start the run again. Refer to [API keys](keys.md).
+
 ## Cancel
 
 A person with write access can cancel a running job in the portal. Rookery stops the Claude call, writes a comment and sets `rookery:error`. Comment `approve` to continue.
