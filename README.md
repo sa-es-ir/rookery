@@ -24,6 +24,10 @@ then implements the plan task by task on a branch and opens a draft PR.
 rookery:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
 ```
 
+<p align="center">
+  <img src="workflow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="800">
+</p>
+
 Two files: `agent.py` (the pipeline) and `web.py` (the webhook, sign-in, the API and the
 portal in `ui/`) — Python stdlib only, plus the `gh`, `openssl` and `claude` CLIs on your
 PATH. The full roadmap lives in
