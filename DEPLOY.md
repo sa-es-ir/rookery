@@ -114,7 +114,11 @@ CLIENT_SECRET=<the App's client secret>
 PUBLIC_URL=https://HOSTNAME
 AGENT_USER=rookery-agent   # optional: the handle people @mention on a PR (default rookery-agent)
 ADMINS=your-login          # optional: GitHub logins (comma-separated) that may use /admin.html
+OWN=your-login,your-org    # optional: owners the /login subscription may run for (default: ADMINS)
 ```
+
+With neither `OWN` nor `ADMINS` set, no owner may use the subscription (`claude`): set one before
+you deploy, or every job on `claude` fails.
 
 `PUBLIC_URL` being `https://` sets the `Secure` flag on the session cookie.
 
@@ -203,6 +207,15 @@ PROVIDER=deepseek
 DEEPSEEK_API_KEY=sk-...
 ```
 
+For Claude by API key (Anthropic's API, billed per token, not the subscription):
+
+```bash
+PROVIDER=anthropic
+CLAUDE_API_KEY=sk-ant-...
+```
+
+Use `CLAUDE_API_KEY`, not `ANTHROPIC_API_KEY`: `agent.py` removes that one at startup.
+
 For GLM (Z.ai, pay-as-you-go API only, never the Coding Plan):
 
 ```bash
@@ -223,6 +236,12 @@ one owner, with no restart; it applies from the next `claude` call. It offers a 
 only if its key is in `.env`, so put in every key you want to select (`PROVIDER` can stay
 `claude`). If you remove a key that a stored setting uses, the startup log names the
 setting, and that owner's jobs fail until you put the key back or change the setting.
+
+The `/login` subscription (`claude`) runs only the owners in `OWN`. Any other owner needs an
+override on `/admin.html` to a provider with a key (`anthropic`, `deepseek` or `glm`), or its
+jobs fail with "no provider for <owner>". The admin page does not offer `claude` for those
+owners, and the startup log names each old `claude` override for one of them. Before you
+deploy this, check the Owners table and set an override for every owner that must keep running.
 
 ## 6. Git identity — server, rookery
 

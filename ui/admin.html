@@ -110,12 +110,14 @@ function render(){
     h('input', {type: 'radio', name: 'default', checked: p.name === d.default, disabled: !p.ready,
                 onchange: () => save(null, p.name)}),
     p.name, p.ready ? null : h('small', null, `needs ${p.key}`))));
-  const pick = o => h('select', {'aria-label': `Provider for ${o}`, onchange: e => save(o, e.target.value || null)},
-    h('option', {value: '', selected: !mine(o)}, `Default (${d.default})`),
-    d.providers.map(p => h('option', {value: p.name, selected: mine(o) === p.name, disabled: !p.ready && mine(o) !== p.name},
-      p.ready ? p.name : `${p.name} (needs ${p.key})`)));
+  // the subscription (claude) runs only the owners in OWN
+  const why = (p, own) => !p.ready ? `needs ${p.key}` : p.name === 'claude' && !own ? 'not in OWN' : '';
+  const pick = (o, own) => h('select', {'aria-label': `Provider for ${o}`, onchange: e => save(o, e.target.value || null)},
+    h('option', {value: '', selected: !mine(o)}, d.default === 'claude' && !own ? 'Default (claude: not in OWN, fails)' : `Default (${d.default})`),
+    d.providers.map(p => h('option', {value: p.name, selected: mine(o) === p.name, disabled: !!why(p, own) && mine(o) !== p.name},
+      why(p, own) ? `${p.name} (${why(p, own)})` : p.name)));
   $('#owners').replaceChildren(...(d.owners.length ? d.owners.map(o => h('tr', null,
-    h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)), h('td', null, pick(o.owner))))
+    h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)), h('td', null, pick(o.owner, o.own))))
     : [h('tr', null, h('td', {colspan: 3, class: 'none'}, 'No owners yet.'))]));
   const owners = new Set(d.owners.map(o => o.owner));
   $('#users').replaceChildren(...(d.users.length ? d.users.map(u => h('tr', null,

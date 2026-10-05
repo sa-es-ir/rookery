@@ -1,7 +1,8 @@
 # Claude by API key, and owners' own keys (BYOK)
 
 **Status: plan, not built** (5 October 2026). Decisions in §9 taken 5 October 2026.
-§10 (wrong label) built 5 October 2026. Next: spikes §6, then phase A.
+§10 (wrong label) built 5 October 2026. Spike K-c passed and phase A (§3) built 5 October
+2026. K-a passed, K-d failed (no key check on save), 5 October 2026. Next: phase B.
 
 ## 1. Goal
 
@@ -55,7 +56,9 @@ the operator's goes in `OWN` by name.
 - `provider_for()` → if the result is `claude` and the owner is not in `OWN`, raise
   `"the subscription is only for the operator's own repos: add a key for <owner> at
   <PUBLIC_URL>/portal.html#keys"`. The job fails with that comment and `rookery:error`.
-  Never a fallback to another backend.
+  Never a fallback to another backend. As built (phase A, no keys page yet) the message is
+  "no provider for <owner>: … Ask the operator to set a provider for <owner>."; phase B
+  changes it to the keys link.
 - `POST /api/admin/provider` refuses `claude` for an owner not in `OWN` (422). The default
   can stay `claude`. It then means "the operator's owners use the subscription, everyone
   else needs a key or an override".
@@ -212,9 +215,9 @@ About 5 lines in `agent.py`, most of the work is on the server.
 
 | # | Check | Pass means |
 |---|---|---|
-| K-a | `claude -p "say hi" --output-format json` with `ANTHROPIC_API_KEY` set while a `/login` is present (run with `env -u` for the shell's own key) | `modelUsage` names Claude models, `total_cost_usd` matches the API price, no prompt about the key in `-p` |
-| K-c | `openssl enc -aes-256-cbc -pbkdf2 -pass env:K -a` round trip on the server's OpenSSL | the same bytes come back |
-| K-d | `GET <url>/v1/models` with each key | if all three answer 200 for a good key and 401 for a bad one, `POST /api/keys` checks a key before it saves it. Else no check: a bad key fails the first job with the provider's error |
+| K-a | `claude -p "say hi" --output-format json` with `ANTHROPIC_API_KEY` set while a `/login` is present (run with `env -u` for the shell's own key) | `modelUsage` names Claude models, `total_cost_usd` matches the API price, no prompt about the key in `-p`. **Passed** 5 October 2026, local CLI 2.1.289 (the server pins 2.1.110: recheck there before deploy): `init` says `apiKeySource: ANTHROPIC_API_KEY` with the `/login` present, `modelUsage` is `claude-haiku-4-5-20251001`, `total_cost_usd` 0.01570155 equals the Haiku 4.5 list price of its tokens to the last digit, and `cost_of()` returns it. stderr warns that claude.ai connectors are off (no harm: `--strict-mcp-config`) |
+| K-c | `openssl enc -aes-256-cbc -pbkdf2 -pass env:K -a` round trip on the server's OpenSSL | the same bytes come back. **Passed** 5 October 2026 on OpenSSL 3.2.1 (local) and 3.0.13 (server). Use `-a -A` both ways: without `-A` the base64 wraps at 64 characters |
+| K-d | `GET <url>/v1/models` with each key | if all three answer 200 for a good key and 401 for a bad one, `POST /api/keys` checks a key before it saves it. Else no check: a bad key fails the first job with the provider's error. **Failed** 5 October 2026: anthropic 200 / 401 (`x-api-key`); deepseek 404 for a good key (no `/v1/models` on its Anthropic endpoint); glm 200 for a bad key. So no check on save |
 
 ## 7. Changes
 

@@ -275,7 +275,8 @@ def admin_view():
             "providers": [{"name": n, "ready": agent.ready(n), **({"key": p["key"]} if p else {})}
                           for n, p in agent.PROVIDERS.items()],
             "overrides": overrides,
-            "owners": [{"owner": o, "repos": count[o]} for o in sorted(set(count) | set(overrides))],
+            "owners": [{"owner": o, "repos": count[o], "own": o.lower() in agent.OWN}
+                       for o in sorted(set(count) | set(overrides))],
             "users": [{"login": l, "first": f, "last": t, "logins": n, "live": l in last and last[l][0] > now,
                        "repos": len([r for r in last[l][1] if r in agent.REPOS]) if l in last else None}
                       for l, f, t, n in users]}
@@ -366,6 +367,8 @@ def route(method, url, headers, body=b""):
                                          'or null to drop an owner\'s override}'})
             if name is not None and not agent.ready(name):
                 return js(422, {"error": f"{name} cannot run: unknown, or its key is not in .env"})
+            if name == "claude" and owner is not None and owner.lower() not in agent.OWN:
+                return js(422, {"error": f"the subscription runs only the owners in OWN, and {owner} is not one"})
             set_provider(owner, name, s["login"])
             return js(200, admin_view())
         if method == "GET" and path == "/api/skills":

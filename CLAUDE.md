@@ -213,7 +213,12 @@ models, passed as `env=` (none at all for `claude`, so its env is unchanged), th
 by the `env_keep` line (DEPLOY.md §5b). An unknown `PROVIDER` or a missing key fails startup.
 The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
 `price` table, and a model not in it fails the call. The `base` and `claude` steps log
-`provider`. Plan and spikes: `ai-plans/providers.md`.
+`provider`. `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
+which is popped so it cannot beat the `/login`): no `models`, no `price`, so `total_cost_usd`.
+The subscription runs only the owners in `OWN` (`.env`, unset = `ADMINS`): `provider_for()`
+raises for `claude` on any other owner — from an override or the default — and the job fails;
+`/api/admin/provider` refuses that override (422), and startup logs an old one. Plan and spikes:
+`ai-plans/providers.md`, `ai-plans/byok.md`.
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
@@ -264,7 +269,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
-  in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
+  in `web.py`. Every provider's key (`CLAUDE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
   not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing

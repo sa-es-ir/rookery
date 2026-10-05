@@ -54,6 +54,9 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 # USD_CAP can trip early, never late. The CLI itself prices any model as Claude (S-b).
 PROVIDERS = {
     "claude": {},
+    # Claude by API key: the aliases are Claude models already, and total_cost_usd is its price.
+    # Not ANTHROPIC_API_KEY: that one is popped above, so it never beats the /login.
+    "anthropic": {"url": "https://api.anthropic.com", "key": "CLAUDE_API_KEY"},
     "deepseek": {"url": "https://api.deepseek.com/anthropic", "key": "DEEPSEEK_API_KEY",
                  "models": {"opus": "deepseek-v4-pro", "sonnet": "deepseek-flash", "haiku": "deepseek-flash"},
                  "price": {"deepseek-v4-pro": (1.32, 0.044, 3.96), "deepseek-flash": (0.30, 0.006, 1.20)}},
@@ -62,6 +65,8 @@ PROVIDERS = {
             "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
 }
 PROVIDER = os.environ.get("PROVIDER", "claude")   # the default until the admin page stores one
+# owners the operator's subscription (`claude`) may run for; unset, the ADMINS logins
+OWN = {x.strip().lower() for x in (os.environ.get("OWN") or os.environ.get("ADMINS", "")).split(",") if x.strip()}
 # every provider's key is kept here, out of os.environ: the claude subprocess inherits it
 KEYS = {n: os.environ.pop(p["key"], "") for n, p in PROVIDERS.items() if p}
 
@@ -82,7 +87,7 @@ def provider_env(name):
     if not KEYS.get(name):
         raise RuntimeError(f"provider {name} needs {p['key']} in .env")
     return {"ANTHROPIC_BASE_URL": p["url"], "ANTHROPIC_API_KEY": KEYS[name],
-            **{f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL": m for a, m in p["models"].items()}}
+            **{f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL": m for a, m in p.get("models", {}).items()}}
 
 
 provider_env(PROVIDER)   # fails startup, not the first job
@@ -363,11 +368,17 @@ def db():
 
 def provider_for(repo):
     """The repo owner's provider: its `provider:<owner>` row, else the stored default, else
-    PROVIDER. Per owner, never per actor: one issue has several, and must stay on one backend."""
+    PROVIDER. Per owner, never per actor: one issue has several, and must stay on one backend.
+    The subscription (`claude`) only for an owner in OWN: anyone else raises, never falls back."""
+    owner = repo.split("/")[0]
     with closing(db()) as con:
         row = con.execute("SELECT value FROM settings WHERE key IN (?, 'provider') ORDER BY key = 'provider' LIMIT 1",
-                          (f"provider:{repo.split('/')[0]}",)).fetchone()
-    return row[0] if row else PROVIDER
+                          (f"provider:{owner}",)).fetchone()
+    name = row[0] if row else PROVIDER
+    if name == "claude" and owner.lower() not in OWN:
+        raise RuntimeError(f"no provider for {owner}: the Claude subscription runs only the operator's own repos. "
+                           f"Ask the operator to set a provider for {owner}.")
+    return name
 
 
 def today():
@@ -1821,6 +1832,8 @@ def main():
             if not ready(v):
                 log(f"{k} is {v}, which cannot run ({PROVIDERS.get(v, {}).get('key', 'unknown provider')}): "
                     "its jobs will fail until the key is back in .env or the admin page changes it")
+            elif v == "claude" and ":" in k and k.split(":", 1)[1].lower() not in OWN:
+                log(f"{k} is claude, but that owner is not in OWN: its jobs will fail until the admin page changes it")
     import web
     web.serve()
 

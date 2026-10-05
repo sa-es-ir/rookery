@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import os
 
-os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="", PROVIDER="claude")  # before import: .env only fills unset keys
+os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="", PROVIDER="claude", OWN="o")  # before import: .env only fills unset keys
 import agent  # noqa: E402
 
 real_sh, real_handle = agent.sh, agent.handle
@@ -398,7 +398,12 @@ for p in ("deepseek", "nope"):   # never a quiet fallback to the operator's logi
         raise AssertionError(p)
     except RuntimeError:
         pass
-agent.KEYS.update(deepseek="", glm="")
+agent.KEYS.update(deepseek="", glm="", anthropic="")
+# anthropic: Claude by key, the CLI's own aliases and price
+agent.KEYS["anthropic"] = "sk-ant"
+assert agent.provider_env("anthropic") == {"ANTHROPIC_BASE_URL": "https://api.anthropic.com", "ANTHROPIC_API_KEY": "sk-ant"}
+assert agent.cost_of(json.dumps({"total_cost_usd": 0.3, "modelUsage": {"claude-x": {}}}), "anthropic") == 0.3
+agent.KEYS["anthropic"] = ""
 
 # the provider per owner: its override, else the stored default, else PROVIDER from .env
 def put(key, value):
@@ -415,6 +420,21 @@ put("provider:o", None)
 assert agent.provider_for("o/r") == "glm", "a dropped override falls back"
 put("provider", None)
 assert agent.provider_for("o/r") == "claude"
+# the subscription only for an owner in OWN: anyone else raises, from an override or the default
+for setup in ((), (("provider:acme", "claude"),), (("provider", "glm"), ("provider:acme", "claude"))):
+    for k, v in setup:
+        put(k, v)
+    try:
+        agent.provider_for("acme/r")
+        raise AssertionError(setup)
+    except RuntimeError as e:
+        assert "no provider for acme" in str(e), e
+    for k, _ in setup:
+        put(k, None)
+assert agent.provider_for("O/r") == "claude", "OWN ignores case"
+put("provider:acme", "deepseek")
+assert agent.provider_for("acme/r") == "deepseek", "an override is the operator's explicit choice"
+put("provider:acme", None)
 agent.check_caps("o/r")                      # nothing used yet
 agent.record("o/r", 0.25), agent.record("o/r", 0.25)
 agent.record("o/other", 5.0)                 # another repo's spend is its own
@@ -1294,8 +1314,8 @@ assert req("POST", "/api/admin/provider", sid=dave, csrf=dcsrf, data=b'{"owner":
 assert req("POST", "/api/admin/provider", sid=sid, data=b'{"owner": null, "provider": "claude"}')[0] == 403, "no CSRF"
 setp = lambda d: req("POST", "/api/admin/provider", sid=sid, csrf=me["csrf"], data=json.dumps(d).encode())
 a = body(req("GET", "/api/admin", sid=sid))
-assert a["default"] == "claude" and a["overrides"] == {} and a["owners"] == [{"owner": "o", "repos": 2}], a
-assert {p["name"]: p["ready"] for p in a["providers"]} == {"claude": True, "deepseek": False, "glm": False}
+assert a["default"] == "claude" and a["overrides"] == {} and a["owners"] == [{"owner": "o", "repos": 2, "own": True}], a
+assert {p["name"]: p["ready"] for p in a["providers"]} == {"claude": True, "anthropic": False, "deepseek": False, "glm": False}
 assert next(p for p in a["providers"] if p["name"] == "glm")["key"] == "ZAI_API_KEY"
 u = a["users"][0]
 assert (u["login"], u["logins"], u["first"], u["live"], u["repos"]) == ("alice", 2, 1, True, 1), \
@@ -1308,10 +1328,15 @@ for bad in ({"owner": "o/x", "provider": "claude"}, {"owner": None, "provider": 
 agent.KEYS["glm"] = "k"
 a = body(setp({"owner": "acme", "provider": "glm"}))
 assert a["overrides"] == {"acme": "glm"} and agent.provider_for("acme/x") == "glm" and agent.provider_for("o/r") == "claude"
-assert {"owner": "acme", "repos": 0} in a["owners"], "an override shows with no repo served"
+assert {"owner": "acme", "repos": 0, "own": False} in a["owners"], "an override shows with no repo served"
 assert body(setp({"owner": None, "provider": "glm"}))["default"] == "glm" and agent.provider_for("o/r") == "glm"
 assert body(setp({"owner": "acme", "provider": None}))["overrides"] == {}
+r = setp({"owner": "acme", "provider": "claude"})
+assert r[0] == 422 and "OWN" in body(r)["error"], "the subscription is not for acme"
+assert body(setp({"owner": "O", "provider": "claude"}))["overrides"] == {"O": "claude"}, "o is in OWN"
+setp({"owner": "O", "provider": None})
 setp({"owner": None, "provider": "claude"})
+assert body(req("GET", "/api/admin", sid=sid))["default"] == "claude", "the default may stay claude"
 agent.KEYS["glm"], web.ADMINS = "", set()
 assert req("GET", "/api/admin", sid=sid)[0] == 404
 
