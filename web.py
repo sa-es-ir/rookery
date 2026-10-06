@@ -37,7 +37,7 @@ from agent import log
 CLIENT_ID = os.environ.get("CLIENT_ID", "")
 CLIENT_SECRET = os.environ.pop("CLIENT_SECRET", "")
 # where the browser reaches us; GitHub redirects to PUBLIC_URL/auth/callback
-PUBLIC_URL = os.environ.get("PUBLIC_URL", f"http://127.0.0.1:{agent.PORT}").rstrip("/")
+PUBLIC_URL = agent.PUBLIC_URL
 SECURE = PUBLIC_URL.startswith("https://")  # the Secure cookie flag; off only over plain http
 TTL = 8 * 3600  # a session, and GitHub's own lifetime for a user token
 UI = agent.HERE / "ui"
@@ -269,16 +269,41 @@ def admin_view():
         users = con.execute("SELECT login, first, last, logins FROM users ORDER BY last DESC").fetchall()
         # each login's newest session, swept 8h after it ends: its repo list and whether it is live
         last = {l: (e, json.loads(r)) for l, r, e in con.execute("SELECT login, repos, expires FROM sessions ORDER BY expires")}
+        # owners running on their own selected key: that beats any override set here
+        keyed = dict(con.execute("SELECT k.owner, k.provider FROM settings s JOIN keys k "
+                                 "ON k.id = s.value AND s.key = 'key:' || k.owner"))
     overrides = {k.split(":", 1)[1]: v for k, v in rows.items() if ":" in k}
     count = collections.Counter(r.split("/")[0] for r in agent.REPOS)
     return {"default": rows.get("provider", agent.PROVIDER),
             "providers": [{"name": n, "ready": agent.ready(n), **({"key": p["key"]} if p else {})}
                           for n, p in agent.PROVIDERS.items()],
             "overrides": overrides,
-            "owners": [{"owner": o, "repos": count[o]} for o in sorted(set(count) | set(overrides))],
+            "owners": [{"owner": o, "repos": count[o], "own": o.lower() in agent.OWN, "key": keyed.get(o)}
+                       for o in sorted(set(count) | set(overrides))],
             "users": [{"login": l, "first": f, "last": t, "logins": n, "live": l in last and last[l][0] > now,
                        "repos": len([r for r in last[l][1] if r in agent.REPOS]) if l in last else None}
                       for l, f, t, n in users]}
+
+
+def can_manage(login, owner):
+    """An owner's keys are that account's own: personal accounts only, an org runs on the
+    operator's choice. `owner` as REPOS spells it."""
+    return login.lower() == owner.lower() and any(r.split("/")[0] == owner for r in agent.REPOS)
+
+
+def keys_view(login):
+    """The keys of each owner `login` manages: never a key itself, only its last 4 characters.
+    `fallback` is what runs with no key selected: the operator's choice, or nothing (NoKey)."""
+    owners = sorted({o for o in (r.split("/")[0] for r in agent.REPOS) if can_manage(login, o)})
+    with closing(agent.db()) as con:
+        out = [{"owner": o, "fallback": agent.fallback(o),
+                "selected": next((int(v) for v, in con.execute("SELECT value FROM settings WHERE key = ?",
+                                                                (f"key:{o}",))), None),
+                "keys": [dict(zip(("id", "provider", "label", "last4", "added", "by"), r)) for r in con.execute(
+                    "SELECT id, provider, label, last4, added, by FROM keys WHERE owner = ? ORDER BY id", (o,))]}
+               for o in owners]
+    return {"enabled": bool(agent.KEY_SECRET), "owners": out,
+            "providers": [n for n, p in agent.PROVIDERS.items() if p]}
 
 
 def set_provider(owner, name, by):
@@ -366,8 +391,59 @@ def route(method, url, headers, body=b""):
                                          'or null to drop an owner\'s override}'})
             if name is not None and not agent.ready(name):
                 return js(422, {"error": f"{name} cannot run: unknown, or its key is not in .env"})
+            if name == "claude" and owner is not None and owner.lower() not in agent.OWN:
+                return js(422, {"error": f"the subscription runs only the owners in OWN, and {owner} is not one"})
             set_provider(owner, name, s["login"])
             return js(200, admin_view())
+        if method == "GET" and path == "/api/keys":
+            return js(200, keys_view(s["login"]))
+        if method == "POST" and path in ("/api/keys", "/api/keys/select"):
+            try:
+                d = json.loads(body)
+                owner = d["owner"]
+                if not isinstance(owner, str):
+                    raise TypeError
+            except (ValueError, KeyError, TypeError):
+                return js(400, {"error": 'expected {"owner": "<owner>", …}'})
+            if not can_manage(s["login"], owner):
+                return js(404, {"error": "no such owner"})
+            with closing(agent.db()) as con, con:
+                if path == "/api/keys/select":
+                    kid = d.get("id")
+                    if kid is not None and not (type(kid) is int and con.execute(
+                            "SELECT 1 FROM keys WHERE id = ? AND owner = ?", (kid, owner)).fetchone()):
+                        return js(404, {"error": "no such key"})
+                    con.execute("DELETE FROM settings WHERE key = ?", (f"key:{owner}",))
+                    if kid is not None:
+                        con.execute("INSERT INTO settings VALUES (?, ?)", (f"key:{owner}", str(kid)))
+                    log(f"key {kid or 'none'} selected for {owner} by {s['login']}")
+                    return js(200, keys_view(s["login"]))
+                if not agent.KEY_SECRET:
+                    return js(503, {"error": "keys are off on this Rookery: the operator has not set KEY_SECRET"})
+                prov, label, key = d.get("provider"), d.get("label", ""), d.get("key")
+                if not (isinstance(prov, str) and agent.PROVIDERS.get(prov)):   # never `claude`: no key to give
+                    return js(422, {"error": "provider: one of " + ", ".join(n for n, p in agent.PROVIDERS.items() if p)})
+                if not isinstance(label, str) or len(label.strip()) > 40:
+                    return js(422, {"error": "label: at most 40 characters"})
+                if not isinstance(key, str) or not re.fullmatch(r"[\x21-\x7e]{20,300}", key):
+                    return js(422, {"error": "key: 20 to 300 printable characters, no spaces"})
+                kid = con.execute("INSERT INTO keys (owner, provider, label, secret, last4, added, by) "
+                                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (owner, prov, label.strip(), agent.seal(key),
+                                                                   key[-4:], time.time(), s["login"])).lastrowid
+                # the first key is selected: added and not selected, the jobs would still fail
+                con.execute("INSERT OR IGNORE INTO settings VALUES (?, ?)", (f"key:{owner}", str(kid)))
+            log(f"key {kid} ({prov}) added for {owner} by {s['login']}")
+            return js(201, keys_view(s["login"]))
+        if method == "DELETE" and (m := re.fullmatch(r"/api/keys/(\d+)", path)):
+            kid = int(m.group(1))
+            with closing(agent.db()) as con, con:
+                row = con.execute("SELECT owner, provider FROM keys WHERE id = ?", (kid,)).fetchone()
+                if not row or not can_manage(s["login"], row[0]):
+                    return js(404, {"error": "no such key"})
+                con.execute("DELETE FROM keys WHERE id = ?", (kid,))
+                con.execute("DELETE FROM settings WHERE key = ? AND value = ?", (f"key:{row[0]}", str(kid)))
+            log(f"key {kid} ({row[1]}) removed for {row[0]} by {s['login']}")
+            return js(200, keys_view(s["login"]))
         if method == "GET" and path == "/api/skills":
             return js(200, {"skills": catalog()})
         if method == "GET" and path == "/api/runs":

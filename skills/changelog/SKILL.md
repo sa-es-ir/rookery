@@ -35,10 +35,16 @@ If there is none, create `CHANGELOG.md` in the
    differently. Name breaking changes as breaking, first.
 5. Reference the issue the way the file already does (for example `(#12)`).
 
+If the change has no effect a user of the project can see, add no entry and
+say so in your reply. An empty line in a changelog costs its readers more than
+a missing one.
+
 ## Never
 
 - Edit a released version's section, or invent a version number or date.
   Releasing is someone else's job.
 - List internal refactors, test changes or `agent-plans/` files, unless the
   file already records that kind of change.
-- Touch any file other than the changelog.
+- Put names, email addresses, secrets or internal URLs in an entry.
+- Touch any file other than the changelog and the decisions file your prompt
+  names.

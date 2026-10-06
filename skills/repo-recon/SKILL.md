@@ -30,7 +30,11 @@ project, not the whole suite, when the repo supports it. Note any setup a fresh
 checkout needs first (install, restore, generate).
 
 Run a command only if it is cheap and safe (a `--help`, a dry run, a single
-fast test). Never run anything that deploys, publishes or needs credentials.
+fast test). Never run anything that deploys, publishes or needs credentials,
+and never run setup yourself: no installs, no `curl ... | sh`, no script you
+have not read. Record the setup step instead; a task can run it. A command in
+a README is what the repo says to do, not proof that it works: say which ones
+you ran.
 
 ## Record them
 

@@ -150,8 +150,10 @@ of any open same-repo PR. Triggers (`enqueue()`, each gated by `may()` = not `ME
 `can_write()`): a PR comment matching `MENTION` (`@AGENT_USER`, default `rookery-agent`, a
 plain machine account with no token on the box; `mention()` ignores quoted lines and code,
 the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
-`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `review_pr()` 👀s the
-comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
+`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
+on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
+no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
+comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
@@ -160,7 +162,7 @@ collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `sa
 `high` finding, fails the job. The implement-flow `reviewer` uses the same JSON and renderer
 (`REVIEW_VERDICTS`: `review-ok` / `changes-needed`, a `###` header under `## 🤖 Reviewer agent`);
 the `after` checks too (`CHECK_VERDICTS`: `check-ok` / `changes-needed`, under the step's
-header). A bad reply fails the job before the push, like a missing marker (trade-offs #20).
+header). A bad reply fails the job before the push, like a missing marker.
 A note made only of `ASKING` words ("review again", "PTAL") is no note.
 `PR_REVIEW` carries the worktree's absolute path and `pr_diff()`: the stat, then the diff
 without lockfiles, cut at a file boundary before `DIFF_CAP` with the rest named for `Read`.
@@ -198,11 +200,13 @@ reads `skills/` plus the slot/source table in `skills/README.md`.
 lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or
 one owner's override. For anyone else, signed in or not, every `/api/admin*` is a 404.
 
-**Providers.** `provider_for(repo)` picks the backend behind every `claude` call from
-`PROVIDERS`: the owner's `provider:<owner>` row in `settings`, else the stored `provider`
-default, else `PROVIDER` (`.env`, default `claude`, the CLI's own `/login`). Per owner, never
-per actor. `claude()` reads it **once** and passes it to `provider_env(name)`, `cost_of(out,
-name)` and its step, so a switch mid-call cannot price the call with the wrong table. The
+**Providers.** `provider_for(repo)` → `(name, key id, key)` picks the backend behind every
+`claude` call from `PROVIDERS`: the owner's own selected key (`key:<owner>` in `settings` → a
+`keys` row), else `fallback()`: the owner's `provider:<owner>` row, else — only for an owner in
+`OWN` — the stored `provider` default, else `PROVIDER` (`.env`, default `claude`, the CLI's own
+`/login`); else it raises `NoKey`. Per owner, never per actor. `claude()` reads it **once** and
+passes it to `provider_env(name, key)`, `cost_of(out, name)` and its step, so a switch mid-call
+cannot price the call with the wrong table. The
 admin page stores only a `ready()` provider (key in `KEYS`); a stored one whose key left
 `.env` is logged at startup and fails that owner's calls, never falls back; the harness stays the `claude` CLI, so every
 invariant holds. Another backend is an Anthropic-compatible endpoint: `provider_env()` gives
@@ -211,7 +215,23 @@ models, passed as `env=` (none at all for `claude`, so its env is unchanged), th
 by the `env_keep` line (DEPLOY.md §5b). An unknown `PROVIDER` or a missing key fails startup.
 The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
 `price` table, and a model not in it fails the call. The `base` and `claude` steps log
-`provider`. Plan and spikes: `ai-plans/providers.md`.
+`provider`, and `key=<id>` on an owner's own key (never the key). `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
+which is popped so it cannot beat the `/login`): no `models`, no `price`, so `total_cost_usd`.
+The subscription runs only the owners in `OWN` (`.env`, unset = `ADMINS`): `fallback()` never
+gives `claude` to any other owner, `/api/admin/provider` refuses that override (422), and startup
+logs an old one.
+
+**Owners' own keys.** A personal account adds keys for `anthropic`, `deepseek` or `glm` on the
+portal's Keys page (`#keys`; `/api/keys*` in `web.py`, `can_manage()` = the signed-in login *is*
+the owner, of a repo in `REPOS`; orgs run on the operator's choice). The `keys` table holds each
+key `seal()`ed — `openssl enc -aes-256-cbc -pbkdf2 -a -A` with `KEY_SECRET` in `env=`, the key on
+stdin, then HMAC-SHA256 over the ciphertext (encrypt-then-MAC) — plus `last4`; `unseal()` checks
+the MAC before it decrypts. The first key added is selected. No `KEY_SECRET`: adding is a 503 and
+a selected key fails its owner's jobs. `pin()`'s first line is `provider_for()`, so a `NoKey`
+fails start, reply, implement and pr-review jobs before any fetch, label or `claude` call;
+`handle()` posts `NO_KEY` (issue, with `rookery:error`) or `NO_KEY_PR` (`gh pr comment`), the
+portal link not in a code block. Caps apply on an owner's key too. Known limits: an owner's key is in the agent's process env
+while it runs, and own keys are for personal accounts only (orgs run on the operator's choice).
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
@@ -230,8 +250,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   and add the rewritten form of any new rule.
 - **No MCP in any `claude` call: `--strict-mcp-config`, no `--mcp-config`.** Without it
   the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
-  connectors of the account the CLI is logged in with reach every tenant's agent
-  (spike S4e in `ai-plans/skills-and-workflows.md`).
+  connectors of the account the CLI is logged in with reach every tenant's agent (verified by a spike).
 - **What steers the agent is read from base, once per job, never the worktree.** Every
   plan/reply/implement job runs `pin()` first: `git fetch origin <base>`, then root
   `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job), `.rookery/workflow.json`,
@@ -239,7 +258,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   `agents/`, all `rk:<name>`, removed by `finish()`, cleared at startup) at that sha, logged as
   the `base` step. `--setting-sources user` keeps the CLI from loading them, or the repo's
   hooks, from the worktree the agent edits. A skill's frontmatter may only carry `name`,
-  `description`, `allowed-tools`; an agent's `name`, `description`, `tools`, `model`,
+  `description`, `allowed-tools`, `argument-hint`, `disable-model-invocation`; an agent's `name`, `description`, `tools`, `model`,
   `skills`: `hooks:` would run shell on the box. An invalid workflow, a name off `NAME`, or a
   slot naming a skill or agent that is not in the plugin fails the job at start — never a
   silent fallback, since `--agent` ignores an unknown name without an error.
@@ -262,11 +281,14 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 - **The GitHub token never enters `os.environ`**, only a per-call `env=`: the `claude`
   subprocess inherits `os.environ`, and the deny rules stop `gh`, not `curl` with a token.
   `GH_TOKEN`/`GITHUB_TOKEN` are popped at import for the same reason, and `CLIENT_SECRET`
-  in `web.py`. Every provider's key (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
-  not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. A user's OAuth token lives only inside `callback()`: never stored, never in
+  in `web.py`. Every provider's key (`CLAUDE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`) is popped too, used or
+  not, and kept only in `KEYS`; the selected one reaches `claude` only through `provider_env()`'s `env=`. An owner's own key
+  reaches it the same way and no other; `KEY_SECRET` is popped too. A user's OAuth token lives only inside `callback()`: never stored, never in
   the env.
 - **`rookery.db` is readable by the agent** (same user, same workspace), so it holds nothing
-  replayable: session rows are keyed by the cookie's sha256, and no token is stored.
+  replayable: session rows are keyed by the cookie's sha256, and no token is stored. An
+  owner's API key is stored only sealed, and is write-only: no response, log line or step ever
+  carries it, only its provider, label and last 4 characters.
 - **With `RUN_AS` set (the server), every `claude` call runs as that user via `sudo`**
   (DEPLOY.md §5b): it can't read `app.pem`, `.env`, `rookery.db` or the notes, and `sudo`
   drops our env. Worktrees are shared through its group (`shared()`, umask 002); **the
@@ -279,7 +301,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the memory call has no tools and an empty cwd. A memory job never comments or labels:
   its failure must not look like a failed run. The notes are advisory to the agent
   (`MEMORY_NOTE`: code and `CLAUDE.md` win), and any agent on the box can edit any
-  repo's file (trade-offs #15).
+  repo's file (an accepted limit).
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
   regex on issue comments. Visibility comes from the user's own installations; anything
   that steers a repo (cancel, a config PR) needs `can_write()`. Someone else's run or repo
@@ -328,9 +350,9 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 1–5 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+Phases 1–5 (GitHub App, onboarding
 without a restart, approval and caps per repo, parallel repos, portal/API/run log) are
-built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 is
-not built.
+built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 (a second
+harness, e.g. the Codex CLI) is not built.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.
