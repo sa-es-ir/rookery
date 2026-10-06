@@ -1,8 +1,14 @@
-# Model providers: Claude, DeepSeek, more later
+# Model providers: Claude, DeepSeek, GLM, more later
 
 **Status: phase 1 built** (4 October 2026). Spikes S-a, S-b, S-c and S-e were run on
-4 October 2026 (results in §4). S-d passed the same day. Next: deploy (DEPLOY.md, "Another model provider").
-**GLM (Z.ai): built** (5 October 2026), §8. G-a to G-e passed (§8.3). Next: deploy (DEPLOY.md, "Another model provider").
+4 October 2026 (results in §4). S-d passed the same day. Deploy: DEPLOY.md, "Another model provider".
+**GLM (Z.ai): built** (5 October 2026), §8. G-a to G-e passed (§8.3).
+**Phase 2 (per owner): built** (5 October 2026), but not as §7 first planned. The admin page
+(`admin.md`) stores the default and each owner's override. Owners add their own keys on the
+Keys page (`byok.md`), and the `anthropic` provider is Claude by API key. Read §1–§3 as the
+phase 1 design. Where they differ from the code, §7 says what changed.
+**OpenAI, Gemini and other large providers: researched** (6 October 2026), §9. Next: the
+OpenRouter spikes (§9.6).
 
 ## 1. Goal
 
@@ -26,7 +32,7 @@ thing that changes is the model behind the CLI.
   adapter around the CLI, not an env bundle. If it is built, it is a separate `HARNESS`
   flag, so `PROVIDER` keeps meaning "which Anthropic-API backend".
 - Per-owner providers and keys (friends bring their own DeepSeek key). That is phase 2
-  (§7). Phase 1 is one provider for the whole instance, paid by the operator.
+  (§7, now built). Phase 1 is one provider for the whole instance, paid by the operator.
 
 ## 2. Why DeepSeek first
 
@@ -65,7 +71,12 @@ At import:
   `GH_TOKEN`. It reaches the CLI only through a per-call `env=`.
 
 The key goes in `ANTHROPIC_API_KEY` (sent as `x-api-key`), which is what DeepSeek's Claude Code
-guide uses. Line 48 still pops that var from `os.environ`; it reaches the CLI only through `env=`.
+guide uses. `agent.py` still pops that var from `os.environ` at import; it reaches the CLI only
+through `env=`.
+
+As built, the keys of all providers are popped into one `KEYS` dict, used or not, and only the
+`PROVIDER` that was selected is checked at startup. The table also has `anthropic` (byok.md §3):
+no `models` and no `price`, so it uses `total_cost_usd`.
 
 The model map is explicit even though DeepSeek maps `claude-opus*` / `claude-sonnet*` by
 itself. That way the mapping is ours, is logged, and doesn't change if DeepSeek changes its
@@ -89,8 +100,14 @@ def provider_env():
 result is non-empty, and `env=None` (as today) when it is empty. So `PROVIDER=claude` runs
 the exact command and env it runs now.
 
-The `step()` for each call also records `provider=PROVIDER`, and the `base` step logs it
-once per job. That makes it visible in the run log which backend wrote which PR.
+As built (phase 2): `provider_env(name, key=None)` takes the provider name and, optionally, an
+owner's own key. `claude()` calls `provider_for(repo)` **once** → `(name, key id, key)`, and
+gives the same `name` to `provider_env()`, `cost_of(out, name)` and its step. So a switch on the
+admin page during a call cannot price the call with the wrong table.
+
+The `step()` for each call also records the provider (and `key=<id>` on an owner's own key),
+and the `base` step logs it once per job. That makes it visible in the run log which backend
+wrote which PR.
 
 ### 3.3 Through `sudo` (`RUN_AS`)
 
@@ -135,8 +152,8 @@ there is no clock logic. USD per million tokens, from api-docs.deepseek.com, 4 O
 The provider entry gets `"price": {model: (in, cache_read, out)}`. `cost_of()` adds
 `modelUsage[m]` tokens times the price for each model, when the provider has a `price`. A
 model in `modelUsage` with no price fails the job (the same rule as an unknown provider: no
-quiet guess). `PROVIDER=claude` keeps using `total_cost_usd` without any change. About 8
-lines.
+quiet guess). A provider with no `price` (`claude`, `anthropic`) keeps using
+`total_cost_usd` without any change. About 8 lines.
 
 S-c showed that DeepSeek reports `cache_read_input_tokens` (32k of a resumed call), so the
 cache-hit price is used in practice.
@@ -180,14 +197,24 @@ beats `/login` and gives a 401. Run the Claude-side calls with `env -u ANTHROPIC
 No portal change in phase 1. The run log already shows step details, so `provider` appears
 there without UI work.
 
-## 7. Phase 2: per owner (friends), not now
+## 7. Phase 2: per owner — built
 
-The same table, chosen per repo owner instead of per instance:
-`PROVIDER_<owner>=deepseek` and `DEEPSEEK_API_KEY_<owner>=…` in `.env`, read by
-`provider_env(repo)`. An owner with no entry falls back to `PROVIDER` only if the operator
-lists them in `OWN`. Otherwise the job fails with "no provider key for <owner>". Same
-`env=` path, same sudoers line. The cross-tenant `/proc/<pid>/environ` exposure under one
-`rookery-run` user goes to trade-offs. Build it when a friend actually has a key.
+First planned as `.env` lines per owner (`PROVIDER_<owner>=…`, `DEEPSEEK_API_KEY_<owner>=…`).
+That was not built. What was built, 5 October 2026:
+
+- **Admin page** (`admin.md`): the operator stores the default provider and one override per
+  owner in `settings` (`provider`, `provider:<owner>`). `PROVIDER` in `.env` is only the
+  default until the page stores one. The page stores only a `ready()` provider.
+- **Owners' own keys** (`byok.md` §4): an owner adds keys on the portal's Keys page. Each key is
+  sealed in the `keys` table, and the selected one is `key:<owner>`. Same `env=` path, same
+  sudoers line.
+- **`provider_for(repo)`**: the owner's selected key, else `fallback()`: the owner's override,
+  else (only for an owner in `OWN`) the stored default, else `PROVIDER`. Nothing found raises
+  `NoKey`, and the job fails with the `NO_KEY` comment and a link to the Keys page.
+- **The subscription (`claude`) runs only the owners in `OWN`** (byok.md §3). An override to
+  `claude` for any other owner is refused (422).
+- The cross-tenant `/proc/<pid>/environ` exposure under one `rookery-run` user is trade-offs
+  #22.
 
 ## 8. GLM (Z.ai)
 
@@ -295,3 +322,98 @@ Add this to `trade-offs.md` when it is built.
 | `DEPLOY.md` | `.env` lines `PROVIDER=glm` and `ZAI_API_KEY=` |
 | `CLAUDE.md` | add `ZAI_API_KEY` to the provider-key invariant |
 | `ai-plans/trade-offs.md` | tenant code goes to Z.ai |
+
+## 9. OpenAI, Gemini and other large providers
+
+Researched 6 October 2026. The question: can an owner use an OpenAI (Codex) key, a Gemini key
+or a key for another large provider? The harness is the `claude` CLI, and it speaks only
+Anthropic's Messages API. So the question is how a model that is not Claude gets behind it.
+There are three ways. They are different seams with very different costs.
+
+### 9.1 An Anthropic-compatible endpoint: one `PROVIDERS` entry
+
+This is how `deepseek` and `glm` work. There is no code change and no invariant changes.
+
+- **OpenRouter** is the only route here to GPT and Gemini. Its Anthropic-format endpoint is
+  `https://openrouter.ai/api`, made for `ANTHROPIC_BASE_URL`. The entry maps the `opus` /
+  `sonnet` / `haiku` aliases to `openai/gpt-…` or `google/gemini-…` models and prices them.
+  **Risk:** OpenRouter guarantees Claude Code only on Anthropic's own models. A GPT or Gemini
+  model gets the request through a translation layer, and it was trained on a different
+  harness's tools (Codex's `apply_patch`, the Gemini CLI's tools), not on Claude Code's
+  `Edit` and `Bash`. Expect worse tool use than the benchmarks show. The O-d spike decides it.
+- **Other direct endpoints**, each one entry: MiniMax, Qwen, Kimi (rejected on cost, §8.1).
+- **OpenAI and Google** have no Anthropic-format endpoint that we found, only OpenAI-format
+  ones. So an owner's own OpenAI or Gemini key cannot go into this table directly. Through
+  OpenRouter the owner brings an OpenRouter key, not an OpenAI key.
+
+### 9.2 A translating proxy on the box: rejected for now
+
+LiteLLM or claude-code-router on `127.0.0.1` would turn Anthropic calls into OpenAI calls, so
+a raw OpenAI key would work.
+
+- It is a second service to run, and it is one process that holds every owner's key.
+- It has the same tool-quality risk as 9.1, plus a translator that we must keep working.
+- byok.md §4.4 already names a local proxy that swaps a per-call token for the key, as the
+  upgrade for trade-offs #22. If that proxy is built for key isolation, translation can go
+  into it. Translation alone is not a reason to build it.
+
+### 9.3 The Codex CLI as a second harness: R6, later
+
+This is R6 in `PRD.md`, behind a separate `HARNESS` flag (§1). It is the only way that an
+OpenAI key gives good results, because GPT then runs in the harness that it was trained on.
+`codex exec` runs headless and accepts an API key. But each invariant must be built again:
+
+| Invariant | Under Codex |
+|---|---|
+| Deny `git push` / `gh` | There is no deny list of commands. The `workspace-write` sandbox turns off network, which can block a push. Spike. |
+| No MCP (`--strict-mcp-config`) | MCP comes from `CODEX_HOME/config.toml`. Each job needs its own empty `CODEX_HOME`. |
+| Steering read from base, once | Codex loads `AGENTS.md` and, it is reported, a project `.codex/config.toml` from the worktree, which the agent edits. This is the `.mcp.json` hole again. Spike. |
+| `--agent rk:*`, plugin skills | No equivalent. The agent's prompt goes inline. |
+| Session ids from `uuid5` | Codex makes its own ids. We must store them, which breaks "nothing local persists". |
+| `digest()`, `cost_of()` | A different transcript and usage format: a second parser for each. |
+
+**Rejected: a ChatGPT subscription login per owner**, for the same reason as the GLM Coding
+Plan (§8.1): a multi-tenant server breaks the terms on shared use. Only a pay-as-you-go key.
+
+Do the three spikes marked "Spike" before any code. If one of them fails, R6 needs a design
+for that invariant first.
+
+### 9.4 Not a larger model, but cheap: Claude on Bedrock
+
+A company with AWS credits can run Claude through its own AWS account. The CLI supports it,
+but through other variables (`CLAUDE_CODE_USE_BEDROCK`, AWS credentials and region), not
+`ANTHROPIC_BASE_URL`. So `provider_env()` needs a small branch, and the sudoers `env_keep`
+line needs the new names. Build it only when an owner asks.
+
+### 9.5 Plan
+
+1. **Now:** spike OpenRouter (9.6). If it passes, add an entry. The Keys page and the admin
+   page list `PROVIDERS` by themselves. The other changes are a label in `PROV` in
+   `ui/portal.html` and a row in `docs/keys.md`. One entry maps the aliases to one set of
+   models, so GPT and Gemini are two entries (for example, `openrouter-gpt` and
+   `openrouter-gemini`). A key in the `keys` table is for one provider, so an owner who wants
+   both adds the same OpenRouter key twice.
+2. **Not now:** the proxy (9.2). Join it to the key-isolation proxy if that is built.
+3. **Later:** the Codex harness (9.3), as its own R6 plan. Its three spikes come first.
+
+### 9.6 Spikes before code (OpenRouter)
+
+Do these the same way as §4: run locally, keep `PROVIDER` unset, export the key by hand, and
+use `env -u ANTHROPIC_API_KEY` for the Claude-side calls. Pick the GPT and Gemini models, and
+read their prices from openrouter.ai/models, on the day of the spike.
+
+| # | Check | Pass means | If it fails |
+|---|---|---|---|
+| O-a | `claude -p "say hi" --output-format json` with `ANTHROPIC_BASE_URL=https://openrouter.ai/api` and the key as `ANTHROPIC_API_KEY`. OpenRouter's guide uses `ANTHROPIC_AUTH_TOKEN`. | The reply comes back and `modelUsage` names the mapped model. | Add an `auth` key to the entry, as G-a describes. |
+| O-b | The same call: read the `modelUsage` keys | They are the OpenRouter ids (`openai/…`, `google/…`), so `cost_of()` can find them in `price`. | Use the names that the reply shows. |
+| O-c | A resumed call | `cacheReadInputTokens` is above 0. | Record the cost in trade-offs. The cap trips early, not late. |
+| O-d | 3 issues on the test repo, plan → approve, the same as S-d, once with GPT and once with Gemini | Count `STATUS:` marker misses, `rookery:error` runs from the model, failed tool calls (`Edit` misses) and the total cost. Compare with S-d and G-d: 0 misses. **This is the quality gate.** | Do not add that model. |
+| O-e | An agent with `model: opus` | The call uses the model mapped to `opus`. | Same as S-e: stop. |
+
+Also find out: OpenRouter's fee on credits, and its data settings (which upstream providers
+can receive the request, and if they keep or train on it). As with DeepSeek (§5), tenants
+must be told where their code goes. Add this to `trade-offs.md` when it is built.
+
+Sources: openrouter.ai/docs/guides/coding-agents/claude-code-integration,
+docs.anthropic.com/en/api/openai-sdk, docs.litellm.ai/docs/anthropic_unified/native_passthrough.
+The Codex notes come from third-party write-ups. The spikes check them.
