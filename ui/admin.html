@@ -99,7 +99,8 @@ async function save(owner, provider){
     const body = await r.json();
     if (!r.ok) throw new Error(body.error || r.statusText);
     data = body;
-    say(`Saved: ${owner || 'default'} → ${provider || 'default (' + data.default + ')'}`);
+    const own = data.owners.find(o => o.owner === owner)?.own;
+    say(`Saved: ${owner || 'default'} → ${provider || (own ? 'default (' + data.default + ')' : 'override removed: runs only on its own key')}`);
   } catch (e) { say(e.message, true); }
   render();
 }
