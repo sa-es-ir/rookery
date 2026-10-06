@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="rookery-poster-flow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="800">
+  <img src="rookery-poster-flow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="700">
 </p>
 
 ---
