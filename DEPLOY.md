@@ -12,7 +12,7 @@ user it runs as.
 - A **GitHub App** (step 5): permissions Contents RW, Issues RW, Pull requests RW,
   Metadata R — what `agent.py` uses — plus Actions RW, Checks RW, Discussions RW,
   Workflows RW and Commit statuses R, Claude's own GitHub App's set minus Webhooks
-  (unused today; see trade-offs #18); events Issues + Issue comment + Pull request;
+  (unused today: the App asks for Claude's App set, not only what it uses); events Issues + Issue comment + Pull request;
   installed on the target repo. Its App ID,
   private key `.pem` and webhook secret are all the GitHub credentials the box gets —
   no PAT, no `gh auth login`.
@@ -70,7 +70,7 @@ scp path/to/your-app.private-key.pem root@SERVER_IP:/opt/rookery/app.pem
 scp ~/.claude/.credentials.json root@SERVER_IP:/home/rookery/.claude/.credentials.json
 ```
 
-Skipped on purpose: `work/` (clones are made on the server — step 8), `ui/index2.html` and
+Skipped on purpose: `work/` (clones are made on the server — step 8),
 `ui/tui/` (the server only serves files directly in `ui/`), `.git`.
 
 The credentials copy saves you the interactive login for first light only — the token it
@@ -144,7 +144,7 @@ admin on the issue's repo can, looked up per comment.
 Without step 5b the agent runs as the same user that can read `app.pem`, and the key
 outranks any token minted from it: the deny rules stop `gh` and `git push`, not
 `openssl` + `curl`, and with Workflows RW the key can also push CI that reads a repo's
-secrets (trade-offs #7). Do step 5b.
+secrets. Do step 5b.
 
 ## 5b. A second user for the agent — server, root
 
@@ -228,7 +228,7 @@ PROVIDER=glm
 ZAI_API_KEY=...
 ```
 
-Before you do this, tell the tenants: their code goes to DeepSeek or Z.ai (trade-offs #19). With
+Before you do this, tell the tenants: their code goes to DeepSeek or Z.ai. With
 `RUN_AS` set, the sudoers file needs the `env_keep` line from §5b. Without it, the CLI
 uses `rookery-run`'s `/login`, and the first call fails with `no <provider> price for model
 claude-…`. An unknown `PROVIDER`, or no key for it, stops the service at startup.
@@ -369,8 +369,8 @@ deployed and only delivery is left.
 
 ## 10. Listen — server, root
 
-`agent.py` binds `127.0.0.1:8787` by default and stays there: nginx on port 80 fronts it,
-and Cloudflare fronts nginx. Leave `HOST` unset — `HOST=` (empty) binds all interfaces
+`agent.py` binds `127.0.0.1:8787` by default and stays there: nginx fronts it
+with TLS. Leave `HOST` unset — `HOST=` (empty) binds all interfaces
 and exposes the plain `http.server` on 8787.
 
 Run it under systemd from the start — the unit file and `systemctl` need **root**, the
@@ -418,20 +418,18 @@ from a leftover manual run — a port probe cannot, both answer identically.
 supply: systemd does not read `.bashrc`, and without `~/.local/bin` first it would find
 the system `claude`.
 
-### nginx on port 80 — server, root
+### nginx and TLS — server, root
 
-Cloudflare DNS: an A record `HOSTNAME` → `SERVER_IP`, **Proxied**, SSL/TLS mode
-**Flexible** (browser → Cloudflare is HTTPS, Cloudflare → server is plain http on 80).
+DNS first: an A record `HOSTNAME` → `SERVER_IP`. certbot needs it to resolve.
 
 ```bash
 apt install -y nginx
 rm /etc/nginx/sites-enabled/default
 tee /etc/nginx/sites-available/rookery >/dev/null <<'EOF'
-# Cloudflare (SSL mode Flexible) -> here over http. No https redirect: it would loop.
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    server_name _;
+    server_name HOSTNAME;
 
     client_max_body_size 26m;           # GitHub webhooks go up to 25 MB; nginx's default is 1 MB
 
@@ -444,12 +442,12 @@ server {
 EOF
 ln -s /etc/nginx/sites-available/rookery /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
+apt install -y certbot python3-certbot-nginx
+certbot --nginx -d HOSTNAME          # adds the 443 server and the http -> https redirect
 ```
 
-**Never add an https redirect on port 80 while SSL mode is Flexible** — Cloudflare sends
-every request to the origin as http, so it loops. Flexible leaves the Cloudflare → server
-hop in cleartext (cookies, the OAuth code, webhook payloads); moving to Full (strict) with
-a Cloudflare Origin Certificate is in [ai-plans/phase5-deploy.md](ai-plans/phase5-deploy.md).
+The portal's session cookie and the OAuth code cross this hop, so never serve it over
+plain http on a public host. `PUBLIC_URL=https://HOSTNAME` turns on the `Secure` cookie flag.
 
 ### Prove it is reachable before touching GitHub
 
@@ -466,7 +464,6 @@ curl.exe -s -m 5 http://SERVER_IP:8787/                                     # mu
 |---|---|
 | `401` on the POST | **Working.** The HMAC rejected an unsigned body — exactly right. |
 | `502` | nginx is up, the app is not (down, or still in its ~20 s startup `sync()`). |
-| Cloudflare `521` / `522` | Cloudflare cannot reach port 80: nginx is down, or something else holds 80. |
 
 ## 11. Deliver — GitHub
 
@@ -476,8 +473,8 @@ matches, so it only adds red `401`s.
 
 App settings → **Advanced → Recent Deliveries** should show green `204`s (a `ping`
 redelivered after the restart is a quick check); a red `401` means the App's secret does
-not match `WEBHOOK_SECRET` in `.env`; a `403` with a Cloudflare page means **Security →
-Bots → Bot Fight Mode** is blocking GitHub — turn it off.
+not match `WEBHOOK_SECRET` in `.env`. If a CDN or WAF sits in front, make sure its bot
+protection does not block GitHub's deliveries.
 
 Portal: `https://HOSTNAME/` → *Open portal* → *Sign in with GitHub* → back on
 `/portal.html` with your repos listed.
@@ -486,9 +483,6 @@ Now label a **fresh** issue `rookery:trigger` — `enqueue()` ignores any issue 
 carries a `rookery:*` phase label, so the issues you exercised by CLI in step 9 will not
 re-fire (see the gotchas). `job: start` in `journalctl -u rookery -f` means the chain is
 live end to end.
-
-Port 80 answers anyone, not only Cloudflare: restricting it to Cloudflare's IP ranges
-(nginx `allow`/`deny` or `ufw`) is not done yet.
 
 ---
 

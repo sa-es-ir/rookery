@@ -1,252 +1,212 @@
 <p align="center">
-  <img src="rookery.png" alt="Rookery" width="320">
+  <img src="rookery.png" alt="Rookery" width="200">
 </p>
 
-<h1 align="center">Rookery</h1>
+<h3 align="center">Label an issue. Get a draft PR.</h3>
 
 <p align="center">
-  <em>Label an issue. Get a draft PR.</em>
+  A self-hostable GitHub App that turns issues into reviewed, draft pull requests:<br>
+  it plans, asks questions, waits for your <code>approve</code>, then builds it task by task.
 </p>
 
 <p align="center">
-  <img alt="Python 3" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <a href="https://rookery.run"><img alt="Hosted: rookery.run" src="https://img.shields.io/badge/hosted-rookery.run-fd8925"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f">
-  <img alt="Status: phase 1" src="https://img.shields.io/badge/status-phase%201-blue">
+  <img alt="Harness: Claude Code" src="https://img.shields.io/badge/harness-Claude%20Code-6b21ef">
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
+</p>
+
+<p align="center">
+  <img src="rookery-poster-flow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="800">
 </p>
 
 ---
 
-Rookery watches your repos for a `rookery:trigger` label. When one lands it plans
-the issue, asks its questions as issue comments, waits for a human `approve`,
-then implements the plan task by task on a branch and opens a draft PR.
+## Why Rookery
 
-```
-rookery:trigger → planning → awaiting-input ⇄ awaiting-approval → implementing → reviewing → done
-```
+Most coding agents either chat with you in an editor or open a PR you didn't ask for.
+Rookery sits where your team already works — **GitHub issues** — and keeps a human on
+every gate that matters.
 
-<p align="center">
-  <img src="workflow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="800">
-</p>
-
-Two files: `agent.py` (the pipeline) and `web.py` (the webhook, sign-in, the API and the
-portal in `ui/`) — Python stdlib only, plus the `gh`, `openssl` and `claude` CLIs on your
-PATH. The full roadmap lives in
-[ai-plans/github-issue-agent-plan.md](ai-plans/github-issue-agent-plan.md).
-
-## Quick start
-
-```bash
-cp .env.example .env            # WEBHOOK_SECRET, APP_ID, APP_KEY
-python agent.py owner/repo 12   # dry run: plan issue 12 without a webhook
-```
-
-## Requirements
-
-| Needs | Why |
-| --- | --- |
-| `gh`, authenticated | reads issues, posts comments, opens the PR |
-| `claude` CLI | plans and implements |
-| `git` with a global `user.name` / `user.email` | the orchestrator commits |
-| Python 3.10+ | no packages to install |
+- 🏷️ **One label to start.** Add `rookery:trigger` to an issue. That's the whole UI.
+- 🗺️ **Plan first, code second.** You get a written plan and task list as an issue
+  comment. Questions come as comments too. Nothing is built until someone with write
+  access comments `approve`.
+- 🧱 **One task, one fresh session.** Each task runs in its own agent session and gets
+  its own commit, so cost and context stay flat no matter how big the issue is.
+- 🔍 **Reviewed before you see it.** A reviewer agent (plus any checks you configure)
+  reads the finished diff. The findings go in the PR body.
+- 🛡️ **The agent never publishes.** It cannot `git push` or call `gh`. The orchestrator
+  commits, pushes to a feature branch and opens a **draft** PR. Merging is always yours.
+- 🔁 **Resumable.** A failed task stops with everything before it committed. Fix it,
+  comment `approve`, and it picks up at the same task.
+- 🧠 **Learns your repo.** Short per-repo notes carry lessons from one run to the next.
+- 💸 **Hard caps.** Per-repo daily limits on calls and dollars, checked before every call.
+- 🔑 **Bring your own model key.** Claude, DeepSeek or GLM — see [providers](#model-providers).
+- 🪶 **Tiny.** Two Python files, stdlib only. No database server, no queue, no framework.
 
 ## How it works
 
-### This repo is the orchestrator, never the target
-
-Rookery never runs inside the repo it is working on. It works on every repo
-the GitHub App is installed on: at startup it lists them, clones each into
-`work/repos/<owner>_<repo>` and uses its default branch as the base. Adding a repo
-to the installation makes it live, and removing it deletes the clone, with no
-restart needed. There is no repo list to maintain.
-
-Each issue gets its own `git worktree` under `work/<owner>_<repo>/issue-<n>` on
-branch `feature/issue-<n>`, so two repos can share an issue number without
-colliding. Your own checkouts are never touched.
-
-### State lives in the target repo
-
 ```
-agent-plans/<n>/
-  plan.md        # the approved plan
-  tasks.md       # - [ ] checklist — the ORCHESTRATOR ticks, never the agent
-  decisions.md   # append-only; the agent writes, the next task reads
+ label ─▶ plan ─▶ questions? ─▶ approve ─▶ task 1 … task N ─▶ checks ─▶ review ─▶ draft PR
+          └──── issue comments ────┘        (one commit each)
 ```
 
-All three are committed and pushed with the change, so they land in the PR.
-Nothing persists locally between runs.
+Follow the issue's `rookery:*` label to see where it is:
 
-### One task, one session
+| Label                       | Meaning                                                        |
+| --------------------------- | -------------------------------------------------------------- |
+| `rookery:planning`          | writing the plan                                               |
+| `rookery:awaiting-input`    | a question is in the comments — answer it                      |
+| `rookery:awaiting-approval` | read the plan, then comment `approve` / `lgtm` / `go ahead`    |
+| `rookery:implementing`      | working through the task list                                  |
+| `rookery:reviewing`         | the reviewer is reading the finished diff                      |
+| `rookery:done`              | the draft PR is open and the review is clean                   |
+| `rookery:changes-wanted`    | the draft PR is open; the reviewer or a check wants changes    |
+| `rookery:error`             | the reason is the last comment; fix it, then `approve` resumes |
 
-After approval the orchestrator loops: take the first unticked task → start a
-**fresh Claude session** for that task alone → require `STATUS: task-done` →
-tick the checkbox, `git commit`, next.
+The plan, the task list and a `decisions.md` log live in `agent-plans/<n>/` in your repo
+and ship with the PR, so reviewers see _why_, not only _what_.
 
-Fresh sessions per task keep context — and cost — flat no matter how large the
-issue is. `decisions.md` is the only memory that crosses between them.
+### Also on request: PR reviews
 
-- More than **15 tasks** is an error: split the issue.
-- A failed task stops at `rookery:error` with everything before it already
-  committed. Fix the plan or the code, comment `approve` again, and the loop
-  resumes at that same task.
+Mention `@rookery-agent` on any open PR (or add the `rookery:pr-review` label, or request
+a review from it) and Rookery posts one advisory review: a verdict, a findings table and
+details. Add a note after the mention to steer it — `@rookery-agent check the migration`.
 
-### Two named roles
+## Model providers
 
-`agents/*.md` defines two, passed to the CLI as plugin agents (`--agent rk:<name>`):
+The agent harness is always the [Claude Code](https://docs.claude.com/en/docs/claude-code)
+CLI, so every safety rule holds whichever model is behind it. The model is chosen per
+GitHub owner: an owner's own key, or the operator's default.
 
-| Role | Runs | Can it write? |
-| --- | --- | --- |
-| **planmaker** | the planning phase | `agent-plans/<n>/` only — anything else it touches is reverted before the plan is posted, every time `plan()` is called |
-| **reviewer** | once, after the last task, before the push | no — it reports, it never fixes |
+| Provider               | Status       | Models behind the agent                    |
+| ---------------------- | ------------ | ------------------------------------------ |
+| **Claude** (CLI login) | ✅ Supported | Opus plans and reviews, Sonnet builds      |
+| **Anthropic API key**  | ✅ Supported | Same Claude models, billed to your key     |
+| **DeepSeek**           | ✅ Supported | DeepSeek V4 Pro / Flash                    |
+| **Z.ai (GLM)**         | ✅ Supported | GLM 5.3 / GLM 5.3 Flash                    |
+| **OpenRouter**         | 🧪 Next      | GPT and Gemini models, after quality tests |
+| **Claude on Bedrock**  | 📋 Planned   | Claude through your own AWS account        |
+| **Codex CLI**          | 🔭 Later     | OpenAI models in their native harness      |
 
-Implementation tasks run as *no* agent: the plain harness with the deny rules
-is already the right shape for them.
+Owners add keys on the portal's **Keys** page. Keys are encrypted at rest, never shown
+again (only the last 4 characters), and the daily caps still apply.
+More: [docs/keys.md](docs/keys.md).
 
-The reviewer is **advisory**. Its findings go into the PR body under
-`## Review`, and the draft PR opens whatever the verdict — work is never left
-stranded in a local worktree. A `changes-needed` verdict only lands
-`rookery:changes-wanted` so somebody looks — not `rookery:error`, since nothing
-failed. Blocking and self-fixing variants are specced but deliberately unbuilt.
+## Get started
 
-Each role sets its model in its frontmatter (`model: opus`); tasks run on sonnet.
+### Hosted
 
-### Per-repo workflow
+Open **[rookery.run](https://rookery.run)**, sign in with GitHub, install the App on a
+repo, add your model key, and label an issue. Guide:
+[docs/getting-started.md](docs/getting-started.md).
 
-A repo steers its runs from its **base branch** — never from the branch the agent
-is editing, so a change takes effect only once a human merges it:
+### Self-host
 
-- `CLAUDE.md` (root) and `.claude/skills/` work as they do for the repo's own
-  developers. Nested `CLAUDE.md` files are not read.
-- `.rookery/skills/<name>/SKILL.md` are skills for the bot only; they win over a
-  `.claude/skills` skill, which wins over the built-in catalog
-  ([skills/](skills/README.md)), of the same name.
-- `.rookery/workflow.json` picks the agent, the skills and extra instructions
-  per slot. Anything left out keeps the default: today's pipeline, no skills.
+You need Python 3.10+, `git`, `openssl`, the [`gh`](https://cli.github.com) CLI and the
+[`claude`](https://docs.claude.com/en/docs/claude-code) CLI on your PATH, plus your own
+GitHub App. No packages to install.
 
-- `.rookery/agents/<name>.md` are the repo's own agents, in the same format as
-  `agents/*.md`. One named `planmaker` or `reviewer` replaces that role. Frontmatter
-  may carry only `name`, `description`, `tools`, `model` and `skills`.
-- **Owner defaults:** an `<owner>/.rookery` repo with the App installed on it holds
-  `workflow.json`, `agents/` and `skills/` at its root, for every repo of that owner.
-  A repo's own config wins over it, key by key in a slot; a repo's own `after` replaces
-  the owner's whole list. It is read from its own base branch, like the rest.
+```bash
+git clone https://github.com/sa-es-ir/rookery && cd rookery
+cp .env.example .env               # WEBHOOK_SECRET, APP_ID, APP_KEY, ...
+python agent.py owner/repo 12      # dry run: plan issue 12, no webhook needed
+python agent.py                    # webhook + portal on http://127.0.0.1:8787
+```
+
+For local development, forward the App's webhook with
+`npx smee-client --url https://smee.io/<channel> --target http://127.0.0.1:8787/`.
+For a real server, follow [docs/self-hosting.md](docs/self-hosting.md) and the full
+Linux guide in [DEPLOY.md](DEPLOY.md).
+
+## Make it yours
+
+A repo steers its own runs from files on its **base branch** — never from the branch the
+agent edits, so a config change takes effect only after a human merges it.
+
+- **`CLAUDE.md`** at the root is read like it is for your own developers.
+- **`.rookery/workflow.json`** picks the agent, skills and instructions for each step, and
+  adds up to 5 `after` steps (checks or writers) between the last task and the review.
+- **`.rookery/agents/*.md`** and **`.rookery/skills/`** add your own agents and skills, or
+  replace the built-in `planmaker` / `reviewer`.
+- **`<owner>/.rookery`** holds defaults for every repo of an owner.
 
 ```json
 {
-  "plan":   { "skills": ["repo-recon"], "instructions": "Every schema change gets its own task." },
-  "task":   { "skills": ["verification-before-completion"] },
-  "after":  [
+  "plan": {
+    "skills": ["repo-recon"],
+    "instructions": "Every schema change gets its own task."
+  },
+  "task": { "skills": ["verification-before-completion"] },
+  "after": [
     { "agent": "reviewer", "mode": "check", "skills": ["security-review"] },
-    { "agent": "docs",     "mode": "write", "skills": ["changelog"] }
-  ],
-  "review": { "agent": "reviewer" }
+    { "agent": "docs", "mode": "write", "skills": ["changelog"] }
+  ]
 }
 ```
 
-`after` holds up to 5 steps that run in order between the last task and the review,
-each with its own agent:
-
-| Mode | May edit | Replies | Then |
-| --- | --- | --- | --- |
-| `check` | no. Rookery reverts whatever it leaves and flags the run | `check-ok` / `changes-needed` | findings (JSON, rendered by Rookery as a verdict and a table) go into the PR body under `## 🤖 <Agent> agent`; `changes-needed` sets `rookery:changes-wanted` but never blocks the push. Runs again on every `approve` |
-| `write` | yes | `step-done` / `failed` | Rookery commits `#<n> step <agent>`; `approve` again skips a step whose commit is on the branch. `failed` stops the run like a failed task |
-
-A skill runs only when a slot names it. An invalid file, or a name that matches
-no skill or agent, fails the run at start with a comment — Rookery never quietly
-falls back to the default. The draft PR's footer names the base commit the run
-read all of this at, and the steps it ran. A PR whose branch changes `.rookery/`,
-`.claude/` or the root `CLAUDE.md` opens with a warning that it changes agent
-configuration.
-
-## Setup
-
-1. Fill in `.env`.
-2. Install the GitHub App on the target repos.
-3. Point the App's webhook (App settings → *Webhook URL*) at
-   `https://smee.io/<your-channel>`, with the same secret. There is no per-repo
-   webhook.
-4. Branch-protect `main`. The code refuses to push there; protection is the
-   backstop, not the primary guard.
-5. Run the server and point smee at it:
-
-   ```bash
-   python agent.py
-   npx smee-client --url https://smee.io/<your-channel> --target http://127.0.0.1:8787/
-   ```
-
-Labels are created when a repo is onboarded.
-
-## Using it
-
-Add the `rookery:trigger` label to an issue, then follow the `rookery:*` label:
-
-| Label | Meaning |
-| --- | --- |
-| `rookery:planning` | writing the plan |
-| `rookery:awaiting-input` | a question is in the comments — answer it |
-| `rookery:awaiting-approval` | comment `approve` / `lgtm` / `go ahead` |
-| `rookery:implementing` | working through `tasks.md` |
-| `rookery:reviewing` | the reviewer is reading the finished diff |
-| `rookery:done` | draft PR is open, review clean |
-| `rookery:changes-wanted` | draft PR is open, the reviewer or a check wants changes; `approve` re-runs them |
-| `rookery:error` | the exception is the last comment; fix, then `approve` resumes |
-
-Only people with write access to the repo can move an issue along, and approval is a regex
-(`agent.py:APPROVE`) — never an LLM judgement. The agent itself is blocked from
-`git push` and `gh`; it never publishes.
-
-Each repo gets 30 `claude` calls and $20 a day (UTC), recorded in `$WORKSPACE/rookery.db`;
-override with `RUN_CAP`/`USD_CAP` in `.env`. A `PAUSED` file next to `agent.py` stops every
-new call. Hitting either comments on the issue and sets `rookery:error`.
-
-## Testing without a webhook
-
-The dry-run forms go through the same `handle()` as the webhook — only the
-transport differs. Use them instead of standing up smee:
-
-```bash
-python agent.py owner/repo 12              # plan the issue, as if just labelled
-python agent.py owner/repo 12 approve      # run the task loop, push, open the PR
-python agent.py owner/repo 12 use sqlite   # anything else is fed back as a reply
-python test_agent.py                       # the gates, no network
-```
+A bad config fails the run at start with a comment — Rookery never quietly falls back.
+The built-in skill catalog is in [skills/](skills/README.md); the full reference is
+[docs/configuration.md](docs/configuration.md) and [docs/workflow.md](docs/workflow.md).
 
 ## The portal
 
-`python agent.py` also serves the landing page at `PUBLIC_URL` (default
-`http://127.0.0.1:8787/`) and a small control plane at `PUBLIC_URL/portal.html`. Sign in with GitHub — the App's own OAuth, so set `CLIENT_ID` /
-`CLIENT_SECRET` from the App's settings and add `PUBLIC_URL/auth/callback` as its callback
-URL. You see the repos of your own installations of the App, and for each:
+`python agent.py` also serves a small control plane. Sign in with GitHub and, for each
+repo you installed the App on, see today's spend against the caps, every run and where it
+stopped (_"Failed at task 9 of 12"_), each step with its cost, cancel a running job, and
+view or propose workflow changes — as a pull request, never a direct write.
 
-- today's runs and dollars against the caps;
-- every run (plan, reply, implementation), and where it is or where it stopped —
-  *"Failed at task 9 of 12"* — read from the run log in `rookery.db`, not the journal;
-- a run's log step by step: tasks, each `claude` call with its status and cost, commits,
-  push, PR, the error;
-- **Cancel** on a running job (write access needed): the `claude` call is killed and the
-  issue gets the error comment and `rookery:error`, like any failure. `approve` resumes it.
-- **Workflow**: the pipeline the repo's next issue gets — agent, model, skills and
-  instructions per slot, read from `.rookery/workflow.json` on base just now and checked
-  the way a job checks it, so a broken config shows the error the job would fail with.
-  **Propose a change** edits `.rookery/workflow.json` and `.rookery/agents/*.md` (on
-  `<owner>/.rookery`: the root's, the owner defaults) and opens a pull request from the
-  App, after running the same checks on it. Write access needed; nothing changes until
-  someone merges it.
-- **Skills** (sidebar): the built-in catalog, with each skill's slot and pinned source.
-  With a repo picked, a plan/task/review skill has **Add to …**, which puts it in that
-  slot in the editor.
+There is deliberately **no approve button**: approval stays an `approve` comment on the
+issue, from someone with write access.
 
-There is no approve button. Approval stays an `approve` comment on the issue.
+## Safety, in short
 
-Sessions are server-side and last 8 hours. Your GitHub token is used once at sign-in to
-list your installations and is not kept. Over the internet, put it behind a TLS reverse
-proxy and set `PUBLIC_URL=https://…` (that also turns on the `Secure` cookie flag).
+- Approval is a regex on a comment from a user with write access — never an LLM judgement.
+- The agent is denied `git push` and `gh`; it runs with no MCP servers and loads no
+  hooks or settings from the repo it edits.
+- Planning can write only `agent-plans/<n>/`; anything else is reverted.
+- Never pushes to the base branch; the GitHub token never enters the agent's environment.
+- Caps (default 30 calls and $20 per repo per UTC day) are checked before every call; a
+  `PAUSED` file next to `agent.py` stops all new calls.
 
-`REPOS_ONLY=owner/a,owner/b` limits an instance to those repos — for a local copy next to
-a server on the same App.
+Details: [docs/safety.md](docs/safety.md).
 
-## Not built yet
+## Roadmap
 
-Phase 6 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md): a second harness.
+- [x] GitHub App, onboarding without a restart, per-repo approval and caps
+- [x] Parallel repos, portal, run log, cancel
+- [x] Per-repo workflows, custom agents and skills, owner defaults
+- [x] PR reviews on request, repo memory
+- [x] Multiple model providers and bring-your-own-key
+- [ ] OpenRouter (GPT, Gemini) — after tool-use quality tests
+- [ ] Claude on Bedrock — when an owner asks
+- [ ] A second harness (Codex CLI) — on demand
 
-One worker per repo: repos run in parallel, but within a repo it is one job at a
-time — deliberately. A long implementation blocks the other issues of *that* repo.
+## Development
+
+```bash
+python test_agent.py   # the whole suite: plain asserts, no framework, no network
+```
+
+The dry-run forms go through the same code path as the webhook — use them instead of
+standing up smee:
+
+```bash
+python agent.py owner/repo 12              # plan the issue, as if just labelled
+python agent.py owner/repo 12 approve      # run the task loop, push, open the draft PR
+python agent.py owner/repo 12 use sqlite   # anything else is fed back as a reply
+python agent.py owner/repo 12 @rookery-agent check the migration   # review PR 12
+```
+
+`agent.py` is the pipeline; `web.py` is the webhook, sign-in, API and the portal in `ui/`.
+[CLAUDE.md](CLAUDE.md) documents the architecture and the invariants that must not be
+softened. Issues and PRs are welcome.
+
+## License
+
+Rookery is licensed under the [GNU Affero General Public License v3.0](LICENSE). You can
+use, modify and self-host it freely. If you run a modified version as a network service,
+you must make your source available to its users. The skills adapted from
+[superpowers](skills/LICENSE-superpowers) keep their MIT license.

@@ -4,3 +4,5 @@ work/
 __pycache__/
 *.pem
 .playwright-mcp/
+# internal plans, notes and deploy logs: not for the public repo
+ai-plans/

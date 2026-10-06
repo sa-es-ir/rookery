@@ -153,7 +153,7 @@ the rest of the comment is the note), the `REVIEW_LABEL` label, or a review requ
 `AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
 on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
 no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
-comment, refuses forks (trade-offs #14) and closed PRs, fetches `refs/pull/<n>/head` into a
+comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
@@ -162,7 +162,7 @@ collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `sa
 `high` finding, fails the job. The implement-flow `reviewer` uses the same JSON and renderer
 (`REVIEW_VERDICTS`: `review-ok` / `changes-needed`, a `###` header under `## 🤖 Reviewer agent`);
 the `after` checks too (`CHECK_VERDICTS`: `check-ok` / `changes-needed`, under the step's
-header). A bad reply fails the job before the push, like a missing marker (trade-offs #20).
+header). A bad reply fails the job before the push, like a missing marker.
 A note made only of `ASKING` words ("review again", "PTAL") is no note.
 `PR_REVIEW` carries the worktree's absolute path and `pr_diff()`: the stat, then the diff
 without lockfiles, cut at a file boundary before `DIFF_CAP` with the rest named for `Read`.
@@ -230,8 +230,8 @@ the MAC before it decrypts. The first key added is selected. No `KEY_SECRET`: ad
 a selected key fails its owner's jobs. `pin()`'s first line is `provider_for()`, so a `NoKey`
 fails start, reply, implement and pr-review jobs before any fetch, label or `claude` call;
 `handle()` posts `NO_KEY` (issue, with `rookery:error`) or `NO_KEY_PR` (`gh pr comment`), the
-portal link not in a code block. Caps apply on an owner's key too. Plan and spikes:
-`ai-plans/providers.md`, `ai-plans/byok.md`; trade-offs #22–#24.
+portal link not in a code block. Caps apply on an owner's key too. Known limits: an owner's key is in the agent's process env
+while it runs, and own keys are for personal accounts only (orgs run on the operator's choice).
 
 **GitHub auth is a GitHub App, not a login.** `jwt()` signs an RS256 JWT with `openssl`
 (`APP_ID`, `APP_KEY` from `.env`); `token(repo)` exchanges it for an installation token,
@@ -250,8 +250,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   and add the rewritten form of any new rule.
 - **No MCP in any `claude` call: `--strict-mcp-config`, no `--mcp-config`.** Without it
   the target repo's `.mcp.json` spawns its servers on the box, and the claude.ai
-  connectors of the account the CLI is logged in with reach every tenant's agent
-  (spike S4e in `ai-plans/skills-and-workflows.md`).
+  connectors of the account the CLI is logged in with reach every tenant's agent (verified by a spike).
 - **What steers the agent is read from base, once per job, never the worktree.** Every
   plan/reply/implement job runs `pin()` first: `git fetch origin <base>`, then root
   `CLAUDE.md` (→ `--append-system-prompt`, over 64 KB fails the job), `.rookery/workflow.json`,
@@ -302,7 +301,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   the memory call has no tools and an empty cwd. A memory job never comments or labels:
   its failure must not look like a failed run. The notes are advisory to the agent
   (`MEMORY_NOTE`: code and `CLAUDE.md` win), and any agent on the box can edit any
-  repo's file (trade-offs #15).
+  repo's file (an accepted limit).
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a
   regex on issue comments. Visibility comes from the user's own installations; anything
   that steers a repo (cancel, a config PR) needs `can_write()`. Someone else's run or repo
@@ -351,9 +350,9 @@ Stdlib only; adding a dependency changes what this project is. Prompts are modul
 their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
-Phases 1–5 of [ai-plans/PRD-Phases.md](ai-plans/PRD-Phases.md) (GitHub App, onboarding
+Phases 1–5 (GitHub App, onboarding
 without a restart, approval and caps per repo, parallel repos, portal/API/run log) are
-built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 is
-not built.
+built and deployed (https://rookery.run, see [DEPLOY.md](DEPLOY.md)); phase 6 (a second
+harness, e.g. the Codex CLI) is not built.
 
 For designing UI pages you must use @DESIGN.md file and follow the rules/patterns there.

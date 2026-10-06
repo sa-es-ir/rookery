@@ -48,7 +48,7 @@ WORKSPACE = Path(os.environ.get("WORKSPACE", HERE / "work"))
 # the `claude` CLI must use the claude.ai login; a stale key in the env fails it.
 # Another backend's key reaches it only through provider_env().
 os.environ.pop("ANTHROPIC_API_KEY", None)
-# Backends behind the `claude` CLI (ai-plans/providers.md). "claude" is its own /login: no
+# Backends behind the `claude` CLI. "claude" is its own /login: no
 # overrides at all. Others: an Anthropic-compatible endpoint, the .env var holding its key,
 # what the CLI's aliases (agents' `model: opus`, tasks' `--model sonnet`, memory's haiku)
 # resolve to there, and USD per million tokens (input, cache hit, output) at peak, so
@@ -1417,7 +1417,7 @@ def reviewed_at(repo, n, head):
 
 def review_pr(c, job):
     """One advisory review on PR c.n, posted as a review of type comment. Any PR of the repo,
-    not only Rookery's; never a fork's (trade-offs.md #14)."""
+    not only Rookery's; never a fork's."""
     # "queued and running": on the mention, or on the PR itself for a label or review request.
     # Cosmetic, so never fatal.
     on = f"issues/comments/{job['comment']}" if job.get("comment") else f"issues/{c.n}"
@@ -1463,7 +1463,7 @@ REVIEW_VERDICTS = {"review-ok": "🟢 Looks good", "changes-needed": "🔴 Chang
 CHECK_VERDICTS = {"check-ok": "🟢 Looks good", "changes-needed": "🔴 Changes needed"}
 SEVERITY = {"high": "🔴", "medium": "🟡", "low": "⚪"}
 REVIEW_JSON = re.compile(r"<review>\s*(?:```(?:json)?\s*)?(.*?)\s*(?:```\s*)?</review>", re.S)
-# cut, never failed: the review is already paid for (ai-plans/pr-review-format.md)
+# cut, never failed: the review is already paid for
 REVIEW_CAPS = {"findings": 10, "title": 150, "where": 120, "summary": 600, "answer": 600, "detail": 800}
 
 

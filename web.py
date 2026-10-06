@@ -287,7 +287,7 @@ def admin_view():
 
 def can_manage(login, owner):
     """An owner's keys are that account's own: personal accounts only, an org runs on the
-    operator's choice (ai-plans/byok.md §9.1). `owner` as REPOS spells it."""
+    operator's choice. `owner` as REPOS spells it."""
     return login.lower() == owner.lower() and any(r.split("/")[0] == owner for r in agent.REPOS)
 
 
