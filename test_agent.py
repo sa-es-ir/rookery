@@ -735,6 +735,8 @@ assert "`hooks`" in fm_error("---\n  name: x\n  hooks:\n    Stop: []\n---\n"), "
 assert "`mcpServers`" in fm_error("---\nname: x\nmcpServers: {}\n---\n", agent.AGENT_KEYS)
 assert "`permissionMode`" in fm_error("---\nname: x\npermissionMode: bypassPermissions\n---\n", agent.AGENT_KEYS)
 assert "`model`" in fm_error("---\nname: x\nmodel: gpt-5\n---\n", agent.AGENT_KEYS)
+assert fm_error("---\nname: x\nargument-hint: [name]\ndisable-model-invocation: true\n---\n") is None
+assert "`context`" in fm_error("---\nname: x\ncontext: fork\n---\n")
 assert "filename" in fm_error("---\nname: y\n---\n", agent.AGENT_KEYS)
 assert fm_error("---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n", agent.AGENT_KEYS) is None
 

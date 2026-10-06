@@ -258,7 +258,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   `agents/`, all `rk:<name>`, removed by `finish()`, cleared at startup) at that sha, logged as
   the `base` step. `--setting-sources user` keeps the CLI from loading them, or the repo's
   hooks, from the worktree the agent edits. A skill's frontmatter may only carry `name`,
-  `description`, `allowed-tools`; an agent's `name`, `description`, `tools`, `model`,
+  `description`, `allowed-tools`, `argument-hint`, `disable-model-invocation`; an agent's `name`, `description`, `tools`, `model`,
   `skills`: `hooks:` would run shell on the box. An invalid workflow, a name off `NAME`, or a
   slot naming a skill or agent that is not in the plugin fails the job at start — never a
   silent fallback, since `--agent` ignores an unknown name without an error.

@@ -87,7 +87,7 @@ If two skills have the same name, Rookery uses the first one that it finds in th
 3. The owner defaults (see below)
 4. The catalog of Rookery
 
-The frontmatter of a skill can have only these keys: `name`, `description` and `allowed-tools`.
+The frontmatter of a skill can have only these keys: `name`, `description`, `allowed-tools`, `argument-hint` and `disable-model-invocation`.
 
 ### Skill catalog
 

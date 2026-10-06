@@ -156,8 +156,9 @@ CLAUDE_MD_MAX = 64 * 1024
 # every skill and agent name: it is rendered into prompts ("Use the `rk:x` skill") and --agent
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 # frontmatter may say no more than this — `hooks:` would run shell here, `mcpServers:`
-# reach out from here, `permissionMode:` loosen what the deny rules hold
-SKILL_KEYS = ("name", "description", "allowed-tools")
+# reach out from here, `permissionMode:` loosen what the deny rules hold. `argument-hint`
+# only labels a skill, `disable-model-invocation` only keeps the model from calling it.
+SKILL_KEYS = ("name", "description", "allowed-tools", "argument-hint", "disable-model-invocation")
 AGENT_KEYS = ("name", "description", "tools", "model", "skills")
 MODELS = ("haiku", "sonnet", "opus")
 # the built-in workflow: today's pipeline, no skills. Whatever .rookery/workflow.json on
