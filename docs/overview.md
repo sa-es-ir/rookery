@@ -32,6 +32,18 @@ The diagram plays the loop. Select a step to stop it and see what the step does.
 - It does not start work without an `approve` comment from a person with write access.
 - It does not use an LLM to decide if a comment is an approval. A fixed pattern decides.
 
+## Repo stats
+
+The portal opens on the **Stats** tab of a repository. Select 30, 90 or 365 days. The tab shows:
+
+- Commits, authors and changed lines on the base branch. Merge commits are not counted. Rookery reads them from its clone of the repository.
+- The commits for each week (each month for 365 days), the top authors and the files that changed most.
+- What Rookery did: runs, planned issues, pull requests, reviews and cost.
+- The bot share: the part of the merged pull requests that Rookery opened.
+- The stars, forks, open issues and languages from GitHub.
+
+Rookery shows author names only. It does not show email addresses. The numbers can be up to 10 minutes old.
+
 ## Pages
 
 - [Getting started](getting-started.md): install the App and run your first issue.

@@ -108,11 +108,53 @@ main{min-width:0}
   font:400 12px/1.6 var(--mono);color:#ffb3a5;white-space:pre-wrap;word-break:break-word;
   box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 
-/* runs | workflow — pill tag buttons; the view is read-only, so no CTA anywhere on it */
-.switch{display:flex;gap:6px}
-.switch a{border:1px solid var(--smoke);border-radius:8px;padding:5px 16px;font-size:14px;color:var(--fog)}
-.switch a:hover{color:#fff}
-.switch a[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
+/* stats | runs | workflow, and the stats window — pill tag buttons; read-only, so no CTA on them */
+.switch,.days{display:flex;gap:6px}
+.switch a,.days button{border:1px solid var(--smoke);border-radius:8px;padding:5px 16px;font-size:14px;color:var(--fog);
+  background:transparent;cursor:pointer}
+.switch a:hover,.days button:hover{color:#fff}
+.switch a[aria-current=true],.days button[aria-current=true]{background:rgba(163,163,163,.2);border-color:var(--rail);color:#fff}
+
+/* stats: the repo's latest run, then tiles, the trend, rankings, Rookery's own numbers, GitHub's */
+.latest{display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap;box-shadow:var(--inset);border-radius:24px;
+  padding:14px 22px;margin-bottom:28px;font-size:14px}
+.latest .run-at{display:flex;align-items:center;gap:12px;min-width:0;flex:1 1 320px;color:#fff}
+.latest .run-at small{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.latest .link{margin-left:auto;font-size:14px}
+#numbers{display:flex;flex-direction:column;gap:24px}
+.tiles{display:grid;gap:14px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.tile{background:var(--surface);border-radius:16px;padding:20px 24px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tile b{font-size:48px;font-weight:300;line-height:.94;letter-spacing:-.86px;color:#fff}
+.tile small{font-size:13px;color:var(--fog);font-weight:300}
+.panel{background:var(--surface);border-radius:16px;padding:24px 28px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel h3{font-size:20px;font-weight:400;letter-spacing:-.17px;display:flex;align-items:baseline;gap:12px}
+.panel h3 small{margin-left:auto;font-size:13px;color:var(--fog);font-weight:300;letter-spacing:0}
+.panel .note{font-size:14px;color:var(--fog);font-weight:300}
+.chart{display:block;width:100%;height:auto;overflow:visible}
+.chart .base{stroke:var(--smoke);stroke-width:1}
+.chart .hit{fill:transparent}
+.chart .slot:hover .hit{fill:rgba(255,255,255,.04)}
+.axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;letter-spacing:0;color:var(--fog)}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:24px}
+.rank{display:flex;flex-direction:column;gap:12px}
+.rank li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;font-size:14px}
+.rank .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ash)}
+.rank .name.mono{font-size:12px}
+.rank .val{font-family:var(--mono);font-size:12px;letter-spacing:0;color:var(--fog)}
+.rank .bar{height:3px}
+.nums{display:flex;gap:10px 24px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--fog)}
+.nums b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
+.nums .chips{display:inline-flex;gap:6px;flex-wrap:wrap;vertical-align:middle;margin-left:6px}
+
+/* no repos: a Glowing Inset Card with a stronger orange glow; its Ember CTA installs the App */
+.warn{border-radius:24px;padding:32px 36px;max-width:680px;display:flex;flex-direction:column;gap:14px;align-items:flex-start;
+  box-shadow:rgba(253,137,37,.55) 0 0 0 1px inset,rgba(255,142,93,.6) 0 -2px 0 0 inset;
+  background:radial-gradient(126.99% 234.27% at 10.15% 142.35%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%)}
+.warn .lbl{background:rgba(253,137,37,.14);border-color:rgb(253,137,37);color:#ffd2ad}
+.warn h2{font-size:24px;letter-spacing:-.17px;line-height:1.2}
+.warn p{color:var(--ash);font-weight:300;max-width:60ch}
+.warn .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
 
 /* workflow: the shared diagram (flow.js, styles.css) plus what only this view shows */
 .pr-head{margin:56px 0 20px}   /* the PR review flow, under the issue flow */
@@ -222,6 +264,16 @@ main{min-width:0}
   .edit,.mem{padding:20px}
   .edit .row .cta{margin-left:0;width:100%}
   .keyc .add{grid-template-columns:1fr}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{padding:16px}
+  .tile b{font-size:32px;letter-spacing:-.5px}
+  .panel{padding:20px}
+  .latest{padding:14px 18px}
+  .latest .run-at{flex-wrap:wrap}
+  .latest .run-at small{flex-basis:100%}
+  .top:has(.switch:not([hidden])) h1{display:none}   /* the repo dropdown above already names it */
+  .latest .link{margin-left:0}
+  .warn{padding:24px 20px}
 }
 [hidden]{display:none!important}
 </style>
@@ -252,15 +304,20 @@ main{min-width:0}
   <main>
     <div class="top">
       <h1 id="title">Runs</h1>
-      <nav class="switch" id="switch" hidden><a href="#">Runs</a><a href="#workflow">Workflow</a></nav>
+      <nav class="switch" id="switch" hidden><a href="#stats">Stats</a><a href="#runs">Runs</a><a href="#workflow">Workflow</a></nav>
       <div class="right">
         <span class="toast" id="toast" role="status"></span>
         <span class="lbl err" id="paused" hidden title="The operator's PAUSED file is present">paused</span>
       </div>
     </div>
 
+    <section class="view" id="stats" hidden>
+      <div class="latest" id="latest"></div>
+      <div id="numbers"></div>
+    </section>
+
     <section class="view" id="list">
-      <p class="intro">Every plan, reply and implementation Rookery ran on your repos, newest first.
+      <p class="intro" id="list-intro">Every plan, reply and implementation Rookery ran on your repos, newest first.
         A run's log is written as it happens, so a failure shows the task it stopped at.</p>
       <div class="runs" id="runs"></div>
     </section>
@@ -301,7 +358,7 @@ main{min-width:0}
 <script>
 // ponytail: polls every 4s while the tab is visible; a push channel is not worth it at this size.
 const $ = s => document.querySelector(s);
-const state = {me: null, repo: null, run: null};
+const state = {me: null, repo: null, run: null, repos: null, days: 90};
 
 /* DOM from data. Issue titles and errors are user-written: text only, never innerHTML. */
 function h(tag, attrs, ...kids){
@@ -358,6 +415,7 @@ const title = r => r.title || r.repo + '#' + r.n;
 /* --- sidebar: repos and today's usage against the caps --- */
 async function repos(){
   const d = await call('/api/repos');
+  state.repos = d.repos;
   $('#paused').hidden = !d.paused;
   const nav = $('#repos');
   nav.replaceChildren(
@@ -388,10 +446,32 @@ async function repos(){
     : sel.value === '#refresh' ? location.href = '/auth/login' : pick(sel.value || null);
 }
 
-function pick(repo){ state.repo = repo; state.run = null; show(); }
+// the last pick, '' for All repos. Only a convenience: storage can be off or throw.
+const saved = {get(){ try { return localStorage.getItem('rookery.repo'); } catch { return null; } },
+  set(v){ try { localStorage.setItem('rookery.repo', v); } catch {} }};
+
+// a repo opens on its Stats tab, or stays on the repo tab already open
+function pick(repo){
+  state.repo = repo; state.run = null; saved.set(repo || '');
+  const tab = ['#stats', '#runs', '#workflow'].includes(location.hash) ? location.hash : '#stats';
+  history.pushState(null, '', repo ? tab : location.pathname);
+  show();
+}
 
 /* --- runs --- */
+// no repo at all: the main area says why, and how to add one (the sidebar keeps its hint)
+function noRepos(){
+  return h('div', {class: 'warn'}, h('span', {class: 'lbl'}, '⚠ No repos'),
+    h('h2', null, 'Rookery isn\'t on any repo yet.'),
+    h('p', null, 'Add one to the GitHub App to start. Then label an issue rookery:trigger, and its runs show here.'),
+    h('div', {class: 'row'},
+      h('a', {class: 'cta', href: 'https://github.com/apps/' + state.me.app + '/installations/new'}, 'Install Rookery on a repo'),
+      h('a', {class: 'ghost', href: '/auth/login'}, 'I\'ve added one — refresh')));
+}
+
 async function list(){
+  $('#list-intro').hidden = state.repos && !state.repos.length;
+  if (state.repos && !state.repos.length) return $('#runs').replaceChildren(noRepos());
   const d = await call('/api/runs' + (state.repo ? '?repo=' + encodeURIComponent(state.repo) : ''));
   const live = new Set(d.runs.filter(r => r.status === 'running').map(r => r.repo));
   document.querySelectorAll('.repos .dot[data-repo]').forEach(e => e.classList.toggle('on', live.has(e.dataset.repo)));
@@ -455,6 +535,104 @@ async function one(){
         h('span', null, 'Claude calls ', h('b', null, String(r.steps.filter(s => s.what === 'claude').length))))),
     r.steps.length ? h('div', {class: 'steps'}, r.steps.map(stepView))
       : h('p', {class: 'empty'}, 'Nothing logged yet.'));
+}
+
+/* --- one repo's stats. The GET fetches and reads git log, so it loads on show() and on a window
+   pick, not on the 4s poll; only the latest-run strip polls. Author names and file paths came
+   from the repo: h() only. --- */
+async function latest(){
+  const repo = state.repo, d = await call('/api/runs?repo=' + encodeURIComponent(repo));
+  if (state.repo !== repo || state.view !== 'stats') return;
+  const r = d.runs[0];
+  $('#latest').replaceChildren(r
+    ? h('a', {class: 'run-at', href: '#run/' + r.id}, h('span', {class: 'lbl ' + (LBL[r.status] || '')}, r.status),
+        h('span', null, where(r)), h('small', null, title(r) + ' · ' + ACT[r.act] + ' · ' + day(r.started)))
+    : h('span', {class: 'run-at'}, h('small', null, 'No runs on this repo yet. Label an issue rookery:trigger to start one.')),
+    h('a', {class: 'link', href: '#runs'}, 'All runs →'));
+}
+
+const num = n => n == null ? '—' : new Intl.NumberFormat([], {notation: 'compact', maximumFractionDigits: 1}).format(n);
+const pct = x => x == null ? '—' : Math.round(x * 100) + '%';
+const VERDICT = {'safe-to-merge': 'Safe to merge', 'minor-changes': 'Minor changes', 'changes-needed': 'Changes needed'};
+
+// one series, so no legend: the panel title names it. Bars rise from the baseline with 4px round
+// tops; each slot is a hover target taller than its bar, its <title> the tooltip.
+function bars(trend, unit){
+  const NS = 'http://www.w3.org/2000/svg', W = 600, H = 140, n = trend.length, slot = W / n;
+  const bw = Math.min(28, slot - 6), top = Math.max(1, ...trend.map(t => t.commits));
+  const el = (tag, a, ...kids) => { const e = document.createElementNS(NS, tag);
+    for (const k in a) e.setAttribute(k, a[k]); e.append(...kids); return e; };
+  const when = t => new Date(t.from * 1000).toLocaleDateString([], unit === 'month'
+    ? {month: 'short', year: 'numeric'} : {month: 'short', day: 'numeric'});
+  const svg = el('svg', {viewBox: '0 0 ' + W + ' ' + H, class: 'chart', role: 'img',
+      'aria-label': 'Commits per ' + unit + ': ' + trend.map(t => when(t) + ' ' + t.commits).join(', ')},
+    el('defs', {}, el('linearGradient', {id: 'current', x1: 0, y1: 1, x2: 1, y2: 0},
+      el('stop', {offset: 0, 'stop-color': 'rgb(7,122,199)'}), el('stop', {offset: 1, 'stop-color': 'rgb(107,33,239)'}))),
+    ...trend.map((t, i) => {
+      const hh = t.commits && Math.max(4, t.commits / top * (H - 6)), x = i * slot + (slot - bw) / 2, y = H - hh, r = Math.min(4, hh);
+      return el('g', {class: 'slot'}, el('title', {}, (unit === 'month' ? '' : 'Week of ') + when(t) + ': '
+          + t.commits + (t.commits === 1 ? ' commit' : ' commits')),
+        el('rect', {class: 'hit', x: i * slot, y: 0, width: slot, height: H}),
+        ...(hh ? [el('path', {fill: 'url(#current)', d: 'M' + x + ',' + H + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y
+          + 'H' + (x + bw - r) + 'Q' + (x + bw) + ',' + y + ' ' + (x + bw) + ',' + (y + r) + 'V' + H + 'Z'})] : []));
+    }),
+    el('line', {class: 'base', x1: 0, x2: W, y1: H - .5, y2: H - .5}));
+  return h('div', {class: 'panel trend'},
+    h('h3', null, 'Commits per ' + unit, h('small', null, 'peak ' + top)),
+    svg, h('div', {class: 'axis'}, h('span', null, when(trend[0])), h('span', null, 'now')));
+}
+
+// a ranked list, each row with a thin bar against the top row; names go in as text
+function rank(rows, mono){
+  const top = Math.max(1, ...rows.map(r => r.n));
+  return rows.length ? h('ol', {class: 'rank'}, rows.map(r => h('li', null,
+      h('span', {class: 'name' + (mono ? ' mono' : ''), title: r.name}, r.name), h('span', {class: 'val'}, r.val),
+      h('div', {class: 'bar'}, h('i', {style: 'width:' + (r.n / top * 100) + '%'})))))
+    : h('p', {class: 'note'}, 'Nothing in this window.');
+}
+
+async function numbers(){
+  const repo = state.repo, days = state.days, box = $('#numbers');
+  const pills = h('div', {class: 'days', role: 'group', 'aria-label': 'Window'}, [30, 90, 365].map(n =>
+    h('button', {'aria-current': n === days, onclick: () => { state.days = n; numbers(); }}, n + ' days')));
+  box.replaceChildren(pills, h('p', {class: 'empty'}, 'Reading the history…'));
+  let s;
+  try { s = await call('/api/repos/' + repo + '/stats?days=' + days); }
+  catch (e) { s = {error: e.message}; }
+  if (state.repo !== repo || state.view !== 'stats' || state.days !== days) return;   // the user moved on
+  if (s.error) return box.replaceChildren(pills, h('p', {class: 'empty'}, s.error));
+  const b = s.bot, rk = s.rookery, none = 'GitHub did not answer';
+  const tile = (label, value, sub) => h('div', {class: 'tile'}, h('div', {class: 'eyebrow'}, label), h('b', null, value), h('small', null, sub));
+  const fact = (label, v) => h('span', null, label + ' ', h('b', null, v));
+  const langs = Object.entries(s.languages || {}).sort((x, y) => y[1] - x[1]);
+  const total = langs.reduce((t, [, n]) => t + n, 0) || 1;
+  box.replaceChildren(pills,
+    h('div', {class: 'tiles'},
+      tile('Commits', num(s.commits), 'on ' + s.base + ', merges left out'),
+      tile('Authors', num(s.authors), 'with a commit in ' + days + ' days'),
+      tile('Lines changed', num(s.added + s.removed), '+' + num(s.added) + ' −' + num(s.removed)),
+      tile('Rookery PRs merged', b ? num(b.prs) : '—', b ? 'of ' + num(b.merged) + ' merged PRs' : none),
+      tile('Bot share', b ? pct(b.pr_share) : '—', b ? 'of merged PRs · ' + pct(b.line_share) + ' of lines' : none),
+      tile('Spent', usd(rk.usd), rk.per_pr == null ? 'no PR opened in ' + days + ' days' : usd(rk.per_pr) + ' per PR opened')),
+    h('div', {class: 'panel'}, h('h3', null, 'Rookery on this repo'),
+      h('div', {class: 'nums'},
+        h('span', null, 'Runs', h('span', {class: 'chips'}, Object.keys(rk.runs).length
+          ? Object.entries(rk.runs).map(([st, n]) => h('span', {class: 'lbl ' + (LBL[st] || '')}, st + ' ' + n)) : h('b', null, '0'))),
+        fact('Issues planned', num(rk.issues)), fact('PRs opened', num(rk.prs)), fact('Reviews posted', num(rk.reviews)),
+        fact('Spent', usd(rk.usd)), fact('Cost per PR', rk.per_pr == null ? '—' : usd(rk.per_pr))),
+      rk.reviews > 0 ? h('div', {class: 'nums'}, h('span', null, 'Review verdicts', h('span', {class: 'chips'},
+        Object.entries(rk.verdicts).map(([v, n]) => h('span', {class: 'lbl'}, (VERDICT[v] || v) + ' ' + n))))) : null),
+    bars(s.trend, s.unit),
+    h('div', {class: 'split'},
+      h('div', {class: 'panel'}, h('h3', null, 'Top authors', h('small', null, 'commits')),
+        rank(s.top_authors.map(a => ({name: a.name, n: a.commits, val: a.commits + ' · +' + num(a.added) + ' −' + num(a.removed)})))),
+      h('div', {class: 'panel'}, h('h3', null, 'Most-changed files', h('small', null, 'lines')),
+        rank(s.top_files.map(f => ({name: f.path, n: f.churn, val: num(f.churn)})), true))),
+    h('div', {class: 'panel'}, h('h3', null, 'On GitHub'),
+      s.facts ? h('div', {class: 'nums'}, fact('Stars', num(s.facts.stars)), fact('Forks', num(s.facts.forks)),
+        fact('Open issues and PRs', num(s.facts.open_issues))) : h('p', {class: 'note'}, none + '.'),
+      s.languages ? rank(langs.slice(0, 6).map(([l, n]) => ({name: l, n, val: pct(n / total)})))
+        : h('p', {class: 'note'}, 'Languages: ' + none.toLowerCase() + '.')));
 }
 
 /* --- one repo's workflow. The GET is a git fetch plus the job's own checks, so it loads
@@ -773,21 +951,23 @@ async function stop(r){
 
 function toast(msg){ $('#toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => $('#toast').textContent = '', 6000); }
 
-/* --- navigation: #run/<id> is one run, #workflow the picked repo's workflow,
-   #skills the catalog, #keys the API keys, anything else the list --- */
+/* --- navigation: #run/<id> is one run, #skills the catalog, #keys the API keys. With a repo
+   picked: #runs its runs, #workflow its workflow, anything else its stats (#stats). With
+   All repos: the list --- */
 function show(){
-  const m = location.hash.match(/^#run\/(\d+)$/);
+  const hash = location.hash, m = hash.match(/^#run\/(\d+)$/);
   state.run = m ? +m[1] : null;
-  const v = state.view = m ? 'one' : location.hash === '#skills' ? 'skills' : location.hash === '#keys' ? 'keys'
-    : location.hash === '#workflow' && state.repo ? 'flow' : 'list';
-  if (v === 'list' && location.hash) history.replaceState(null, '', location.pathname);
-  for (const id of ['list', 'one', 'flow', 'skills', 'keys']) $('#' + id).hidden = id !== v;
+  const v = state.view = m ? 'one' : hash === '#skills' ? 'skills' : hash === '#keys' ? 'keys'
+    : !state.repo || hash === '#runs' ? 'list' : hash === '#workflow' ? 'flow' : 'stats';
+  if (v === 'list' && hash && hash !== '#runs') history.replaceState(null, '', location.pathname);
+  if (v === 'stats' && hash !== '#stats') history.replaceState(null, '', '#stats');
+  for (const id of ['list', 'one', 'flow', 'stats', 'skills', 'keys']) $('#' + id).hidden = id !== v;
   const sw = $('#switch');
   sw.hidden = !state.repo || v === 'one' || v === 'skills' || v === 'keys';
-  sw.children[0].setAttribute('aria-current', v === 'list');
-  sw.children[1].setAttribute('aria-current', v === 'flow');
+  ['stats', 'list', 'flow'].forEach((t, i) => sw.children[i].setAttribute('aria-current', v === t));
   if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : v === 'keys' ? 'API keys' : state.repo || 'Runs';
   if (v === 'flow') flow();
+  if (v === 'stats') numbers();
   if (v === 'skills') catalog().catch(e => toast(e.message));
   if (v === 'keys') keys().catch(e => toast(e.message));
   refresh();
@@ -797,13 +977,13 @@ let busy = false;
 async function refresh(){
   if (busy || !state.me) return;
   busy = true;
-  try { await repos(); await (state.view === 'one' ? one() : state.view === 'list' ? list() : null); }
+  try { await repos(); await ({one, list, stats: latest}[state.view] || (() => null))(); }
   catch (e) { if (e.message !== 'signed out') toast(e.message); }
   finally { busy = false; }
 }
 
 window.onhashchange = show;
-$('#back').onclick = () => { location.hash = ''; };
+$('#back').onclick = () => { location.hash = '#runs'; };
 $('#out').onclick = async () => { await call('/auth/logout', {method: 'POST'}).catch(() => {}); location.replace('/'); };
 setInterval(() => { if (!document.hidden) refresh(); }, 4000);
 
@@ -812,6 +992,9 @@ setInterval(() => { if (!document.hidden) refresh(); }, 4000);
   if (!r.ok) return signedOut();
   state.me = await r.json();
   $('#who').textContent = state.me.login;
+  // land on a repo's stats, not on All repos: the last pick if it is still there, else the first
+  const d = await call('/api/repos').catch(() => ({repos: []})), names = d.repos.map(x => x.repo), last = saved.get();
+  state.repo = last === '' ? null : names.includes(last) ? last : names[0] || null;
   $('#app').hidden = false;
   show();
 })();
