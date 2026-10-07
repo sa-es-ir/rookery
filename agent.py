@@ -877,7 +877,9 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
     if offer := [k for k, src in sorted((a.get("sources") or {}).items())
                  if src != "catalog" and k not in s["skills"]]:
         prompt += "\n\n" + OFFER_SKILLS.format(names=", ".join(f"`rk:{k}`" for k in offer))
-    cmd = ["claude", "-p", prompt, "--output-format", "json",
+    # the prompt goes on stdin, never argv: Linux caps one argv entry at 128 KB, and a PR
+    # review's diff alone may be DIFF_CAP characters (prod: "Argument list too long")
+    cmd = ["claude", "-p", "--output-format", "json",
            "--permission-mode", "bypassPermissions",
            # none of the target repo's own settings: its hooks would run on this box, and
            # its skills and CLAUDE.md would come from the worktree — pin() reads them from base
@@ -930,14 +932,15 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
     wt, out, m, usd = wt or worktree(c), "", None, 0.0
     try:
         try:
-            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, env=env, track=c.repo)
+            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, env=env, input=prompt,
+                     track=c.repo)
         except RuntimeError as e:
             # a previous run already created this session (it crashed, or we are being
             # re-run): the id is derived from repo#issue/key, so pick that session up.
             if resume or "already in use" not in str(e):
                 raise
             log(f"#{c.n} session {sid} exists — resuming it")
-            out = sh(*cmd, "--resume", sid, cwd=wt, env=env, track=c.repo)
+            out = sh(*cmd, "--resume", sid, cwd=wt, env=env, input=prompt, track=c.repo)
         usd = cost_of(out, prov)   # an unpriced model raises here; the run still counts below
         text = json.loads(out).get("result", "")
         m = MARKER.search(text)

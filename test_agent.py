@@ -498,8 +498,8 @@ agent.PAUSED.unlink()
 
 # claude(): the cap is checked before the call, and every call is recorded, failed ones too
 agent.worktree = lambda c: agent.WORKSPACE
-argv = []
-agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
+argv, prompts = [], []
+agent.sh = lambda *a, **k: argv.append(a) or prompts.append(k["input"]) or json.dumps({"result": "done\nSTATUS: task-done", "total_cost_usd": 0.4})
 c = agent.Ctx("o/r", 9, agent.WORKSPACE, "main")
 assert agent.claude(c, "p", key="task-0") == ("task-done", "done")
 # no MCP: neither the target repo's .mcp.json nor the login account's connectors
@@ -507,7 +507,7 @@ assert "--strict-mcp-config" in argv[0] and "--mcp-config" not in argv[0], argv
 # none of the target repo's settings: its hooks would run here, its skills/CLAUDE.md come from base
 assert argv[0][argv[0].index("--setting-sources") + 1] == "user", argv
 assert not [x for x in argv[0] if x.startswith(("--plugin-dir", "--append-system-prompt"))], "outside a job: none"
-assert argv[0][1:3] == ("-p", "p"), argv      # prompt right after -p: --disallowed-tools is variadic
+assert argv[0][1:3] == ("-p", "--output-format") and prompts == ["p"], argv   # on stdin: one argv entry is capped at 128 KB
 # deny rules see the hook-rewritten command: the RTK forms must be denied too
 assert {"Bash(git push:*)", "Bash(gh:*)", "Bash(rtk git push:*)", "Bash(rtk gh:*)"} <= set(argv[0]), argv
 assert "Bash(rtk proxy:*)" in argv[0], "rtk proxy runs a command raw: none of the four would match it"
@@ -517,7 +517,7 @@ agent.RUN_AS = "rookery-run"
 argv.clear(), agent.claude(c._replace(repo="o/runas"), "p", key="task-0")   # its own cap
 agent.RUN_AS = ""
 assert argv[0][:5] == ("sudo", "-n", "-H", "-u", "rookery-run"), argv
-assert argv[0][argv[0].index("claude"):][1:3] == ("-p", "p") and "Bash(rtk proxy:*)" in argv[0], argv
+assert argv[0][argv[0].index("claude"):][1:3] == ("-p", "--output-format") and "p" not in argv[0] and "Bash(rtk proxy:*)" in argv[0], argv
 # PROVIDER=claude inherits the env exactly as before; another backend's overrides go in env=, never argv
 envs, done = [], json.dumps({"result": "STATUS: task-done", "modelUsage": {}})
 agent.sh = lambda *a, **k: envs.append(k["env"]) or argv.append(a) or done
@@ -663,18 +663,18 @@ assert not (sk / "changelog").exists(), "a catalog skill nobody enabled stays ou
 assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "pr-reviewer.md", "reviewer.md"]
 assert a["workflow"]["pr-review"] == agent.WORKFLOW["pr-review"], "a slot the repo leaves out is the built-in's"
 assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
-argv[:] = []
-agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: plan-ready"})
+argv[:], prompts[:] = [], []
+agent.sh = lambda *a, **k: argv.append(a) or prompts.append(k["input"]) or json.dumps({"result": "STATUS: plan-ready"})
 agent.claude(pc, "p", key="plan", slot="plan")
 agent.claude(pc, "p", key="task-0", slot="task")
 agent.sh = real_sh
 plan_argv, task_argv = argv
 assert plan_argv[plan_argv.index("--agent") + 1] == "rk:planmaker" and "--model" not in plan_argv, plan_argv
-assert plan_argv[2] == "p\n\nUse the `rk:repo-recon` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:verify`"), \
+assert prompts[0] == "p\n\nUse the `rk:repo-recon` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:verify`"), \
     "an enabled skill is named, or it never fires; the repo's others are offered"
 sysp = next(x for x in plan_argv if x.startswith("--append-system-prompt="))
 assert "Use tabs." in sysp and sysp.endswith("One migration per task."), "instructions follow the persona"
-assert task_argv[2].endswith("Use the `rk:systematic-debugging` skill.\n\n"
+assert prompts[1].endswith("Use the `rk:systematic-debugging` skill.\n\n"
                              + agent.OFFER_SKILLS.format(names="`rk:repo-recon`")), "never the catalog's, never twice"
 assert "One migration" not in "".join(task_argv), "a slot's instructions are its own"
 job_id = a["job"]
@@ -760,11 +760,11 @@ assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md",
                                                                         "reviewer.md", "sec.md"], "top-level *.md only"
 assert (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8").endswith("the repo's reviewer\n")
 assert a["agents"]["reviewer"]["model"] == "sonnet" and a["agent_sources"]["planmaker"] == "built-in"
-argv[:] = []
-agent.sh = lambda *a, **k: argv.append(a) or json.dumps({"result": "STATUS: check-ok"})
+argv[:], prompts[:] = [], []
+agent.sh = lambda *a, **k: argv.append(a) or prompts.append(k["input"]) or json.dumps({"result": "STATUS: check-ok"})
 assert agent.claude(pc, "p", key="step-sec", slot=a["workflow"]["after"][0]) == ("check-ok", "")
 agent.sh = real_sh
-assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and argv[0][2] == "p\n\nUse the `rk:verify` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:repo-recon`")
+assert argv[0][argv[0].index("--agent") + 1] == "rk:sec" and prompts[0] == "p\n\nUse the `rk:verify` skill.\n\n" + agent.OFFER_SKILLS.format(names="`rk:repo-recon`")
 assert next(x for x in argv[0] if x.startswith("--append-system-prompt=")).endswith("OWASP only.")
 with agent.closing(agent.db()) as con:
     based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'",
@@ -1121,7 +1121,7 @@ notes_f, replies, argv = agent.memory_file("o/r"), [], []
 agent.worktree = lambda c: (_ for _ in ()).throw(AssertionError("the memory call needs no worktree"))
 agent.check_caps = lambda repo: None
 def fake_sh(*a, **k):
-    argv.append((a, k["cwd"]))
+    argv.append((a, k["cwd"], k["input"]))
     assert not os.listdir(k["cwd"]), "an empty cwd: nothing to read or edit"
     return json.dumps({"result": replies.pop(0), "total_cost_usd": 0.01})
 real_sh_, agent.sh = agent.sh, fake_sh
@@ -1130,11 +1130,10 @@ memjob = {"kind": "memory", "repo": "o/r", "n": 30, "job": learned}
 replies.append("<notes>\n- Tests: `npm test`, needs `-x`.\n</notes>\nSTATUS: memory-updated")
 agent.handle(memjob)
 assert notes_f.read_text(encoding="utf-8") == "- Tests: `npm test`, needs `-x`."
-cmd, cwd = argv[0]
+cmd, cwd, prompt_ = argv[0]
 assert cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--max-turns") + 1] == "1", cmd
 assert cmd[cmd.index("--tools") + 1] == "" and "--agent" not in cmd and "Bash(rtk proxy:*)" in cmd
 assert not [x for x in cmd if x.startswith(("--plugin-dir", "--append-system-prompt"))], "nothing steers it"
-prompt_ = cmd[2]
 assert "npm test" in prompt_ and "<current-notes>\n\n</current-notes>" in prompt_
 assert "At most 8000\ncharacters" in prompt_, "the cap is in the prompt"
 for bad in ["no marker at all", "STATUS: memory-updated", "<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated",
@@ -1145,7 +1144,7 @@ for bad in ["no marker at all", "STATUS: memory-updated", "<notes>" + "x" * 8001
 replies.append("<notes>stale</notes>\nSTATUS: memory-unchanged")
 agent.handle(memjob)
 assert notes_f.read_text(encoding="utf-8").startswith("- Tests"), "unchanged writes nothing"
-assert "- Tests: `npm test`" in argv[-1][0][2], "the next call sees the current notes"
+assert "- Tests: `npm test`" in argv[-1][2], "the next call sees the current notes"
 with agent.closing(agent.db()) as con:
     mem = con.execute("SELECT id, status FROM jobs WHERE act = 'memory' ORDER BY id").fetchall()
     rem = con.execute("SELECT detail FROM steps WHERE what = 'remembered'").fetchall()
