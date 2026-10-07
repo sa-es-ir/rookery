@@ -1327,6 +1327,67 @@ assert w["error"] == "`task` names the skill `x`", "the error the next job would
 assert w["config"]["files"], "a broken config can still be edited"
 agent.steer, agent.config_files = real_steer, real_files
 
+# stats: A from git log on the clone, B from the run log, C from GitHub
+assert req("GET", "/api/repos/o/r/stats")[0] == 401
+assert req("GET", "/api/repos/o/other/stats", sid=sid)[0] == 404, "another tenant's numbers are theirs"
+assert req("GET", "/api/repos/o/r/stats?days=7", sid=sid)[0] == 400
+agent.REPOS["o/r"] = ""
+assert "still cloning" in body(req("GET", "/api/repos/o/r/stats", sid=sid))["error"]
+agent.REPOS["o/r"] = "main"
+up, now = Path(tempfile.mkdtemp()), time.time()
+def commit(who, ago, files):
+    for f, text in files.items():
+        (up / f).write_bytes(text)
+    subprocess.run(["git", "add", "-A"], cwd=up, check=True)
+    d = f"@{int(now - ago * 86400)} +0000"
+    subprocess.run(["git", "-c", f"user.name={who}", "-c", "user.email=who@example.com", "commit", "-qm", "c"],
+                   cwd=up, check=True, env={**os.environ, "GIT_AUTHOR_DATE": d, "GIT_COMMITTER_DATE": d})
+subprocess.run(["git", "init", "-q", "-b", "main"], cwd=up, check=True)
+for who, ago, files in [("carl", 100, {"c.py": b"1\n2\n3\n4\n5\n"}), ("ann", 20, {"a.py": b"1\n2\n"}),
+                        ("bob", 10, {"b.py": b"x\n", "logo.png": b"\x00\x01\x02bin"}),
+                        ("ann", 1, {"a.py": b"1\n2\n3\n4\n"})]:
+    commit(who, ago, files)
+subprocess.run(["git", "clone", "-q", str(up), str(agent.clone_dir("o/r"))], check=True, capture_output=True)
+for ac, steps_ in (("implement", [("claude", {"usd": 1.0}), ("pr", {"url": "u/9"}), ("pr", {"url": "u/9"})]),
+                   ("pr-review", [("posted", {"verdict": "safe-to-merge", "head": "h"})])):
+    agent.begin(agent.Ctx("o/r", 5, Path("."), "main"), ac)
+    for what, d in steps_:
+        agent.step("o/r", what, **d)
+    agent.finish("o/r", "ok")
+with agent.closing(agent.db()) as con, con:   # a run before the window
+    old = con.execute("INSERT INTO jobs (repo, n, act, started, status) VALUES ('o/r', 1, 'plan', ?, 'ok')",
+                      (now - 200 * 86400,)).lastrowid
+    con.execute("INSERT INTO steps VALUES (?, 0, 'claude', ?)", (old, json.dumps({"usd": 9})))
+ghq, saved_c = [], (agent.fetch, agent.gh, agent.api, agent.token)
+agent.fetch, agent.token = lambda *a: None, lambda repo: "t"
+agent.gh = lambda repo, *a, **k: ghq.append(a) or json.dumps(
+    [{"additions": 4, "deletions": 1}] if "--author" in a else [{"additions": 4, "deletions": 1}] * 4)
+agent.api = lambda m, p, b: {"stargazers_count": 3, "forks_count": 1, "open_issues_count": 2} if p == "/repos/o/r" \
+    else (_ for _ in ()).throw(RuntimeError("rate limited"))
+raw = req("GET", "/api/repos/o/r/stats", sid=sid)
+st = json.loads(raw[2])
+assert raw[0] == 200 and b"example.com" not in raw[2], "names only, never emails"
+assert (st["days"], st["commits"], st["authors"], st["added"], st["removed"]) == (90, 3, 2, 5, 0), st
+assert st["unit"] == "week" and len(st["trend"]) == 13 and [t["commits"] for t in st["trend"][-3:]] == [1, 1, 1]
+assert [(a["name"], a["commits"]) for a in st["top_authors"]] == [("ann", 2), ("bob", 1)]
+assert [(f["path"], f["churn"]) for f in st["top_files"]] == [("a.py", 4), ("b.py", 1), ("logo.png", 0)], \
+    "a binary file counts 0 lines"
+assert st["rookery"] == {"runs": {"failed": 1, "ok": 2}, "issues": 1, "prs": 1, "reviews": 1,
+                         "verdicts": {"safe-to-merge": 1}, "usd": 1.25, "per_pr": 1.25}, st["rookery"]
+assert st["facts"] == {"stars": 3, "forks": 1, "open_issues": 2} and st["languages"] is None, \
+    "a failing GitHub call leaves its part null"
+assert st["bot"] == {"merged": 4, "prs": 1, "lines": 5, "pr_share": 0.25, "line_share": 1}, st["bot"]
+assert ghq[1][-2:] == ("--author", "app/" + agent.ME.removesuffix("[bot]")) and "merged:>=" in " ".join(ghq[0])
+assert len(ghq) == 2 and body(req("GET", "/api/repos/o/r/stats", sid=sid))["commits"] == 3 and len(ghq) == 2, \
+    "cached: no second round of GitHub calls"
+y = body(req("GET", "/api/repos/o/r/stats?days=365", sid=sid))
+assert (y["commits"], y["authors"], y["unit"], len(y["trend"])) == (4, 3, "month", 12)
+assert len(body(req("GET", "/api/repos/o/r/stats?days=30", sid=sid))["trend"]) == 5
+agent.gh = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gh down"))
+agent._stats.clear()
+assert body(req("GET", "/api/repos/o/r/stats", sid=sid))["bot"] is None, "no bot share, still a page"
+agent.fetch, agent.gh, agent.api, agent.token = saved_c
+
 # config edits: a PR through agent.propose(), only from a writer of that repo
 proposed = []
 agent.propose = lambda repo, files, by: proposed.append((repo, files, by)) or "https://github.com/o/r/pull/9"

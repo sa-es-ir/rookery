@@ -195,6 +195,14 @@ fetch, checks and plugin assembly minus the job — into a temp dir, so the page
 run cannot disagree; an unseen repo is a 404. `fetch()` holds a per-repo lock, since that
 GET fetches from an HTTP thread while the repo's worker may be fetching. `GET /api/skills`
 reads `skills/` plus the slot/source table in `skills/README.md`.
+Stats (`GET /api/repos/<o>/<r>/stats?days=30|90|365`, `visible()` only, read-only) is the
+repo's first tab: `agent.stats()` fetches, then `history()` (`git log --no-merges --numstat`
+on the clone, author names never emails), `github()` (repo facts, languages, and the bot share
+from two `gh pr list --state merged` calls — PRs, since a squash changes Rookery's shas; a
+failing part is `null`, never an error) cached 10 min per `(repo, base sha, days)` in `_stats`,
+and `runlog()` (the `jobs`/`steps` rows in the window) read fresh. Nothing is stored. The
+portal lands on the last-picked repo (`localStorage`), else the first; no repos at all shows
+the install card instead of the runs list.
 `callback()` upserts the `users` row (first, last, sign-ins); `serve()` seeds it once from
 `sessions`. `/admin.html` (unlinked) is for `ADMINS` (`.env`, GitHub logins): `GET /api/admin`
 lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or

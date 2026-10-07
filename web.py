@@ -347,6 +347,13 @@ def route(method, url, headers, body=b""):
         if method == "GET" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/workflow", path)):
             w = workflow(s, m.group(1))
             return js(200, w) if w else js(404, {"error": "no such repo"})
+        if method == "GET" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/stats", path)):
+            if m.group(1) not in visible(s):   # read-only, but another tenant's numbers are theirs
+                return js(404, {"error": "no such repo"})
+            days = urllib.parse.parse_qs(u.query).get("days", ["90"])[0]
+            if days not in ("30", "90", "365"):
+                return js(400, {"error": "days: 30, 90 or 365"})
+            return js(200, agent.stats(m.group(1), int(days)))
         if method == "POST" and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/config", path)):
             repo = m.group(1)
             if repo not in visible(s):

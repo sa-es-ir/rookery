@@ -1646,6 +1646,115 @@ def remember(job):
         finish(c.repo, "cancelled" if cancelled else "failed")
 
 
+# --- repo stats: the portal's first tab --------------------------------------
+# A: git log on the clone. B: our own run log. C: a few GitHub calls. Nothing is stored.
+# ponytail: computed on request and cached 10 min; compute ahead if git log gets slow on a huge repo.
+
+STATS_TTL = 600
+_stats = {}   # (repo, base sha, days) -> (when, A and C). B is our own db, read fresh every time.
+
+
+def stats(repo, days=90):
+    """The portal's Stats tab for repo over the last `days`, or {"error"} while it is cloning."""
+    base, path = REPOS[repo], clone_dir(repo)
+    if not base or not path.exists():
+        return {"error": "Rookery is still cloning this repo. Try again in a minute."}
+    try:
+        fetch(repo, path, base)
+    except Exception as e:   # stats from the last fetch beat no stats
+        log(f"{repo} stats: fetch failed, using the last one: {e}")
+    sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
+    now = time.time()
+    since = now - days * 86400
+    at, got = _stats.get((repo, sha, days), (0, None))
+    if now - at > STATS_TTL:
+        got = {**history(path, base, days, now), **github(repo, since)}
+        if b := got["bot"]:
+            lines = got["added"] + got["removed"]
+            b.update(pr_share=b["prs"] / b["merged"] if b["merged"] else None,
+                     line_share=min(1, b["lines"] / lines) if lines else None)
+        for k, (t, _) in list(_stats.items()):
+            if now - t > STATS_TTL:
+                _stats.pop(k, None)
+        _stats[(repo, sha, days)] = (now, got)
+    return {"repo": repo, "base": base, "sha": sha, "days": days, **got, "rookery": runlog(repo, since)}
+
+
+def history(path, base, days, now):
+    """A: base's non-merge commits in the window. Author names only, never emails."""
+    out = sh("git", "log", f"origin/{base}", "--no-merges", f"--since={days}.days",
+             "--format=%x00%an%x09%ct", "--numstat", cwd=path)
+    # 30 days -> 5 weeks, 90 -> 13 weeks, 365 -> 12 months; the oldest week can be part of one
+    n, width = (12, days * 86400 / 12) if days > 90 else (-(-days // 7), 7 * 86400)
+    trend, authors, files = [0] * n, {}, {}
+    for c in out.split("\0")[1:]:
+        head, *rows = c.strip().split("\n")
+        name, ct = head.rsplit("\t", 1)
+        trend[n - 1 - min(n - 1, max(0, int((now - int(ct)) // width)))] += 1
+        a = authors.setdefault(name, {"name": name, "commits": 0, "added": 0, "removed": 0})
+        a["commits"] += 1
+        for r in filter(None, rows):
+            plus, minus, f = r.split("\t", 2)
+            plus, minus = (0 if x == "-" else int(x) for x in (plus, minus))   # "-": a binary file
+            a["added"] += plus
+            a["removed"] += minus
+            fl = files.setdefault(f, {"path": f, "commits": 0, "churn": 0})
+            fl["commits"] += 1
+            fl["churn"] += plus + minus
+    return {"commits": sum(trend), "authors": len(authors),
+            "added": sum(a["added"] for a in authors.values()), "removed": sum(a["removed"] for a in authors.values()),
+            "unit": "month" if days > 90 else "week",
+            "trend": [{"from": int(now - (n - i) * width), "commits": k} for i, k in enumerate(trend)],
+            "top_authors": sorted(authors.values(), key=lambda a: (-a["commits"], -a["added"] - a["removed"]))[:5],
+            "top_files": sorted(files.values(), key=lambda f: (-f["churn"], -f["commits"]))[:8]}
+
+
+def runlog(repo, since):
+    """B: what Rookery did on repo in the window, from the run log."""
+    with closing(db()) as con:
+        jobs = con.execute("SELECT n, act, status FROM jobs WHERE repo = ? AND started >= ?", (repo, since)).fetchall()
+        steps = con.execute("SELECT what, detail FROM steps WHERE what IN ('claude', 'pr', 'posted') AND job IN "
+                            "(SELECT id FROM jobs WHERE repo = ? AND started >= ?)", (repo, since)).fetchall()
+    usd, prs, verdicts = 0, set(), collections.Counter()
+    for what, d in steps:
+        d = json.loads(d)
+        if what == "claude":
+            usd += d.get("usd", 0)
+        elif what == "pr":
+            prs.add(d["url"])   # approving again comments on the open PR: the same URL, not a new PR
+        else:
+            verdicts[d["verdict"]] += 1
+    return {"runs": dict(collections.Counter(s for *_, s in jobs)),
+            "issues": len({n for n, act, _ in jobs if act == "plan"}), "prs": len(prs),
+            "reviews": sum(verdicts.values()), "verdicts": dict(verdicts), "usd": round(usd, 4),
+            "per_pr": round(usd / len(prs), 4) if prs else None}
+
+
+def github(repo, since):
+    """C: GitHub's own numbers. A part that fails is None; it never fails the page."""
+    day = time.strftime("%Y-%m-%d", time.gmtime(since))
+    # merged PRs, not commits: Rookery commits as the server's git user, and a squash merge changes the sha
+    merged = lambda *a: json.loads(gh(repo, "pr", "list", "--state", "merged", "--search", f"merged:>={day}",
+                                      "--json", "additions,deletions", "--limit", "500", *a))
+    def bot():
+        every, mine = merged(), merged("--author", f"app/{ME.removesuffix('[bot]')}")
+        return {"merged": len(every), "prs": len(mine), "lines": sum(p["additions"] + p["deletions"] for p in mine)}
+
+    def facts():
+        r = api("GET", f"/repos/{repo}", token(repo))
+        # GitHub's open_issues_count counts open PRs too
+        return {"stars": r["stargazers_count"], "forks": r["forks_count"], "open_issues": r["open_issues_count"]}
+    out = {}
+    for k, f in (("facts", facts), ("languages", lambda: api("GET", f"/repos/{repo}/languages", token(repo))),
+                 ("bot", bot)):
+        try:
+            out[k] = f()
+        except Exception as e:
+            log(f"{repo} stats: {k} failed: {e}")
+            out[k] = None
+    return out
+
+
 # --- repos: onboarding and retention ----------------------------------------
 
 def sync():
