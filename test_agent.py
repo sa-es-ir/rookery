@@ -1318,7 +1318,8 @@ assert [(k, v["agent"], v["model"], v["from"]) for k, v in w["slots"].items()] =
 assert w["org"] == {"repo": "o/.rookery", "sha": "def"}
 assert w["skills"] == {"tdd": {"source": "catalog", "description": "red, green"}}
 assert [(s["agent"], s["mode"], s["model"], s["from"]) for s in w["after"]] == [("sec", "check", "haiku", "repo")]
-assert w["agents"]["sec"] == {"description": "holes", "source": ".rookery/agents"}
+assert w["agents"]["sec"] == {"description": "holes", "source": ".rookery/agents", "model": "haiku"}
+assert w["under"]["review"]["instructions"] == "Owner's." and w["under"]["after"] == [], "the layer under the repo's file"
 assert w["config"] == {"dir": ".rookery/", "files": {"workflow.json": "{}\n"}}, "what the editor starts from"
 assert not dirs[0].exists(), "the throwaway plugin dir is gone"
 agent.steer = lambda *a: (_ for _ in ()).throw(RuntimeError("`task` names the skill `x`"))
@@ -1358,8 +1359,8 @@ with agent.closing(agent.db()) as con, con:   # a run before the window
     old = con.execute("INSERT INTO jobs (repo, n, act, started, status) VALUES ('o/r', 1, 'plan', ?, 'ok')",
                       (now - 200 * 86400,)).lastrowid
     con.execute("INSERT INTO steps VALUES (?, 0, 'claude', ?)", (old, json.dumps({"usd": 9})))
-ghq, saved_c = [], (agent.fetch, agent.gh, agent.api, agent.token)
-agent.fetch, agent.token = lambda *a: None, lambda repo: "t"
+ghq, fetched, saved_c = [], [], (agent.fetch, agent.gh, agent.api, agent.token)
+agent.fetch, agent.token = lambda *a: fetched.append(a), lambda repo: "t"
 agent.gh = lambda repo, *a, **k: ghq.append(a) or json.dumps(
     [{"additions": 4, "deletions": 1}] if "--author" in a else [{"additions": 4, "deletions": 1}] * 4)
 agent.api = lambda m, p, b: {"stargazers_count": 3, "forks_count": 1, "open_issues_count": 2} if p == "/repos/o/r" \
@@ -1380,6 +1381,7 @@ assert st["bot"] == {"merged": 4, "prs": 1, "lines": 5, "pr_share": 0.25, "line_
 assert ghq[1][-2:] == ("--author", "app/" + agent.ME.removesuffix("[bot]")) and "merged:>=" in " ".join(ghq[0])
 assert len(ghq) == 2 and body(req("GET", "/api/repos/o/r/stats", sid=sid))["commits"] == 3 and len(ghq) == 2, \
     "cached: no second round of GitHub calls"
+assert len(fetched) == 1, "a hit skips the fetch too"
 y = body(req("GET", "/api/repos/o/r/stats?days=365", sid=sid))
 assert (y["commits"], y["authors"], y["unit"], len(y["trend"])) == (4, 3, "month", 12)
 assert len(body(req("GET", "/api/repos/o/r/stats?days=30", sid=sid))["trend"]) == 5

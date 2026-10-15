@@ -124,7 +124,7 @@ The `base` step logs `org` as `<owner>/.rookery@<sha>`. No owner-level `CLAUDE.m
 fetched base in a throwaway `GIT_INDEX_FILE` (the clone's checkout and worktrees untouched),
 `steer(sha=commit)` validates that commit exactly as a job would, and only then is it pushed
 to `rookery/config-<hex>` by URL and a PR opened. `config_files()` is the editor's starting
-point, returned by the workflow GET even when the config does not validate.
+point, returned by the workflow GET even when the config does not validate. The GET also returns `under` (the owner's or built-in layer) so the portal's drag-and-drop builder can write only the keys that differ from it; the builder edits the same `workflow.json` draft as the editor, never anything else.
 
 **`after` steps.** `workflow.json`'s `after` is up to `MAX_STEPS = 5` steps, each an `agent`,
 a `mode` (`check` or `write`, `MODES`), `skills` and `instructions`; `claude(slot=)` takes the
@@ -199,7 +199,7 @@ Stats (`GET /api/repos/<o>/<r>/stats?days=30|90|365`, `visible()` only, read-onl
 repo's first tab: `agent.stats()` fetches, then `history()` (`git log --no-merges --numstat`
 on the clone, author names never emails), `github()` (repo facts, languages, and the bot share
 from two `gh pr list --state merged` calls — PRs, since a squash changes Rookery's shas; a
-failing part is `null`, never an error) cached 10 min per `(repo, base sha, days)` in `_stats`,
+failing part is `null`, never an error) cached 5 min per `(repo, days)` in `_stats` (a hit skips the fetch too),
 and `runlog()` (the `jobs`/`steps` rows in the window) read fresh. Nothing is stored. The
 portal lands on the last-picked repo (`localStorage`), else the first; no repos at all shows
 the install card instead of the runs list.

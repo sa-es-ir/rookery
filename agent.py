@@ -1648,35 +1648,36 @@ def remember(job):
 
 # --- repo stats: the portal's first tab --------------------------------------
 # A: git log on the clone. B: our own run log. C: a few GitHub calls. Nothing is stored.
-# ponytail: computed on request and cached 10 min; compute ahead if git log gets slow on a huge repo.
+# ponytail: computed on request and cached 5 min; compute ahead if git log gets slow on a huge repo.
 
-STATS_TTL = 600
-_stats = {}   # (repo, base sha, days) -> (when, A and C). B is our own db, read fresh every time.
+STATS_TTL = 300
+_stats = {}   # (repo, days) -> (when, base sha, A and C). B is our own db, read fresh every time.
 
 
 def stats(repo, days=90):
-    """The portal's Stats tab for repo over the last `days`, or {"error"} while it is cloning."""
+    """The portal's Stats tab for repo over the last `days`, or {"error"} while it is cloning.
+    A hit skips the fetch as well as the GitHub calls: the numbers are up to STATS_TTL old."""
     base, path = REPOS[repo], clone_dir(repo)
     if not base or not path.exists():
         return {"error": "Rookery is still cloning this repo. Try again in a minute."}
-    try:
-        fetch(repo, path, base)
-    except Exception as e:   # stats from the last fetch beat no stats
-        log(f"{repo} stats: fetch failed, using the last one: {e}")
-    sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
     now = time.time()
     since = now - days * 86400
-    at, got = _stats.get((repo, sha, days), (0, None))
+    at, sha, got = _stats.get((repo, days), (0, None, None))
     if now - at > STATS_TTL:
+        try:
+            fetch(repo, path, base)
+        except Exception as e:   # stats from the last fetch beat no stats
+            log(f"{repo} stats: fetch failed, using the last one: {e}")
+        sha = sh("git", "rev-parse", f"origin/{base}", cwd=path)
         got = {**history(path, base, days, now), **github(repo, since)}
         if b := got["bot"]:
             lines = got["added"] + got["removed"]
             b.update(pr_share=b["prs"] / b["merged"] if b["merged"] else None,
                      line_share=min(1, b["lines"] / lines) if lines else None)
-        for k, (t, _) in list(_stats.items()):
+        for k, (t, *_) in list(_stats.items()):
             if now - t > STATS_TTL:
                 _stats.pop(k, None)
-        _stats[(repo, sha, days)] = (now, got)
+        _stats[(repo, days)] = (now, sha, got)
     return {"repo": repo, "base": base, "sha": sha, "days": days, **got, "rookery": runlog(repo, since)}
 
 

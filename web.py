@@ -227,8 +227,10 @@ def workflow(s, repo):
                       for k, v in agent.WORKFLOW.items()},
             "after": [{**v, "model": model(v["agent"]), "from": origin(wf["after"], owf["after"], [])}
                       for v in wf["after"]],
-            "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n]}
-                       for n, m in got["agents"].items()},
+            # what the repo's workflow.json falls back to, key by key: the builder's starting point
+            "under": owf,
+            "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n],
+                           "model": m.get("model")} for n, m in got["agents"].items()},
             "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
 
 

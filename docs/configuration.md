@@ -130,6 +130,8 @@ Open a repository in the portal and select **Workflow**. You see the workflow th
 
 Select **Propose a change** to edit `workflow.json` or an agent file. Rookery checks the change. Then it opens a pull request. Nothing changes until a person merges the pull request. You must have write access to the repository.
 
+To change the workflow without JSON, use the builder at the top of **Workflow**. Drag an agent or a skill from the shelf onto a slot. Drag the agent of one slot onto another slot to swap them. Drag a skill to the shelf to remove it. Drop an agent on **Drop an agent here** to add a step after the tasks. If you cannot drag, click a box, then click the place for it. The builder changes `workflow.json` in the editor below it. Then select **Open pull request**.
+
 ## A pull request that changes the configuration
 
 If a branch of Rookery changes `.rookery/`, `.claude/` or the root `CLAUDE.md`, the pull request starts with a warning. Review that change carefully. After you merge it, it controls the agent on the next runs.

@@ -42,7 +42,7 @@ The portal opens on the **Stats** tab of a repository. Select 30, 90 or 365 days
 - The bot share: the part of the merged pull requests that Rookery opened.
 - The stars, forks, open issues and languages from GitHub.
 
-Rookery shows author names only. It does not show email addresses. The numbers can be up to 10 minutes old.
+Rookery shows author names only. It does not show email addresses. The numbers can be up to 5 minutes old.
 
 ## Pages
 

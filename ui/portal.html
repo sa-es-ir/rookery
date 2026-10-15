@@ -172,6 +172,76 @@ main{min-width:0}
   box-shadow:rgba(255,73,44,.35) 0 0 0 1px inset}
 .idle{margin-top:24px;font-size:13px;color:var(--fog);font-weight:300;max-width:680px}
 
+/* the builder: a shelf of agents and skills beside the run as a column of slots joined by
+   Electric Current wires. Where the thing in hand can go turns dashed electric; over it, filled. */
+.build{display:grid;grid-template-columns:232px minmax(0,1fr);gap:20px 24px;align-items:start;margin-bottom:56px}
+.bbar{grid-column:1/-1;display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;box-shadow:var(--inset);
+  border-radius:24px;padding:12px 20px;font-size:14px;color:var(--fog);font-weight:300}
+.bbar b{font:400 13px var(--mono);letter-spacing:0;color:#fff}
+.bbar .frost{margin-left:auto}
+.shelf{position:sticky;top:86px;background:var(--panel);border:1px solid transparent;border-radius:16px;padding:18px;
+  display:flex;flex-direction:column;gap:10px}
+.shelf .stack{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-bottom:10px}
+.build .hint{font-size:12px;color:var(--fog);font-weight:300}
+.chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;background:var(--shell);border:1px solid var(--smoke);
+  border-radius:8px;padding:6px 10px;font:400 12px var(--mono);letter-spacing:0;color:#fff;cursor:grab;text-align:left}
+.chip:hover{border-color:var(--fog)}
+.chip small{font-size:11px;color:var(--fog);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:2px;background:var(--current);flex:none}
+.chip.sk{border-radius:9999px}
+.chip.sk i{border-radius:9999px;background:var(--scorch)}
+.chip.unknown{border-color:var(--scorch);color:#ffb3a5}
+.chip[aria-pressed=true]{border-color:rgb(253,137,37);box-shadow:rgba(255,142,93,.6) 0 0 0 1px inset}
+.pair{display:inline-flex;align-items:center;max-width:100%}
+.x{background:none;border:0;color:var(--fog);cursor:pointer;font-size:16px;line-height:1;padding:4px 6px;border-radius:6px}
+.x:hover{color:#fff;background:rgba(255,255,255,.06)}
+.canvas{display:flex;flex-direction:column;min-width:0}
+.canvas>.eyebrow{margin-bottom:12px}
+.canvas>.eyebrow.pr{margin-top:40px}
+.bnode{background:var(--surface);border:1px solid transparent;border-radius:12px;padding:16px 18px;
+  display:flex;flex-direction:column;gap:12px}
+.bnode.edited{box-shadow:var(--inset)}
+.bnode header{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap}
+.bnode h4{font-size:16px;font-weight:400;color:#fff}
+.bnode header .lbl{margin-left:auto}
+.bnode .tag{font:400 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:rgb(253,137,37)}
+.bnode .what{font-size:13px;color:var(--fog);font-weight:300}
+.parts{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:12px}
+.cap{font:400 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--fog);margin-bottom:6px}
+.sock,.tray{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-height:46px;padding:6px;
+  border:1px dashed var(--smoke);border-radius:8px;transition:background .15s,border-color .15s}
+.sock .hint,.tray .hint{padding:0 6px}
+.wire{width:2px;height:24px;margin-left:28px;background:var(--current);flex:none}
+.lane{border:1px dashed var(--smoke);border-radius:16px;padding:14px;display:flex;flex-direction:column}
+.lane .wire{height:14px}
+.lane-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.lane-head small{font-size:12px;color:var(--fog);font-weight:300}
+.lane-head .link,.bnode header .link{font-size:12px}
+.addstep{border:1px dashed var(--smoke);border-radius:12px;padding:14px;font-size:13px;color:var(--fog);
+  font-weight:300;text-align:center}
+.bnode+.addstep{margin-top:10px}
+.end{align-self:flex-start}
+.grip{background:none;border:0;color:var(--fog);font-size:15px;padding:2px 4px;cursor:grab;line-height:1}
+.modes{display:inline-flex;border:1px solid var(--smoke);border-radius:8px;overflow:hidden;margin-left:auto}
+.modes button{background:none;border:0;padding:3px 10px;font:400 12px var(--mono);letter-spacing:0;color:var(--fog);cursor:pointer}
+.modes button[aria-pressed=true]{background:rgba(163,163,163,.2);color:#fff}
+.say-edit summary{cursor:pointer;font-size:13px;color:var(--fog);width:max-content}
+.say-edit summary:hover{color:#fff}
+.say-edit textarea{display:block;margin-top:8px;width:100%;min-height:90px;resize:vertical;background:var(--panel);color:var(--ash);
+  border:1px solid var(--smoke);border-radius:8px;padding:10px 12px;font:400 12px/1.6 var(--mono);letter-spacing:0}
+.say-edit textarea:focus{outline:none;border-color:rgb(107,33,239);box-shadow:rgb(7,122,199) 0 0 0 1px}
+.build.want-agent :is(.sock,.addstep),.build.want-skill .tray,.build.want-out .shelf,.build.want-step .bnode.step,
+.build .can{border-color:rgb(7,122,199);border-style:dashed}
+.build .can{cursor:copy}
+.build .over,.build .can:hover{background:rgba(7,122,199,.12);border-color:rgb(107,33,239);border-style:solid}
+@media(max-width:760px){
+  .build{grid-template-columns:minmax(0,1fr)}
+  .shelf{position:static}
+  .shelf .stack{flex-direction:row;flex-wrap:wrap}
+  .parts{grid-template-columns:minmax(0,1fr)}
+  .bbar .frost{margin-left:0}
+}
+
 /* propose a change: a Feature Card. Its Ember CTA opens a PR — the view's one primary action */
 .edit,.mem{background:var(--surface);border-radius:16px;padding:28px 32px;margin-top:40px;max-width:760px;
   display:flex;flex-direction:column;gap:16px}
@@ -679,8 +749,9 @@ const node = (def, s, w, extra) => ({who: s.agent ? 'rk:' + s.agent : 'no agent'
 async function flow(){
   const repo = state.repo, box = $('#wf');
   box.replaceChildren(h('p', {class: 'empty'}, 'Reading the base branch…'));
-  let w;
-  try { w = await call('/api/repos/' + repo + '/workflow'); }
+  let w, cat;
+  try { [w, {skills: cat}] = await Promise.all([call('/api/repos/' + repo + '/workflow'),
+    call('/api/skills').catch(() => ({skills: []}))]); }
   catch (e) { w = {error: null, failed: e.message}; }
   if (state.repo !== repo || state.view !== 'flow') return;   // the user moved on meanwhile
   if (w.failed) return box.replaceChildren(h('p', {class: 'empty'}, w.failed));
@@ -694,12 +765,15 @@ async function flow(){
     review: node(SLOT.review, w.slots.review, w)},
     w.after.map(s => node(STEP[s.mode], s, w, {title: STEP[s.mode][0], mode: s.mode, tag: s.mode}))));
   Flow.draw(prs, Flow.pr(node(SLOT['pr-review'], w.slots['pr-review'], w), w.agent_user));
+  const edit = editor(w);   // first: it resets the draft on a repo switch, and the builder reads the draft
   box.replaceChildren(
     h('div', {class: 'wfacts'},
       h('span', null, 'Base ', h('b', null, w.base)),
       h('span', null, 'At ', h('b', null, w.sha.slice(0, 12))),
       h('span', null, 'CLAUDE.md ', h('b', null, w.claude_md ? (w.claude_md / 1024).toFixed(1) + ' KB' : 'none')),
       w.org && h('span', null, 'Owner defaults ', h('b', null, w.org.repo + ' @ ' + w.org.sha.slice(0, 12)))),
+    builder(w, cat),
+    h('div', {class: 'eyebrow pr-head', style: 'margin-top:0'}, 'How a run goes, as merged on ' + w.base),
     loop,
     h('p', {class: 'fx-foot'}, 'A failure at any step: ', h('span', {class: 'lbl err'}, 'rookery:error'),
       ' and the error as a comment. approve again resumes at the first unticked task.'),
@@ -709,7 +783,234 @@ async function flow(){
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
     notes(repo),
-    editor(w));
+    edit);
+}
+
+/* --- the builder: workflow.json as boxes. Drag an agent or a skill from the shelf onto a slot;
+   drag one slot's agent onto another's to swap them; drag a skill between slots to move it, or
+   back to the shelf to drop it. Click works too (touch, keyboard): click a box, then where it
+   goes. It writes only ed.edits['workflow.json'], the draft the editor shows, so the checks,
+   "Discard all" and the pull request stay the editor's. Names come from the repo: h() only. --- */
+const norm = s => ({agent: typeof s.agent === 'string' && s.agent ? s.agent : null, mode: s.mode,
+  skills: Array.isArray(s.skills) ? s.skills.filter(k => typeof k === 'string') : [],
+  instructions: typeof s.instructions === 'string' ? s.instructions : ''});
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const obj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+addEventListener('keydown', e => { if (e.key === 'Escape' && ed.letgo) ed.letgo(); });
+
+function builder(w, cat){
+  const box = h('div', {class: 'build'});
+  let held = null, dragging = null, typing = false;
+  const opened = new Set();   // instruction panels left open across repaints
+
+  // the draft as an object; null while the editor holds text the builder can't read
+  function draft(){
+    const t = now('workflow.json');
+    if (!t || !t.trim()) return {};
+    try { const j = JSON.parse(t); return j && typeof j === 'object' && !Array.isArray(j) ? j : null; }
+    catch { return null; }
+  }
+  // what a slot or step is under the draft: the draft's keys over the layer below the repo's file
+  const steps = j => (Array.isArray(j.after) ? j.after : w.under.after).map(s => norm(obj(s)));
+  const get = (j, at) => typeof at === 'number' ? steps(j)[at] : norm({...w.under[at], ...obj(j[at])});
+  function put(j, at, s){
+    if (typeof at === 'number'){ const l = steps(j); l[at] = s; return setSteps(j, l); }
+    const o = j[at] = obj(j[at]), under = norm(w.under[at]);
+    for (const k of ['agent', 'skills', 'instructions']) if (same(s[k], under[k])) delete o[k]; else o[k] = s[k];
+    if (!Object.keys(o).length) delete j[at];   // the file says only what differs from below
+  }
+  function setSteps(j, l){
+    if (same(l, steps({}))) return delete j.after;
+    j.after = l.map(s => ({agent: s.agent, mode: s.mode, ...(s.skills.length ? {skills: s.skills} : {}),
+      ...(s.instructions ? {instructions: s.instructions} : {})}));
+  }
+  // workflow()'s rules for `after` that a move can break; the server checks everything again
+  function check(j){
+    const names = steps(j).map(s => s.agent), twice = names.find((n, i) => names.indexOf(n) !== i);
+    if (names.some(n => !n)) return 'A step after the tasks needs an agent.';
+    if (twice) return 'rk:' + twice + ' already runs a step. Each step needs its own agent.';
+    if (names.length > 5) return 'At most 5 steps after the tasks.';
+  }
+  function edit(f){
+    const j = draft();
+    if (!j) return paint();
+    f(j);
+    const err = check(j);
+    if (err){ toast(err); return paint(); }
+    if (Object.keys(j).length || 'workflow.json' in ed.files) ed.edits['workflow.json'] = JSON.stringify(j, null, 2) + '\n';
+    else delete ed.edits['workflow.json'];
+    ed.redraw();   // the editor shows the new text; its status() calls ed.hook, which repaints this
+  }
+
+  // it: {kind: 'agent' | 'skill' | 'step', name, at: a slot, a step's index, or null for the shelf}
+  function move(j, it, to){
+    if (it.kind === 'step'){
+      const l = steps(j), [s] = l.splice(it.at, 1);
+      l.splice(to.at, 0, s);
+      return setSteps(j, l);
+    }
+    if (it.kind === 'skill'){
+      if (it.at != null && it.at !== to.at){ const s = get(j, it.at); s.skills = s.skills.filter(k => k !== it.name); put(j, it.at, s); }
+      if (to.part === 'shelf' || it.at === to.at) return;
+      const s = get(j, to.at);
+      if (!s.skills.includes(it.name)) s.skills.push(it.name);
+      return put(j, to.at, s);
+    }
+    if (to.part === 'add') return setSteps(j, [...steps(j), {agent: it.name, mode: 'check', skills: [], instructions: ''}]);
+    if (it.at === to.at) return;
+    const t = get(j, to.at);
+    if (it.at != null){ const f = get(j, it.at); f.agent = t.agent; put(j, it.at, f); }   // a swap
+    t.agent = it.name;
+    put(j, to.at, t);
+  }
+  const takes = {sock: it => it.kind === 'agent', add: it => it.kind === 'agent', tray: it => it.kind === 'skill',
+    shelf: it => it.kind === 'skill' && it.at != null, step: it => it.kind === 'step'};
+  const apply = (it, to) => { held = null; edit(j => move(j, it, to)); };
+  const letgo = () => { if (held){ held = null; paint(); } };
+
+  // a box you can drag, or click to pick up
+  function pick(e, it){
+    const mine = !!held && same(held, it);
+    e.draggable = true;
+    e.setAttribute('aria-pressed', mine);
+    e.ondragstart = ev => {
+      ev.stopPropagation();
+      dragging = it;
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', it.name);
+      box.classList.add('want-' + it.kind);
+      if (it.kind === 'skill' && it.at != null) box.classList.add('want-out');
+    };
+    e.ondragend = () => { dragging = null; box.className = 'build'; };
+    e.onclick = ev => {
+      if (held && !mine && ev.target.closest('.can')) return;   // the target around it takes what's held
+      ev.stopPropagation();
+      held = mine ? null : it;
+      paint();
+    };
+    return e;
+  }
+  // somewhere a box can land
+  function drop(e, part, to){
+    to = {...to, part};
+    const ok = it => !!it && takes[part](it);
+    e.ondragover = ev => { if (ok(dragging)){ ev.preventDefault(); ev.stopPropagation(); e.classList.add('over'); } };
+    e.ondragleave = ev => { if (!e.contains(ev.relatedTarget)) e.classList.remove('over'); };
+    e.ondrop = ev => {
+      if (!ok(dragging)) return;
+      ev.preventDefault(); ev.stopPropagation();
+      const it = dragging;
+      dragging = null; box.className = 'build';
+      apply(it, to);
+    };
+    if (ok(held)){
+      e.classList.add('can');
+      e.tabIndex = 0;
+      e.onclick = ev => { ev.stopPropagation(); apply(held, to); };
+      e.onkeydown = ev => { if (ev.target === e && (ev.key === 'Enter' || ev.key === ' ')){ ev.preventDefault(); apply(held, to); } };
+    }
+    return e;
+  }
+  const x = (label, f) => h('button', {type: 'button', class: 'x', title: label, 'aria-label': label, onclick: ev => { ev.stopPropagation(); edit(f); }}, '×');
+
+  function agentBox(name, at, known){
+    const a = known.agents[name];
+    return pick(h('button', {type: 'button', class: 'chip agent' + (a ? '' : ' unknown'),
+      title: a ? (a.description || 'rk:' + name) + '\n\nfrom ' + a.source : 'Not in the plugin: the pull request check fails.'},
+      h('i'), 'rk:' + name, h('small', null, a && a.model || 'default model')),
+      {kind: 'agent', name, at});
+  }
+  function skillBox(name, at, known){
+    const s = known.skills[name];
+    return pick(h('button', {type: 'button', class: 'chip sk' + (s ? '' : ' unknown'),
+      title: s ? (s.description || 'rk:' + name) + '\n\nfrom ' + s.source : 'Not in the catalog or the repo: the pull request check fails.'},
+      h('i'), 'rk:' + name, at == null && s && h('small', null, s.hint ? 'for ' + s.hint : s.source)),
+      {kind: 'skill', name, at});
+  }
+
+  function slot(j, at, title, note, known, head, phase){
+    const s = get(j, at), step = typeof at === 'number';
+    const base = step ? w.after[at] && norm(w.after[at]) : norm(w.slots[at]);
+    const area = h('textarea', {spellcheck: 'false', 'aria-label': title + ': instructions',
+      placeholder: 'Added to this ' + (step ? 'step' : 'slot') + "'s system prompt, after CLAUDE.md."});
+    area.value = s.instructions;
+    area.oninput = () => { typing = true; edit(j => { const t = get(j, at); t.instructions = area.value; put(j, at, t); }); typing = false; };
+    const det = h('details', {class: 'say-edit', open: opened.has(at) || null},
+      h('summary', null, s.instructions ? 'Instructions · ' + s.instructions.length + ' characters' : '+ Instructions'), area);
+    det.ontoggle = () => det.open ? opened.add(at) : opened.delete(at);
+    const node = h('div', {class: 'bnode' + (step ? ' step' : '') + (same(s, base) ? '' : ' edited')},
+      h('header', null, head[0], h('h4', null, title), !same(s, base) && h('span', {class: 'tag'}, 'edited'), ...head.slice(1),
+        !step && at in j && h('button', {class: 'link', title: "Take this slot from the owner's defaults or Rookery's built-in",
+          onclick: () => edit(j => { delete j[at]; })}, 'Reset'),
+        phase && h('span', {class: 'lbl'}, phase)),
+      h('p', {class: 'what'}, note),
+      h('div', {class: 'parts'},
+        h('div', null, h('div', {class: 'cap'}, 'Agent'), drop(h('div', {class: 'sock'}, s.agent
+          ? h('span', {class: 'pair'}, agentBox(s.agent, at, known),
+              !step && x('Run without an agent', j => { const t = get(j, at); t.agent = null; put(j, at, t); }))
+          : h('span', {class: 'hint'}, 'No agent: the default harness on sonnet. Drop one here.')), 'sock', {at})),
+        h('div', null, h('div', {class: 'cap'}, 'Skills'), drop(h('div', {class: 'tray'},
+          s.skills.map(n => h('span', {class: 'pair'}, skillBox(n, at, known),
+            x('Remove rk:' + n, j => { const t = get(j, at); t.skills = t.skills.filter(k => k !== n); put(j, at, t); }))),
+          !s.skills.length && h('span', {class: 'hint'}, 'No skills. Drop one here.')), 'tray', {at}))),
+      det);
+    return step ? drop(node, 'step', {at}) : node;
+  }
+
+  function paint(){
+    const j = draft();
+    ed.letgo = letgo;
+    if (!j) return box.replaceChildren(h('p', {class: 'bbar'},
+      'The workflow.json in the editor below is not a JSON object. Fix it there, or discard the change, and the builder comes back.'));
+    // the shelf: every agent in the plugin plus any this pull request adds; the catalog plus the repo's own skills
+    const fresh = Object.keys(ed.edits).filter(p => p.startsWith('agents/') && ed.edits[p] != null)
+      .map(p => [p.slice(7, -3), {source: 'new in this change', model: (ed.edits[p].match(/^model:\s*(\w+)/m) || [])[1]}]);
+    const known = {agents: {...Object.fromEntries(fresh), ...w.agents},
+      skills: Object.fromEntries([...cat.map(s => [s.name, {source: 'catalog', description: s.description, hint: s.slot}]),
+        ...Object.entries(w.skills).map(([n, s]) => [n, {...(cat.find(c => c.name === n) && {hint: cat.find(c => c.name === n).slot}), ...s}])])};
+    const l = steps(j), dirty = changed().includes('workflow.json'), wire = () => h('div', {class: 'wire', 'aria-hidden': 'true'});
+    const what = held && (held.kind === 'step' ? 'step ' + (held.at + 1) : 'rk:' + held.name);
+    box.replaceChildren(
+      h('div', {class: 'bbar', role: 'status'}, ...(held
+        ? ['Holding ', h('b', null, what), '. Click where it goes. ', h('button', {class: 'link', onclick: letgo}, 'Cancel')]
+        : ['Drag agents and skills onto a slot. Drag one slot\'s agent onto another to swap them. No mouse: click a box, then where it goes.']),
+        dirty && h('button', {class: 'frost', onclick: () => $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'})}, 'Review and open a pull request ↓')),
+      drop(h('aside', {class: 'shelf', 'aria-label': 'Agents and skills'},
+        h('div', {class: 'eyebrow'}, 'Agents'),
+        h('div', {class: 'stack'}, Object.keys(known.agents).sort().map(n => agentBox(n, null, known)),
+          h('button', {class: 'link', onclick: () => { ed.go('+'); $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'}); }}, '+ New agent')),
+        h('div', {class: 'eyebrow'}, 'Skills'),
+        h('div', {class: 'stack'}, Object.keys(known.skills).sort().map(n => skillBox(n, null, known))),
+        h('p', {class: 'hint'}, 'Drop a skill here to take it off a slot.')), 'shelf', {}),
+      h('div', {class: 'canvas'},
+        h('div', {class: 'eyebrow'}, 'On every issue'),
+        slot(j, 'plan', SLOT.plan[0], SLOT.plan[2], known, [], SLOT.plan[1]),
+        wire(),
+        slot(j, 'task', SLOT.task[0], SLOT.task[2] + ' Runs once per task, at most 15.', known, [], SLOT.task[1]),
+        wire(),
+        h('div', {class: 'lane'},
+          h('div', {class: 'lane-head'}, h('span', {class: 'eyebrow'}, 'After the tasks'), h('small', null, l.length + ' of 5 steps'),
+            'after' in j && h('button', {class: 'link', title: "Take the steps from the owner's defaults or Rookery's built-in",
+              onclick: () => edit(j => { delete j.after; })}, 'Reset')),
+          ...l.flatMap((s, i) => [i ? wire() : null, slot(j, i, STEP[s.mode] ? STEP[s.mode][0] : 'Step', (STEP[s.mode] || [, , ''])[2], known, [
+            pick(h('button', {type: 'button', class: 'grip', title: 'Drag to reorder', 'aria-label': 'Move step ' + (i + 1)}, '⠿'),
+              {kind: 'step', name: s.agent, at: i}),
+            h('span', {class: 'modes', role: 'group', 'aria-label': 'Mode'}, Object.keys(STEP).map(m => h('button', {type: 'button',
+              'aria-pressed': s.mode === m, title: STEP[m][2], onclick: () => edit(j => { const t = get(j, i); t.mode = m; put(j, i, t); })}, m))),
+            x('Remove this step', j => { const t = steps(j); t.splice(i, 1); setSteps(j, t); })])]),
+          l.length < 5 && drop(h('div', {class: 'addstep'},
+            '+ Drop an agent here to add a step. A check reads the change; a write step may edit it.'), 'add', {})),
+        wire(),
+        slot(j, 'review', SLOT.review[0], SLOT.review[2], known, [], SLOT.review[1]),
+        wire(),
+        h('span', {class: 'lbl end'}, 'push · draft pull request'),
+        h('div', {class: 'eyebrow pr'}, 'On any pull request'),
+        slot(j, 'pr-review', SLOT['pr-review'][0], SLOT['pr-review'][2], known, [], SLOT['pr-review'][1])));
+  }
+
+  ed.hook = () => typing || paint();
+  paint();
+  return box;
 }
 
 /* --- the repo's notes: what Rookery learned from earlier runs, kept on its server, not in the repo.
@@ -829,6 +1130,7 @@ function editor(w){
         Object.assign(ed, {edits: {}, error: null}); go(ed.tab in ed.files || ed.tab === '+' ? ed.tab : 'workflow.json'); }}, 'Discard all'),
       h('button', {class: 'cta', disabled: !dirty.length || bad, onclick: e => submit(e.target, dirty)},
         'Open pull request' + (dirty.length ? ' · ' + dirty.length + (dirty.length > 1 ? ' files' : ' file') : ''))].filter(Boolean));
+    if (ed.hook) ed.hook();   // the builder draws from the same draft
   }
 
   async function submit(btn, dirty){
@@ -870,6 +1172,9 @@ function editor(w){
     status();
   }
 
+  // for the builder: open a tab, or show a draft it changed (the + tab keeps its input and focus)
+  ed.go = go;
+  ed.redraw = () => ed.tab === '+' ? status() : draw();
   draw();
   return card;
 }

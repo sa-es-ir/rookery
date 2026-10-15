@@ -97,19 +97,18 @@ Rookery adds a 👀 reaction when the review starts: to your comment for a menti
 
 The review always has the same shape:
 
-1. The verdict at the top:
-
-   | Verdict | Meaning |
-   | --- | --- |
-   | 🟢 Safe to merge | The reviewer found nothing that must stop a merge. |
-   | 🟡 Minor changes | Some changes are worth making, but nothing breaks. |
-   | 🔴 Changes needed | Something breaks: a bug, a security hole, or a change that does not do what the pull request says. |
-
+1. The verdict at the top. The table below shows the three verdicts.
 2. One sentence about the change.
 3. The answer to your note, if you wrote one.
 4. A table of findings, worst first, with a maximum of 10. Each finding has a severity (🔴 high, 🟡 medium or ⚪ low), a file and line, and one line about the problem.
 5. More information about the findings, in a collapsed **Details** section.
 6. The agent that made the review, at the bottom.
+
+| Verdict | Meaning |
+| --- | --- |
+| 🟢 Safe to merge | The reviewer found nothing that must stop a merge. |
+| 🟡 Minor changes | Some changes are worth making, but nothing breaks. |
+| 🔴 Changes needed | Something breaks: a bug, a security hole, or a change that does not do what the pull request says. |
 
 The format is the same for all model providers. Rookery makes the review from data that the reviewer returns, and Rookery limits the length of each part.
 
