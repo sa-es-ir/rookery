@@ -119,6 +119,8 @@ assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "�
 assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
 fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
 assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
+unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
+assert "| 1 | ⚪ low |" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
 for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
                              ("safe-to-merge", "no tags here", "no <review> JSON"),
                              ("safe-to-merge", "<review>{nope</review>", "does not parse"),
@@ -1115,6 +1117,13 @@ assert "Let me look" not in dg and "task-1" not in dg and "## old" not in dg, dg
 agent.DIGEST_CAP, real_dcap = 500, agent.DIGEST_CAP
 assert agent.digest(learned).startswith("(earlier calls cut)") and len(agent.digest(learned)) < 600
 agent.DIGEST_CAP = real_dcap
+# with RUN_AS, a 0700 project dir hides the transcript from us: find and read it as RUN_AS
+sh_saved, run_saved, agent.RUN_AS, ran = agent.sh, agent.RUN_AS, "runner", []
+agent.sh = lambda *a, **k: ran.append(a) or ((agent.CLAUDE_HOME / "projects" / "-ws-o-r" / "sid-1.jsonl")
+                                            .read_text(encoding="utf-8") if "sid-1.jsonl" in a else "")
+assert agent.digest(learned) == dg and len(ran) == 2, "same digest; task-1's empty find is skipped"
+assert ran[0][:4] == ("sudo", "-n", "-u", "runner") and "find" in ran[0] and "-quit" in ran[0], ran[0]
+agent.sh, agent.RUN_AS = sh_saved, run_saved
 
 # remember(): one haiku call, one turn, no tools, in an empty dir; the orchestrator writes the notes
 notes_f, replies, argv = agent.memory_file("o/r"), [], []

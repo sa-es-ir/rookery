@@ -1497,10 +1497,15 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
     m = REVIEW_JSON.search(text)
     if not m:
         raise bad("has no <review> JSON")
-    try:
-        r = json.loads(m.group(1))
-    except ValueError as e:
-        raise bad(f"has <review> JSON that does not parse ({e})") from None
+    # a model sometimes drops the last `}` after a whole findings list: a closer added, never content
+    for end in ("", "}"):
+        try:
+            r = json.loads(m.group(1) + end)
+            break
+        except ValueError as e:
+            err = err if end else e
+    else:
+        raise bad(f"has <review> JSON that does not parse ({err})")
     fs = r.get("findings") if isinstance(r, dict) else None
     if not isinstance(r, dict) or not isinstance(r.get("summary"), str) or not isinstance(fs, list) or not all(
             isinstance(f, dict) and f.get("severity") in SEVERITY and isinstance(f.get("title"), str) for f in fs):
@@ -1569,14 +1574,16 @@ def digest(job):
             "SELECT detail FROM steps WHERE job = ? AND what = 'claude' ORDER BY rowid", (job,))]
     out = []
     for s in calls:
-        found = sorted((CLAUDE_HOME / "projects").glob(f"*/{s['sid']}.jsonl")) if s.get("sid") else []
-        if not found:
+        sid, text = s.get("sid"), ""
+        if sid and RUN_AS:   # the CLI makes each project dir 0700 and transcript 0600: found and read as RUN_AS
+            text = sh("sudo", "-n", "-u", RUN_AS, "find", str(CLAUDE_HOME / "projects"), "-mindepth", "2",
+                      "-maxdepth", "2", "-name", f"{sid}.jsonl", "-exec", "cat", "{}", ";", "-quit", check=False)
+        elif sid and (found := sorted((CLAUDE_HOME / "projects").glob(f"*/{sid}.jsonl"))):
+            text = found[0].read_text(encoding="utf-8", errors="replace")
+        if not text:
             log(f"job {job}: no transcript for claude {s.get('key')} — skipped")
             continue
         lines, reply = [f"## {s.get('key')} (STATUS: {s.get('status')})"], ""
-        # the CLI writes transcripts 0600: RUN_AS's, read as RUN_AS
-        text = sh("sudo", "-n", "-u", RUN_AS, "cat", str(found[0])) if RUN_AS else \
-            found[0].read_text(encoding="utf-8", errors="replace")
         for raw in text.splitlines():
             try:
                 o = json.loads(raw)
