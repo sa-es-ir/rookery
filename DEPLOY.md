@@ -576,14 +576,14 @@ ignored you when it actually re-planned.
 ### `OAuth access token has been revoked`
 
 Mid-run, `claude failed (1)` with `api_error_status: 401` and
-`"OAuth access token has been revoked."` — the `.credentials.json` copied in step 3 is a
+`"OAuth access token has been revoked."` (or `"… has expired."`, when the box ran on another provider long enough for the token to lapse) — the `.credentials.json` copied in step 3 is a
 snapshot of a **rotating** token. Your laptop refreshing it, or any re-login on that
 account, revokes the server's copy. Permanent, not transient, and it recurs.
 
 Log the server in on its own instead:
 
 ```bash
-su - rookery
+su - rookery-run    # the RUN_AS user (§5b) runs claude; `rookery` only without RUN_AS
 claude            # /login — prints a URL, authorize it in a browser, paste the code back
 timeout 120 claude -p 'say ok' --output-format json </dev/null    # the step 7 gate again
 ```

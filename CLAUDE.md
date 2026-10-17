@@ -84,6 +84,24 @@ Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rook
 `approve` comment from someone with write access → `implement()` → `rookery:reviewing` → `rookery:done` /
 `rookery:changes-wanted` (a `changes-needed` verdict) / `rookery:error`.
 
+**Follow-up.** Once the PR is open (`rookery:done` / `rookery:changes-wanted`, or `rookery:error`
+so a failed follow-up can be asked again), a `continue` job whose comment is a `mention()` runs
+`follow_up()` (`act` `follow-up`); anything else there does nothing. `handle()` routes in order — `APPROVE` → `implement()`, `awaiting-*` → `plan()`,
+then the mention — reading the phase when the job runs, not when the comment came. It 👀s the
+comment, needs an open PR on `feature/issue-<n>` (else `NO_PR`), fetches its head and moves the
+worktree up to it with `--ff-only` (never `worktree()`, whose `-B` would reset the branch; a
+missing worktree is re-added at the PR head; diverged raises, never forces). Base is merged
+(`#<n> merge <base>`, by the orchestrator) only when the PR is `CONFLICTING` / `BEHIND` or the
+note names base, so a question stays a question; conflicted files go into `FOLLOW_UP` with the
+merge left in progress. One `claude` call, `slot="task"`, `key="follow-up"`, `per_job=True`,
+replies `FOLLOW_VERDICTS`; the worktree holds it to that: `answered` is reverted
+(`keep_plans_only(keep=())`) and invalid with conflicts open, `changed` is refused while a
+conflicted file holds a `CONFLICT` marker, then committed (the merge commit, or `#<n>
+follow-up: <note>`), with `tasks.md` restored so a follow-up adds no tasks. Any raise aborts
+the merge and reverts the worktree. HEAD past `origin/feature/issue-<n>` → `publish()`
+(implement()'s tail: `after` steps, review, push, the sections as a comment on the open PR);
+else the answer goes on the issue, phase unchanged.
+
 **Named roles are plugin agents, `--agent rk:<name>`.** `planmaker` runs `plan()`,
 `reviewer` runs the review pass, `scope-checker` is a built-in for an `after` check (no slot
 uses it by default); implementation tasks deliberately run as _no_ agent — the
@@ -159,7 +177,7 @@ detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
 findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, the
-finding count before the summary, table, collapsed details) and cuts to `REVIEW_CAPS`, and a reply
+finding count before the summary, each finding on its own bold line with its detail below) and cuts to `REVIEW_CAPS`, and a reply
 off that shape, or `safe-to-merge` with a `high` finding, fails the job. Given the worktree, it
 marks ❔ a finding whose `where` names a file or line not in it (`located()`) — flagged, never
 dropped, so it renders before the PR worktree is removed. One bug in several places is one

@@ -20,11 +20,12 @@ assert not agent.APPROVE.match("approver should look first")
 m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
 assert m and m.group(1) == "questions"
 assert not agent.MARKER.search("the STATUS: plan-ready marker must be on its own line")
-for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-ok  "):   # prod: haiku bolds it
+for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-ok  ", "`STATUS: review-ok`"):   # prod: haiku bolds it, opus copies the backticks
     m = agent.MARKER.search(f"fine\n{line}\nmore")
     assert m and m.group(1) == "review-ok", line
     assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
 assert not agent.MARKER.search("**STATUS: review-ok** but see below")
+assert not agent.MARKER.search("STATUS: changed — merged it")   # prod: text after the marker is not one
 
 # a PR comment addresses Rookery by @AGENT_USER, never in a quote or code; the rest is the note
 assert agent.mention("@Rookery-Agent look hard at the migration") == "look hard at the migration"
@@ -109,21 +110,21 @@ out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
                                          "detail": "why"}, {"severity": "low", "title": "nit"}]})
 assert out.startswith("## 🟡 Minor changes\n\n**2 findings** (1 medium, 1 low). Mostly fine.\n\n"
                       "> **Your note:** yes\n> it is\n\n"), out
-assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
-assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
+assert "**1. 🟡 medium · a | b c** · `a.py:3`\n\nwhy\n\n**2. ⚪ low · nit**\n\n<sub>" in out, \
+    "each finding on its own line, title on one line, its detail below it"
 assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
 out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
 assert out == "## 🟢 Safe to merge\n\n**No findings.** Sound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
 out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
                                                                "detail": "d" * 900}] * 12})
-assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
-assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
+assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "**10. " in out
+assert "**11. " not in out and "2 more findings not shown." in out, "cut, never failed"
 assert "**12 findings** (12 low)." in out, "the count is of all findings, not the ones shown"
 assert agent.UNCONFIRMED not in out, "no wt, no location check"
 fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
 assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
 unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
-assert "| 1 | ⚪ low |" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
+assert "**1. ⚪ low · t**" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
 for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
                              ("safe-to-merge", "no tags here", "no <review> JSON"),
                              ("safe-to-merge", "<review>{nope</review>", "does not parse"),
@@ -151,7 +152,7 @@ out = agent.render_review("minor-changes", "<review>" + json.dumps(
     {"summary": "s", "findings": [{"severity": "medium", "where": "a.py:2", "title": "real"},
                                   {"severity": "low", "where": "ghost.py:9", "title": "guessed"}]}) + "</review>",
     "rk:x", wt=lw)
-assert "| `a.py:2` | real |" in out and "| `ghost.py:9` ❔ | guessed |" in out, out
+assert "· real** · `a.py:2`\n" in out and "· guessed** · `ghost.py:9` ❔\n" in out, out
 assert agent.UNCONFIRMED in out, "flagged, never dropped"
 
 # the implement-flow reviewer: same JSON, its own two verdicts, the same consistency rule
@@ -845,7 +846,7 @@ assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\n**No f
        "_Rookery reverted" in body_, body_
 assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
 assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
-assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
+assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n**1. ⚪ low · " in body_ and "<sub>rk:reviewer</sub>" in body_, \
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
@@ -1049,8 +1050,8 @@ job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob",
 agent.handle(job_)
 assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
-        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
-        "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
+        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n"
+        "**1. 🔴 high · bug in x.py**\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis
@@ -1660,5 +1661,160 @@ agent.api = lambda *a: 1 / 0
 agent._pulse[0] = 0
 assert body(req("GET", "/api/pulse"))["merged"] == 7, "a failed search keeps the last count"
 agent.api, agent.token = real_api, real_token
+
+# follow-up: a mention on the issue once its draft PR is open — an answer, or a change pushed and reviewed
+agent.sh, agent.WORKSPACE, agent.REPOS = real_sh, Path(tempfile.mkdtemp()), {"o/r": "main"}
+g = lambda cwd, *a: subprocess.run(("git",) + a, cwd=cwd, capture_output=True, check=True, text=True).stdout.strip()
+origin, up, clone = agent.WORKSPACE / "origin.git", agent.WORKSPACE / "up", agent.clone_dir("o/r")
+g(agent.WORKSPACE, "init", "-q", "--bare", "-b", "main", str(origin))
+g(agent.WORKSPACE, "clone", "-q", str(origin), str(up))
+g(up, "config", "user.email", "t@t"), g(up, "config", "user.name", "t")
+(up / "app.txt").write_text("a\n", encoding="utf-8")
+g(up, "add", "-A"), g(up, "commit", "-qm", "base")
+base0 = g(up, "rev-parse", "HEAD")
+(up / "app.txt").write_text("main\n", encoding="utf-8")
+g(up, "commit", "-qam", "main moves"), g(up, "push", "-q", "origin", "main")
+g(agent.WORKSPACE, "clone", "-q", str(origin), str(clone))
+g(clone, "config", "user.email", "t@t"), g(clone, "config", "user.name", "t")
+def branch_for(n, f="app.txt"):
+    """feature/issue-<n> as implement() left it, from before main moved: conflicts on app.txt."""
+    g(up, "checkout", "-q", "-b", f"feature/issue-{n}", base0)
+    (up / agent.pdir(n)).mkdir(parents=True)
+    (up / agent.pdir(n) / "tasks.md").write_text("- [x] one\n", encoding="utf-8")
+    (up / f).write_text(f"branch {n}\n", encoding="utf-8")
+    g(up, "add", "-A"), g(up, "commit", "-qm", f"#{n} task 1: one"), g(up, "push", "-q", "origin", f"feature/issue-{n}")
+    g(up, "checkout", "-q", "main")
+    return agent.wt_root("o/r") / f"issue-{n}"
+fu = {"said": [], "phases": [], "pushed": [], "pr_said": [], "calls": [], "reply": None, "pr": {}}
+def fu_gh(repo, *a, input=None, check=True):
+    if a[:2] == ("pr", "view"):
+        pr = fu["pr"].get(a[2], {})
+        if "--jq" in a:
+            return pr.get("url", "") if pr.get("state") == "OPEN" else ""
+        return json.dumps(pr) if pr else ""
+    if a[:2] == ("pr", "comment"):
+        return fu["pr_said"].append(input) or ""
+    return json.dumps({"title": "t"})
+def fu_claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=None):
+    fu["calls"].append((key, prompt))
+    if key == "review":
+        return "review-ok", '<review>{"summary": "Fine.", "findings": []}</review>'
+    assert key == "follow-up" and slot == "task" and per_job and wt == agent.wt_root("o/r") / f"issue-{c.n}"
+    return fu["reply"](wt)
+def fu_sh(*a, **k):
+    if a[:2] == ("git", "push"):
+        return fu["pushed"].append(a[3]) or ""
+    return real_sh(*a, **k)
+fu_saved = (agent.gh, agent.claude, agent.comment, agent.set_phase, agent.labels_of, agent.pin, agent.api, agent.token,
+            agent.submit, agent.implement, agent.plan)
+agent.gh, agent.claude, agent.sh = fu_gh, fu_claude, fu_sh
+agent.comment = lambda c, body: fu["said"].append(body)
+agent.set_phase = lambda c, phase: fu["phases"].append(phase)
+agent.pin = lambda c: agent.active[c.repo].update(sha="abc123")
+agent.api, agent.token, agent.submit = (lambda m, path, bearer, data=None: fu["said"].append(("api", path)) or {},
+                                        lambda repo: "t", lambda job: None)
+phase = {"rookery:done"}
+agent.labels_of = lambda repo, n: phase
+def follow(n, body, reply=None):
+    for k in ("said", "phases", "pushed", "pr_said", "calls"):
+        fu[k].clear()
+    fu["reply"] = reply
+    real_handle({"kind": "continue", "repo": "o/r", "n": n, "body": body, "comment": None})
+url = lambda n: f"https://github.com/o/r/pull/{n}"
+pr_for = lambda n, mergeable="CONFLICTING": fu["pr"].update({f"feature/issue-{n}": {
+    "state": "OPEN", "url": url(n), "mergeable": mergeable, "mergeStateStatus": "DRAFT"}})
+
+# routing: only a mention, and only once the PR is open; approve and plan replies are unchanged
+routed = []
+agent.implement = lambda c: routed.append("implement")
+agent.plan = lambda c, title, body, resume: routed.append(("plan", resume))
+follow(20, "thanks, looks good")
+assert not fu["said"] and not fu["calls"] and not routed, "ordinary talk on a done issue: nothing"
+real_handle({"kind": "continue", "repo": "o/r", "n": 20, "body": "@rookery-agent", "comment": 7})
+assert fu["said"] == [("api", "/repos/o/r/issues/comments/7/reactions"), agent.FOLLOW_EMPTY] and not fu["calls"]
+phase = {"rookery:changes-wanted"}
+follow(20, "approve")
+phase = {"rookery:awaiting-input"}
+follow(20, "@rookery-agent use sqlite")
+assert routed == ["implement", ("plan", True)], routed
+agent.implement, agent.plan = fu_saved[9], fu_saved[10]
+phase = {"rookery:changes-wanted"}
+follow(20, "@rookery-agent why sqlite?")
+assert fu["said"] == [agent.NO_PR] and not fu["calls"], "no open PR: say so, no claude call"
+
+# a conflict with base, resolved: the orchestrator merges, the agent resolves, one merge commit, pushed, reviewed
+wt = branch_for(21)
+pr_for(21)
+def resolve(wt):
+    assert "app.txt" in fu["calls"][-1][1] and "in progress" in fu["calls"][-1][1], "the conflicted files are named"
+    assert "<<<<<<< " in (wt / "app.txt").read_text(encoding="utf-8")
+    (wt / "app.txt").write_text("main and branch 21\n", encoding="utf-8")
+    return "changed", "Merged main; kept both lines."
+follow(21, "@rookery-agent pull the latest from main branch and resolve the conflicts", resolve)
+assert wt.exists() and g(wt, "log", "-1", "--format=%s %p") .startswith("#21 merge main ") and \
+    len(g(wt, "log", "-1", "--format=%p").split()) == 2, "one merge commit, carrying the resolution"
+assert (wt / "app.txt").read_text(encoding="utf-8") == "main and branch 21\n" and not g(wt, "status", "--porcelain")
+assert g(wt, "merge-base", "--is-ancestor", "origin/main", "HEAD") == "", "base is in"
+assert fu["pushed"] == ["feature/issue-21:feature/issue-21"] and [k for k, _ in fu["calls"]] == ["follow-up", "review"]
+assert fu["said"][-1].startswith("Merged main; kept both lines.\n\nUpdated: " + url(21)), fu["said"]
+assert fu["phases"] == ["rookery:reviewing", "rookery:done"], fu["phases"]
+assert "## 🤖 Follow-up\n\n> pull the latest" in fu["pr_said"][0] and "## 🤖 Reviewer agent" in fu["pr_said"][0], \
+    "the open PR gets this run's sections as a comment"
+
+# a marker left in, or an answer with conflicts open: raise, and nothing half-merged stays
+for n, reply in ((22, lambda wt: ("changed", "done")), (23, lambda wt: ("answered", "it is fine"))):
+    wt = branch_for(n)
+    pr_for(n)
+    follow(n, "@rookery-agent resolve the conflicts", reply)
+    assert fu["phases"] == ["rookery:error"] and "Agent error" in fu["said"][-1], fu["said"]
+    assert ("markers are still in app.txt" if n == 22 else "answered` with merge conflicts") in fu["said"][-1]
+    assert not g(wt, "status", "--porcelain") and g(wt, "rev-parse", "HEAD") == g(wt, "rev-parse", f"origin/feature/issue-{n}")
+    assert not fu["pushed"], "nothing published"
+# prod: a failed follow-up left rookery:error, and asking again did nothing. Now it runs again
+phase = {"rookery:error"}
+follow(22, "@rookery-agent try again: resolve the conflicts", resolve)
+assert fu["pushed"] == ["feature/issue-22:feature/issue-22"] and fu["phases"][-1] == "rookery:done", fu["said"]
+phase = {"rookery:changes-wanted"}
+
+# a question: an answer on the issue, any edit reverted, no merge, no push, the phase unchanged
+wt = branch_for(24)
+pr_for(24, "MERGEABLE")
+def answer(wt):
+    assert "Rookery merged" not in fu["calls"][-1][1] and "in progress" not in fu["calls"][-1][1]
+    (wt / "app.txt").write_text("oops\n", encoding="utf-8")
+    return "answered", "Because the tests use it."
+follow(24, "@rookery-agent why sqlite?", answer)
+assert fu["said"] == ["Because the tests use it.\n\n_Rookery reverted the edits to app.txt: an answer changes nothing._"], fu["said"]
+assert not fu["phases"] and not fu["pushed"] and [k for k, _ in fu["calls"]] == ["follow-up"]
+assert (wt / "app.txt").read_text(encoding="utf-8") == "branch 24\n"
+# someone pushed to the PR since: the worktree moves up to it, never resets it
+g(up, "checkout", "-q", "feature/issue-24"), (up / "x.txt").write_text("x\n", encoding="utf-8")
+g(up, "add", "-A"), g(up, "commit", "-qm", "a person's fix"), g(up, "push", "-q", "origin", "feature/issue-24")
+g(up, "checkout", "-q", "main")
+follow(24, "@rookery-agent and now?", lambda wt: ("answered", "Still fine."))
+assert g(wt, "log", "-1", "--format=%s") == "a person's fix" and fu["said"] == ["Still fine."] and not fu["pushed"]
+# a change asked for in words: committed as one follow-up commit, pushed
+def change(wt):
+    (wt / "x.txt").write_text("y\n", encoding="utf-8")
+    (wt / agent.pdir(24) / "tasks.md").write_text("- [x] one\n- [ ] more\n", encoding="utf-8")
+    return "changed", "Set x to y."
+follow(24, "@rookery-agent set x to y\nand nothing else", change)
+assert g(wt, "log", "-1", "--format=%s") == "#24 follow-up: set x to y" and fu["pushed"]
+assert (wt / agent.pdir(24) / "tasks.md").read_text(encoding="utf-8") == "- [x] one\n", "a follow-up adds no tasks"
+
+# a clean base merge, then an answer: HEAD moved, so it is pushed and reviewed
+wt = branch_for(25, "other.txt")
+pr_for(25, "MERGEABLE")
+def clean(wt):
+    assert "It merged cleanly" in fu["calls"][-1][1]
+    return "answered", "Main is in now."
+follow(25, "@rookery-agent is main in?", clean)
+assert g(wt, "log", "-1", "--format=%s") == "#25 merge main" and fu["pushed"] == ["feature/issue-25:feature/issue-25"]
+assert [k for k, _ in fu["calls"]] == ["follow-up", "review"] and fu["phases"][-1] == "rookery:done"
+with agent.closing(agent.db()) as con:
+    assert "follow-up" in {r[0] for r in con.execute("SELECT act FROM jobs")}, "a job of its own in the run log"
+(agent.gh, agent.claude, agent.comment, agent.set_phase, agent.labels_of, agent.pin, agent.api, agent.token,
+ agent.submit, agent.implement, agent.plan) = fu_saved
+agent.sh = real_sh
 
 print("ok")

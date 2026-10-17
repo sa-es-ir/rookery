@@ -12,8 +12,8 @@ Rookery keeps the state of an issue in its labels. Each issue has one `rookery:*
 | `rookery:awaiting-approval` | The plan is ready. | Read the plan. Comment `approve`, or comment with changes. |
 | `rookery:implementing` | Rookery does the tasks. | Wait. |
 | `rookery:reviewing` | The reviewer reads the full change. | Wait. |
-| `rookery:done` | The draft pull request is open and the review found no problems. | Review the pull request. |
-| `rookery:changes-wanted` | The draft pull request is open. The reviewer or a check step wants changes. | Read the findings in the pull request body. Fix the code, or comment `approve` to do the checks and the review again. |
+| `rookery:done` | The draft pull request is open and the review found no problems. | Review the pull request. To ask a question or to ask for a change, mention `@rookery-agent` on the issue. |
+| `rookery:changes-wanted` | The draft pull request is open. The reviewer or a check step wants changes. | Read the findings in the pull request body. Fix the code, mention `@rookery-agent` on the issue with the change, or comment `approve` to do the checks and the review again. |
 | `rookery:error` | The run stopped because of an error. | Read the last comment. |
 
 Add `rookery:trigger` to an issue only. If you add it to a pull request, Rookery removes it and writes a comment. In the same way, add `rookery:pr-review` to a pull request only. If you add it to an issue, Rookery removes it and writes a comment.
@@ -61,6 +61,26 @@ After the last task, Rookery runs the extra steps of the repository, if there ar
 
 The review is advisory. Rookery pushes the branch and opens the draft pull request for all results. If the reviewer or a check step wants changes, the label is `rookery:changes-wanted` and the findings are in the pull request body. This label does not mean that the run failed.
 
+## Follow-up on the issue
+
+When the draft pull request is open, and the label is `rookery:done` or `rookery:changes-wanted`, you can mention `@rookery-agent` in a comment on the issue. The rest of the comment tells Rookery what to do. For example:
+
+- `@rookery-agent why does the cache use a lock?`
+- `@rookery-agent pull the latest from main and resolve the conflicts`
+
+Rookery adds a 👀 reaction to your comment. Then one agent session reads the comment, the plan and the change.
+
+- If the comment is a question, the agent answers it. Rookery writes the answer on the issue. Rookery does not change the branch. If the agent changes a file, Rookery reverts the change.
+- If the comment asks for a change, the agent makes the change. Rookery commits it, pushes the branch, and does the extra steps and the review again. Rookery writes the result on the pull request and on the issue, and sets `rookery:done` or `rookery:changes-wanted`.
+
+Rookery merges the base branch into the branch before the agent starts, when the pull request has conflicts, when the pull request is behind the base branch, or when your comment names the base branch. If the merge has conflicts, the agent must resolve all of them. Rookery makes sure that no conflict marker stays in a file before it commits the merge.
+
+Rookery starts from the head of the pull request. If you pushed commits to the branch, Rookery keeps them.
+
+A follow-up does not add tasks to `tasks.md`. Only a person with write, maintain or admin access can start a follow-up. A comment without `@rookery-agent` does nothing. If the issue has no open pull request, Rookery writes a comment that tells you to open a new issue.
+
+If the follow-up fails, Rookery writes the error in a comment and sets `rookery:error`. Rookery does not keep a merge that is not complete. To try again, mention `@rookery-agent` on the issue again. To push a change that a failed follow-up committed, comment `approve`.
+
 ## When a run fails
 
 If a step fails, Rookery writes the error in a comment and sets `rookery:error`. All tasks before the failure stay committed.
@@ -100,9 +120,8 @@ The review always has the same shape:
 1. The verdict at the top. The table below shows the three verdicts.
 2. The number of findings by severity, or **No findings.**, then one sentence about the change.
 3. The answer to your note, if you wrote one.
-4. A table of findings, worst first, with a maximum of 10. Each finding has a severity (🔴 high, 🟡 medium or ⚪ low), a file and line, and one line about the problem. If the same problem is in more than one place, it is one finding with all the places. Rookery checks each file and line. If the file is not in the pull request head, or the line is after the end of the file, Rookery puts ❔ next to it. Examine those findings yourself.
-5. More information about the findings, in a collapsed **Details** section.
-6. The agent that made the review, at the bottom.
+4. The findings, worst first, with a maximum of 10. Each finding starts on its own line, with a severity (🔴 high, 🟡 medium or ⚪ low), one line about the problem, and a file and line. The description of the finding is below that line. If the same problem is in more than one place, it is one finding with all the places. Rookery checks each file and line. If the file is not in the pull request head, or the line is after the end of the file, Rookery puts ❔ next to it. Examine those findings yourself.
+5. The agent that made the review, at the bottom.
 
 | Verdict | Meaning |
 | --- | --- |
