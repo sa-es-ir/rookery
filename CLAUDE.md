@@ -85,7 +85,8 @@ Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rook
 `rookery:changes-wanted` (a `changes-needed` verdict) / `rookery:error`.
 
 **Named roles are plugin agents, `--agent rk:<name>`.** `planmaker` runs `plan()`,
-`reviewer` runs the review pass; implementation tasks deliberately run as _no_ agent — the
+`reviewer` runs the review pass, `scope-checker` is a built-in for an `after` check (no slot
+uses it by default); implementation tasks deliberately run as _no_ agent — the
 default harness plus the deny rules is the point. They live in `agents/*.md` (root, in the
 native Claude Code agent format) and `pin()` copies them into the job's plugin, where
 `parse_agent()` holds their frontmatter to `AGENT_KEYS`. Not `.claude/agents/*.md`:
@@ -157,9 +158,12 @@ comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
-findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, table,
-collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `safe-to-merge` with a
-`high` finding, fails the job. The implement-flow `reviewer` uses the same JSON and renderer
+findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, the
+finding count before the summary, table, collapsed details) and cuts to `REVIEW_CAPS`, and a reply
+off that shape, or `safe-to-merge` with a `high` finding, fails the job. Given the worktree, it
+marks ❔ a finding whose `where` names a file or line not in it (`located()`) — flagged, never
+dropped, so it renders before the PR worktree is removed. One bug in several places is one
+finding. The implement-flow `reviewer` uses the same JSON and renderer
 (`REVIEW_VERDICTS`: `review-ok` / `changes-needed`, a `###` header under `## 🤖 Reviewer agent`);
 the `after` checks too (`CHECK_VERDICTS`: `check-ok` / `changes-needed`, under the step's
 header). A bad reply fails the job before the push, like a missing marker.
@@ -203,6 +207,10 @@ failing part is `null`, never an error) cached 5 min per `(repo, days)` in `_sta
 and `runlog()` (the `jobs`/`steps` rows in the window) read fresh. Nothing is stored. The
 portal lands on the last-picked repo (`localStorage`), else the first; no repos at all shows
 the install card instead of the runs list.
+`GET /api/pulse` is the one `/api/` route with no session: `agent.pulse()`, instance-wide totals
+for the landing page's band (repos, agents, skills, providers, issues, PRs, reviews, tasks, and
+merged PRs from one GitHub search per owner, cached `PULSE_TTL`): counts only, never a repo,
+owner, title, login or cost. No numbers, no band: the page never shows zeros it made up.
 `callback()` upserts the `users` row (first, last, sign-ins); `serve()` seeds it once from
 `sessions`. `/admin.html` (unlinked) is for `ADMINS` (`.env`, GitHub logins): `GET /api/admin`
 lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or

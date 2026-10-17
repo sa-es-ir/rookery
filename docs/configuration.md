@@ -50,17 +50,18 @@ If the file is not valid, or if it names a skill or an agent that does not exist
 
 ## Agents
 
-Rookery has three agents:
+Rookery has four agents:
 
 - `planmaker` writes the plan.
 - `reviewer` reviews the full change.
 - `pr-reviewer` reviews a pull request when a person asks for it.
+- `scope-checker` finds changes that the plan did not ask for: refactors, abstractions, flags and defensive code. No slot uses it by default. To use it, add `{ "agent": "scope-checker", "mode": "check" }` to `after`.
 
 The tasks do not use an agent. They use the default Claude harness.
 
 To add an agent, write `.rookery/agents/<name>.md`. Use the Claude Code agent format. The frontmatter can have only these keys: `name`, `description`, `tools`, `model` and `skills`.
 
-An agent with the name `planmaker`, `reviewer` or `pr-reviewer` replaces the agent of Rookery with that name.
+An agent with the name `planmaker`, `reviewer`, `pr-reviewer` or `scope-checker` replaces the agent of Rookery with that name.
 
 Names use only lower-case letters, digits and hyphens.
 

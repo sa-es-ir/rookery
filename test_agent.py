@@ -83,9 +83,9 @@ assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
 
 # the two named roles, and the review verdicts the orchestrator branches on
 roles = {p.stem: agent.parse_agent(p, p.stem) for p in (agent.HERE / "agents").glob("*.md")}
-assert set(roles) == {"planmaker", "reviewer", "pr-reviewer"}
+assert set(roles) == {"planmaker", "reviewer", "pr-reviewer", "scope-checker"}
 assert all(r["description"] for r in roles.values())
-assert "Edit" not in roles["reviewer"]["tools"] + roles["pr-reviewer"]["tools"], "reviewers report, never fix"
+assert not [r for r in ("reviewer", "pr-reviewer", "scope-checker") if "Edit" in roles[r]["tools"]], "reviewers report, never fix"
 assert all(r["model"] == "opus" for r in roles.values()), "roles think; tasks grind on sonnet"
 assert {agent.WORKFLOW[s]["agent"] for s in agent.WORKFLOW} == {"planmaker", None, "reviewer", "pr-reviewer"}
 assert not [k for s in agent.WORKFLOW.values() for k in s["skills"]], "no skills unless a repo asks"
@@ -107,16 +107,19 @@ def rv(verdict, review, raw=False):
 out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
                            "findings": [{"severity": "medium", "where": "a.py:3", "title": "a | b\nc",
                                          "detail": "why"}, {"severity": "low", "title": "nit"}]})
-assert out.startswith("## 🟡 Minor changes\n\nMostly fine.\n\n> **Your note:** yes\n> it is\n\n"), out
+assert out.startswith("## 🟡 Minor changes\n\n**2 findings** (1 medium, 1 low). Mostly fine.\n\n"
+                      "> **Your note:** yes\n> it is\n\n"), out
 assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
 assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
 assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
 out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
-assert out == "## 🟢 Safe to merge\n\nSound.\n\n<sub>rk:x</sub>\n", "no note, no findings: header and summary only"
+assert out == "## 🟢 Safe to merge\n\n**No findings.** Sound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
 out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
                                                                "detail": "d" * 900}] * 12})
 assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
 assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
+assert "**12 findings** (12 low)." in out, "the count is of all findings, not the ones shown"
+assert agent.UNCONFIRMED not in out, "no wt, no location check"
 fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
 assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
 unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
@@ -134,6 +137,23 @@ for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it
         raise AssertionError(why)
     except RuntimeError as e:
         assert why in str(e), e
+# with a worktree, a `where` that is not in it is marked, never dropped
+lw = Path(tempfile.mkdtemp())
+(lw / "sub").mkdir()
+(lw / "a.py").write_text("1\n2\n3\n")
+(lw / "sub" / "b.py").write_text("x")
+for where, ok in [("a.py:3", True), ("a.py", True), ("sub/b.py:1", True), ("a.py:2-3, sub/b.py:L1", True),
+                  ("", True), ("the retry loop in foo()", True), ("`a.py:1`", True), ("sub/", True),
+                  ("a.py:4", False), ("a.py:0", False), ("nope.py:1", False), ("a.py:1, nope.py", False),
+                  ("../a.py", False), ("sub/:1", False)]:
+    assert agent.located(lw, where) is ok, (where, ok)
+out = agent.render_review("minor-changes", "<review>" + json.dumps(
+    {"summary": "s", "findings": [{"severity": "medium", "where": "a.py:2", "title": "real"},
+                                  {"severity": "low", "where": "ghost.py:9", "title": "guessed"}]}) + "</review>",
+    "rk:x", wt=lw)
+assert "| `a.py:2` | real |" in out and "| `ghost.py:9` ❔ | guessed |" in out, out
+assert agent.UNCONFIRMED in out, "flagged, never dropped"
+
 # the implement-flow reviewer: same JSON, its own two verdicts, the same consistency rule
 try:
     agent.render_review("review-ok", '<review>{"summary": "s", "findings": [{"severity": "high", "title": "t"}]}'
@@ -662,7 +682,8 @@ assert not (sk / "verify" / "run.sh").exists(), "the winner's files only, never 
 assert (sk / "repo-recon" / "SKILL.md").read_text(encoding="utf-8").endswith("the repo's own\n"), "repo beats catalog"
 assert (sk / "systematic-debugging" / "find-polluter.sh").exists(), "an enabled catalog skill, files and all"
 assert not (sk / "changelog").exists(), "a catalog skill nobody enabled stays out"
-assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "pr-reviewer.md", "reviewer.md"]
+assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["planmaker.md", "pr-reviewer.md", "reviewer.md",
+                                                                        "scope-checker.md"]
 assert a["workflow"]["pr-review"] == agent.WORKFLOW["pr-review"], "a slot the repo leaves out is the built-in's"
 assert sorted(p.name for p in a["plugin"].iterdir()) == [".claude-plugin", "agents", "skills"], "no hooks, no MCP"
 argv[:], prompts[:] = [], []
@@ -759,7 +780,7 @@ agent.begin(pc, "implement")
 agent.pin(pc)
 a = agent.active["o/r"]
 assert sorted(p.name for p in (a["plugin"] / "agents").iterdir()) == ["docs.md", "planmaker.md", "pr-reviewer.md",
-                                                                        "reviewer.md", "sec.md"], "top-level *.md only"
+                                                                        "reviewer.md", "scope-checker.md", "sec.md"], "top-level *.md only"
 assert (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8").endswith("the repo's reviewer\n")
 assert a["agents"]["reviewer"]["model"] == "sonnet" and a["agent_sources"]["planmaker"] == "built-in"
 argv[:], prompts[:] = [], []
@@ -820,11 +841,11 @@ assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not
 assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
 body_ = prs[0]
 assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
-assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\nNo holes.\n\n<sub>rk:sec · rk:verify</sub>\n\n" \
+assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\n**No findings.** No holes.\n\n<sub>rk:sec · rk:verify</sub>\n\n" \
        "_Rookery reverted" in body_, body_
 assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
 assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
-assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\nFine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
+assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
@@ -1028,7 +1049,7 @@ job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob",
 agent.handle(job_)
 assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
-        "## 🔴 Changes needed\n\nBreaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
+        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
         "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
@@ -1617,5 +1638,27 @@ agent.begin(agent.Ctx("o/r", 6, Path("."), "main"), "implement")   # cancelled b
 assert agent.cancel("o/r", agent.active["o/r"]["job"], "bob")        # nothing to kill, but
 assert "Cancelled" in capped("o/r"), "the next claude call never starts"
 agent.finish("o/r", "cancelled")
+
+# the landing page's pulse: no session, totals only, the merged count from one search per owner
+searched, real_api, real_token = [], agent.api, agent.token
+agent.api = lambda m, path, tok: searched.append(urllib.parse.unquote(path)) or {"total_count": 7}
+agent.token = lambda repo: "t"
+agent._pulse[:] = 0, None
+with agent.closing(agent.db()) as con:
+    before = dict(con.execute("SELECT what, COUNT(*) FROM steps GROUP BY what"))
+agent.begin(agent.Ctx("o/r", 90, Path("."), "main"), "implement")
+for what, d in [("tick", {}), ("tick", {}), ("pr", {"url": "u"}), ("pr", {"url": "u"}), ("posted", {"verdict": "x"})]:
+    agent.step("o/r", what, **d)
+agent.finish("o/r", "ok")
+p = body(req("GET", "/api/pulse"))
+assert p["merged"] == 7 and len(searched) == len({r.split("/")[0] for r in agent.REPOS}), searched
+assert all(f"user:{r.split('/')[0]}" in " ".join(searched) for r in agent.REPOS)
+assert p["tasks"] == before.get("tick", 0) + 2 and p["reviews"] == before.get("posted", 0) + 1, p
+assert p["agents"] == 4 and p["skills"] >= 1 and p["repos"] == len(agent.REPOS), p
+assert not {"repo", "title", "login", "usd"} & set(json.dumps(p).split('"')), "nothing that names a tenant"
+agent.api = lambda *a: 1 / 0
+agent._pulse[0] = 0
+assert body(req("GET", "/api/pulse"))["merged"] == 7, "a failed search keeps the last count"
+agent.api, agent.token = real_api, real_token
 
 print("ok")

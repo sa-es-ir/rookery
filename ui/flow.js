@@ -217,7 +217,7 @@ const Flow = (() => {
         {id: 'approve', lane: 0, title: 'Approve the plan', label: 'rookery:awaiting-approval', tone: 'live',
           note: 'Comment `approve`, matched as text, from someone with write access. Never the portal, never a model.'},
         {id: 'task', lane: 1, title: 'Work the tasks', label: 'rookery:implementing', loop: '↻ fresh session per task',
-          note: 'A fresh session per task, so issue 300 costs what issue 3 did. `decisions.md` is the only memory between tasks.',
+          note: 'A fresh session per task, so task 15 costs what task 1 did. `decisions.md` is the only memory between tasks.',
           again: 'next unticked task → `task-done` → Rookery ticks and commits · at most 15', ...s.task},
         ...after.map((a, i) => ({id: 'after' + i, lane: 1, label: 'rookery:implementing', ...a})),
         {id: 'review', lane: 1, title: 'Review the diff', label: 'rookery:reviewing',

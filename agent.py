@@ -29,6 +29,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import closing
@@ -1044,7 +1045,9 @@ fence:
 
 `severity` is `high` (it breaks something, or work the plan asked for is
 missing), `medium` (it can break, or a path that can break has no test) or
-`low` (worth a look). Put the worst first, ten at most. Sound work has an empty
+`low` (worth a look). Put the worst first, ten at most. When one mistake is in
+several places, make it one finding and list every place in `where`,
+comma-separated, so the fix covers them all. Sound work has an empty
 `findings` list. Rookery turns this JSON into the review section of the pull
 request body, for the person about to read the diff. It posts nothing outside
 the tags.
@@ -1075,7 +1078,9 @@ fence:
 </review>
 
 `severity` is `high` (it breaks something), `medium` (it can break) or `low`
-(worth a look). Put the worst first, ten at most. Sound work has an empty
+(worth a look). Put the worst first, ten at most. When one mistake is in
+several places, make it one finding and list every place in `where`,
+comma-separated, so the fix covers them all. Sound work has an empty
 `findings` list. Rookery turns this JSON into your section of the pull request
 body, for the person about to read the diff. It posts nothing outside the tags.
 """
@@ -1136,9 +1141,10 @@ fence:
 
 `severity` is `high` (it breaks something), `medium` (it can break, or a path
 that can break has no test) or `low` (worth a look). Put the worst first, ten
-at most. A sound change has an empty `findings` list. Rookery turns this JSON
-into the review it posts, for the person about to read the diff. It posts
-nothing outside the tags.
+at most. When one mistake is in several places, make it one finding and list
+every place in `where`, comma-separated, so the fix covers them all. A sound
+change has an empty `findings` list. Rookery turns this JSON into the review it
+posts, for the person about to read the diff. It posts nothing outside the tags.
 """
 
 # what pin() reads from base: a PR that changes any of it steers Rookery once merged
@@ -1285,7 +1291,7 @@ def implement(c):
     keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
     s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
     review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
-                           verdicts=REVIEW_VERDICTS, level="###")
+                           verdicts=REVIEW_VERDICTS, level="###", wt=wt)
 
     log(f"#{c.n} pushing {branch} and opening draft PR")
     # an explicit https URL, so the push is the App's even when origin is ssh
@@ -1352,7 +1358,7 @@ def after_steps(c, wt, after):
             raise RuntimeError(f"step {name} reported failed:\n\n{msg}")
         if mode == "check":
             msg = render_review(status, msg, " · ".join(f"rk:{k}" for k in [name, *s["skills"]]),
-                                verdicts=CHECK_VERDICTS, level="###")
+                                verdicts=CHECK_VERDICTS, level="###", wt=wt)
         if reverted:
             msg += f"\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._\n"
         if mode == "write":
@@ -1459,17 +1465,18 @@ def review_pr(c, job):
                  "to review again.")
         return
     note = f"\nThe person who asked for this review wrote:\n\n{job['note']}\n" if job.get("note") else ""
+    s = (active[c.repo].get("workflow") or WORKFLOW)["pr-review"]
+    by = " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]])
     try:
         wt = pr_worktree(c, pr["baseRefName"])
         verdict, text = claude(c, PR_REVIEW.format(n=c.n, repo=c.repo, title=pr["title"], body=pr["body"] or "",
                                                    note=note, base=pr["baseRefName"], wt=Path(wt).absolute(),
                                                    diff=pr_diff(wt, pr["baseRefName"])),
                                key="pr-review", slot="pr-review", per_job=True, wt=wt)
+        review = render_review(verdict, text, by, wt=wt)   # before the worktree goes: it checks each `where`
     finally:
         drop_pr_worktree(c)
-    s = (active[c.repo].get("workflow") or WORKFLOW)["pr-review"]
-    by = " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]])
-    gh(c.repo, "pr", "review", str(c.n), "--comment", "--body-file", "-", input=render_review(verdict, text, by))
+    gh(c.repo, "pr", "review", str(c.n), "--comment", "--body-file", "-", input=review)
     step(c.repo, "posted", verdict=verdict, head=head)
 
 
@@ -1483,12 +1490,33 @@ SEVERITY = {"high": "🔴", "medium": "🟡", "low": "⚪"}
 REVIEW_JSON = re.compile(r"<review>\s*(?:```(?:json)?\s*)?(.*?)\s*(?:```\s*)?</review>", re.S)
 # cut, never failed: the review is already paid for
 REVIEW_CAPS = {"findings": 10, "title": 150, "where": 120, "summary": 600, "answer": 600, "detail": 800}
+WHERE = re.compile(r"([^\s,;:()]+)(?::L?(\d+)(?:-L?\d+)?)?")   # path, optional :line or :line-line
+UNCONFIRMED = "❔ Rookery did not find this file or line in the code. Check it by hand."
 
 
-def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
+def located(wt, where):
+    """False when a finding's `where` names a file, or a line past its end, that is not in wt:
+    a guess, not something the reviewer read. Only tokens with a / or . count as paths, so
+    prose in `where` passes. ponytail: checks wt only, so a finding on a file the change
+    deletes reads as unconfirmed; check base too if that turns out to be common."""
+    root = Path(wt).resolve()
+    for p, line in WHERE.findall(str(where or "").replace("`", "")):
+        p = p.rstrip(".")
+        if "/" not in p and "." not in p:
+            continue
+        f = (root / p).resolve()
+        if not f.is_relative_to(root) or not f.exists():
+            return False
+        if line and (f.is_dir() or not 1 <= int(line) <= len(f.read_bytes().splitlines())):
+            return False
+    return True
+
+
+def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##", wt=None):
     """A reviewer's STATUS and <review> JSON → the markdown posted on the PR, or into the
     PR body under `level`. A reply off that shape raises: parsed, never inferred, like the
-    STATUS marker."""
+    STATUS marker. With `wt`, each finding's `where` is checked against it (located())
+    and marked ❔ when it is not there: flagged, never dropped."""
     def bad(why):
         return RuntimeError(f"the reviewer's reply {why}. Its reply ended:\n\n{text[-1500:]}")
     best = next(iter(verdicts))   # best first
@@ -1518,18 +1546,25 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##"):
         if cell:   # one table cell: one line, and a | would end the cell
             s = " ".join(s.split()).replace("|", "\\|")
         return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
-    out = [f"{level} {verdicts[verdict]}", cut(r["summary"], REVIEW_CAPS["summary"])]
+    # the count first, so "nothing to fix" is plain before anyone reads on
+    tally = ", ".join(f"{k} {sev}" for sev in SEVERITY if (k := sum(f["severity"] == sev for f in fs)))
+    lead = f"**{len(fs)} finding{'s' * (len(fs) != 1)}** ({tally})." if fs else "**No findings.**"
+    out = [f"{level} {verdicts[verdict]}", f"{lead} {cut(r['summary'], REVIEW_CAPS['summary'])}"]
     if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
         out.append("> **Your note:** " + answer.replace("\n", "\n> "))
     shown = fs[:REVIEW_CAPS["findings"]]
     if shown:
-        rows = ["| # | Severity | Where | Finding |", "|---|---|---|---|"]
+        rows, unsure = ["| # | Severity | Where | Finding |", "|---|---|---|---|"], False
         for i, f in enumerate(shown, 1):
             where = cut(f.get("where"), REVIEW_CAPS["where"], cell=True).replace("`", "")
-            rows.append(f"| {i} | {SEVERITY[f['severity']]} {f['severity']} | {f'`{where}`' if where else ''} "
+            mark = " ❔" if wt and not located(wt, f.get("where")) else ""   # the raw where: a cut one could miss
+            unsure = unsure or bool(mark)
+            rows.append(f"| {i} | {SEVERITY[f['severity']]} {f['severity']} | {f'`{where}`' if where else ''}{mark} "
                         f"| {cut(f['title'], REVIEW_CAPS['title'], cell=True)} |")
         if len(fs) > len(shown):
             rows.append(f"\n{len(fs) - len(shown)} more findings not shown.")
+        if unsure:
+            rows.append(f"\n{UNCONFIRMED}")
         out.append("\n".join(rows))
         details = [f"**{i}. {cut(f['title'], REVIEW_CAPS['title'], cell=True)}**\n\n"
                    f"{cut(f['detail'], REVIEW_CAPS['detail'])}" for i, f in enumerate(shown, 1) if f.get("detail")]
@@ -1736,6 +1771,36 @@ def runlog(repo, since):
             "issues": len({n for n, act, _ in jobs if act == "plan"}), "prs": len(prs),
             "reviews": sum(verdicts.values()), "verdicts": dict(verdicts), "usd": round(usd, 4),
             "per_pr": round(usd / len(prs), 4) if prs else None}
+
+
+PULSE_TTL = 3600
+_pulse = [0, None]   # (when, merged count) — one GitHub search per owner, so cached longer than stats
+
+
+def pulse():
+    """The landing page's numbers: instance-wide totals only — no repo, owner, title or login."""
+    with closing(db()) as con:
+        steps = dict(con.execute("SELECT what, COUNT(*) FROM steps WHERE what IN "
+                                 "('claude', 'tick', 'commit', 'posted') GROUP BY what"))
+        prs = con.execute("SELECT COUNT(DISTINCT json_extract(detail, '$.url')) FROM steps WHERE what = 'pr'").fetchone()[0]
+        issues = con.execute("SELECT COUNT(*) FROM (SELECT DISTINCT repo, n FROM jobs WHERE act = 'plan')").fetchone()[0]
+    now = time.time()
+    if now - _pulse[0] > PULSE_TTL:
+        owners = {r.split("/")[0]: r for r in REPOS}   # one installation per owner, so any repo's token
+        q = f"is:pr is:merged author:app/{ME.removesuffix('[bot]')}"
+        try:
+            # ponytail: one search per owner, fine to a few dozen owners; record `merged` on the closed event past that
+            merged = sum(api("GET", "/search/issues?per_page=1&q=" + urllib.parse.quote(f"{q} user:{o}"),
+                             token(r))["total_count"] for o, r in owners.items())
+        except Exception as e:
+            log(f"pulse: merged search failed: {e}")
+            merged = _pulse[1]   # the last good count beats none
+        _pulse[:] = now, merged
+    return {"repos": len(REPOS), "agents": len(list((HERE / "agents").glob("*.md"))),
+            "skills": len(list((HERE / "skills").glob("*/SKILL.md"))),
+            "providers": len(PROVIDERS),   # what a run can use: an owner brings a key the operator lacks
+            "issues": issues, "prs": prs, "merged": _pulse[1], "reviews": steps.get("posted", 0),
+            "tasks": steps.get("tick", 0), "commits": steps.get("commit", 0), "calls": steps.get("claude", 0)}
 
 
 def github(repo, since):

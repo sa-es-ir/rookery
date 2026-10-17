@@ -16,6 +16,13 @@ never fetched at run time: a skill's scripts run on the operator's box.
 `security-review` also fits the `pr-review` slot: `{"pr-review": {"skills": ["security-review"]}}`.
 (Not in the table's Slot column: the portal reads one slot per row from it.)
 
+The built-in `scope-checker` agent (`agents/`) is a `check` step too: it flags changes the
+plan did not ask for. Adapted from The Agency's Minimal Change Engineer
+([msitarzewski/agency-agents@652b269](https://github.com/msitarzewski/agency-agents/blob/652b269/engineering/engineering-minimal-change-engineer.md)),
+MIT ([LICENSE-agency-agents](LICENSE-agency-agents)); `security-review`'s client-side secrets,
+row-level security and model-input checks are adapted from its AI-Generated Code Security
+Auditor, same licence.
+
 `check` and `write` are `after` steps: a repo adds one with an agent of its own, or
 reuses one, e.g. `{"agent": "reviewer", "mode": "check", "skills": ["security-review"]}`.
 
