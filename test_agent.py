@@ -26,6 +26,10 @@ for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-o
     assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
 assert not agent.MARKER.search("**STATUS: review-ok** but see below")
 assert not agent.MARKER.search("STATUS: changed — merged it")   # prod: text after the marker is not one
+fenced = "```\n**Plan**\n\n- one\n\nSTATUS: plan-ready\n```"   # prod: deepseek fenced its whole plan
+assert agent.unmark(fenced, agent.MARKER.search(fenced)) == "**Plan**\n\n- one"
+code = "```py\na = 1\n```\nSee above.\n```py\nb = 2\n```\nSTATUS: answered"
+assert agent.unmark(code, agent.MARKER.search(code)) == code[:code.index("\nSTATUS")], "two fences are not one wrapper"
 
 # a PR comment addresses Rookery by @AGENT_USER, never in a quote or code; the rest is the note
 assert agent.mention("@Rookery-Agent look hard at the migration") == "look hard at the migration"
@@ -110,21 +114,21 @@ out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
                                          "detail": "why"}, {"severity": "low", "title": "nit"}]})
 assert out.startswith("## 🟡 Minor changes\n\n**2 findings** (1 medium, 1 low). Mostly fine.\n\n"
                       "> **Your note:** yes\n> it is\n\n"), out
-assert "**1. 🟡 medium · a | b c** · `a.py:3`\n\nwhy\n\n**2. ⚪ low · nit**\n\n<sub>" in out, \
-    "each finding on its own line, title on one line, its detail below it"
+assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
+assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
 assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
 out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
 assert out == "## 🟢 Safe to merge\n\n**No findings.** Sound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
 out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
                                                                "detail": "d" * 900}] * 12})
-assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "**10. " in out
-assert "**11. " not in out and "2 more findings not shown." in out, "cut, never failed"
+assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
+assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
 assert "**12 findings** (12 low)." in out, "the count is of all findings, not the ones shown"
 assert agent.UNCONFIRMED not in out, "no wt, no location check"
 fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
 assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
 unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
-assert "**1. ⚪ low · t**" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
+assert "| 1 | ⚪ low |" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
 for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
                              ("safe-to-merge", "no tags here", "no <review> JSON"),
                              ("safe-to-merge", "<review>{nope</review>", "does not parse"),
@@ -152,7 +156,7 @@ out = agent.render_review("minor-changes", "<review>" + json.dumps(
     {"summary": "s", "findings": [{"severity": "medium", "where": "a.py:2", "title": "real"},
                                   {"severity": "low", "where": "ghost.py:9", "title": "guessed"}]}) + "</review>",
     "rk:x", wt=lw)
-assert "· real** · `a.py:2`\n" in out and "· guessed** · `ghost.py:9` ❔\n" in out, out
+assert "| `a.py:2` | real |" in out and "| `ghost.py:9` ❔ | guessed |" in out, out
 assert agent.UNCONFIRMED in out, "flagged, never dropped"
 
 # the implement-flow reviewer: same JSON, its own two verdicts, the same consistency rule
@@ -846,7 +850,7 @@ assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\n**No f
        "_Rookery reverted" in body_, body_
 assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
 assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
-assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n**1. ⚪ low · " in body_ and "<sub>rk:reviewer</sub>" in body_, \
+assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
@@ -1050,8 +1054,8 @@ job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob",
 agent.handle(job_)
 assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
-        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n"
-        "**1. 🔴 high · bug in x.py**\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
+        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
+        "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis

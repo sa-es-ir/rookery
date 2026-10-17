@@ -120,8 +120,9 @@ The review always has the same shape:
 1. The verdict at the top. The table below shows the three verdicts.
 2. The number of findings by severity, or **No findings.**, then one sentence about the change.
 3. The answer to your note, if you wrote one.
-4. The findings, worst first, with a maximum of 10. Each finding starts on its own line, with a severity (🔴 high, 🟡 medium or ⚪ low), one line about the problem, and a file and line. The description of the finding is below that line. If the same problem is in more than one place, it is one finding with all the places. Rookery checks each file and line. If the file is not in the pull request head, or the line is after the end of the file, Rookery puts ❔ next to it. Examine those findings yourself.
-5. The agent that made the review, at the bottom.
+4. A table of findings, worst first, with a maximum of 10. Each finding has a severity (🔴 high, 🟡 medium or ⚪ low), a file and line, and one line about the problem. If the same problem is in more than one place, it is one finding with all the places. Rookery checks each file and line. If the file is not in the pull request head, or the line is after the end of the file, Rookery puts ❔ next to it. Examine those findings yourself.
+5. More information about the findings, in a collapsed **Details** section.
+6. The agent that made the review, at the bottom.
 
 | Verdict | Meaning |
 | --- | --- |

@@ -149,6 +149,9 @@ APPROVE = re.compile(r"^\s*(approve|approved|lgtm|go ahead)\b", re.I)
 # alone on its line; markdown bold or code around it is tolerated (prod: `**STATUS: review-ok**`,
 # and the backticks the prompts quote it in, copied as is)
 MARKER = re.compile(r"^(?:\*\*|`)?STATUS:(?:\*\*)?[ \t]*([\w-]+)[ \t]*(?:\*\*|`)?[ \t]*$", re.M)
+# a reply fenced whole, marker inside (prod: deepseek's plan posted as one code block); unwrapped
+# only when no other fence is inside, so a reply that starts and ends with code is left alone
+FENCED = re.compile(r"```[\w-]*\n((?:(?!```).)*?)\n?```", re.S)
 TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
@@ -959,7 +962,14 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
     log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
-    return m.group(1), (text[:m.start()] + text[m.end():]).strip()
+    return m.group(1), unmark(text, m)
+
+
+def unmark(text, m):
+    """The reply without its STATUS line, and without a fence around the whole of it."""
+    reply = (text[:m.start()] + text[m.end():]).strip()
+    f = FENCED.fullmatch(reply)
+    return f.group(1).strip() if f else reply
 
 
 # Named roles live in agents/*.md and reach the CLI as plugin agents, `--agent rk:<name>`
@@ -1695,10 +1705,10 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##", wt=None):
     if verdict == best and any(f["severity"] == "high" for f in fs):
         raise bad(f"says {best} but has a high finding")
 
-    def cut(s, cap, line=False):
+    def cut(s, cap, cell=False):
         s = str(s or "").strip()
-        if line:
-            s = " ".join(s.split())
+        if cell:   # one table cell: one line, and a | would end the cell
+            s = " ".join(s.split()).replace("|", "\\|")
         return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
     # the count first, so "nothing to fix" is plain before anyone reads on
     tally = ", ".join(f"{k} {sev}" for sev in SEVERITY if (k := sum(f["severity"] == sev for f in fs)))
@@ -1706,18 +1716,24 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##", wt=None):
     out = [f"{level} {verdicts[verdict]}", f"{lead} {cut(r['summary'], REVIEW_CAPS['summary'])}"]
     if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
         out.append("> **Your note:** " + answer.replace("\n", "\n> "))
-    shown, unsure = fs[:REVIEW_CAPS["findings"]], False
-    for i, f in enumerate(shown, 1):   # the finding on its own line, its detail below it
-        where = cut(f.get("where"), REVIEW_CAPS["where"], line=True).replace("`", "")
-        mark = " ❔" if wt and not located(wt, f.get("where")) else ""   # the raw where: a cut one could miss
-        unsure = unsure or bool(mark)
-        head = (f"**{i}. {SEVERITY[f['severity']]} {f['severity']} · {cut(f['title'], REVIEW_CAPS['title'], line=True)}**"
-                + (f" · `{where}`" if where else "") + mark)
-        out.append(head + (f"\n\n{cut(f['detail'], REVIEW_CAPS['detail'])}" if f.get("detail") else ""))
-    if len(fs) > len(shown):
-        out.append(f"{len(fs) - len(shown)} more findings not shown.")
-    if unsure:
-        out.append(UNCONFIRMED)
+    shown = fs[:REVIEW_CAPS["findings"]]
+    if shown:
+        rows, unsure = ["| # | Severity | Where | Finding |", "|---|---|---|---|"], False
+        for i, f in enumerate(shown, 1):
+            where = cut(f.get("where"), REVIEW_CAPS["where"], cell=True).replace("`", "")
+            mark = " ❔" if wt and not located(wt, f.get("where")) else ""   # the raw where: a cut one could miss
+            unsure = unsure or bool(mark)
+            rows.append(f"| {i} | {SEVERITY[f['severity']]} {f['severity']} | {f'`{where}`' if where else ''}{mark} "
+                        f"| {cut(f['title'], REVIEW_CAPS['title'], cell=True)} |")
+        if len(fs) > len(shown):
+            rows.append(f"\n{len(fs) - len(shown)} more findings not shown.")
+        if unsure:
+            rows.append(f"\n{UNCONFIRMED}")
+        out.append("\n".join(rows))
+        details = [f"**{i}. {cut(f['title'], REVIEW_CAPS['title'], cell=True)}**\n\n"
+                   f"{cut(f['detail'], REVIEW_CAPS['detail'])}" for i, f in enumerate(shown, 1) if f.get("detail")]
+        if details:
+            out.append("<details><summary>Details</summary>\n\n" + "\n\n".join(details) + "\n\n</details>")
     out.append(f"<sub>{by}</sub>")
     return "\n\n".join(out) + "\n"
 

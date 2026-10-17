@@ -177,7 +177,7 @@ detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
 findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, the
-finding count before the summary, each finding on its own bold line with its detail below) and cuts to `REVIEW_CAPS`, and a reply
+finding count before the summary, table, collapsed details) and cuts to `REVIEW_CAPS`, and a reply
 off that shape, or `safe-to-merge` with a `high` finding, fails the job. Given the worktree, it
 marks ❔ a finding whose `where` names a file or line not in it (`located()`) — flagged, never
 dropped, so it renders before the PR worktree is removed. One bug in several places is one
