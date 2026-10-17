@@ -42,7 +42,6 @@
 .hero h1 em{font-style:normal;color:var(--fog)}
 .hero .lede{margin-top:24px;font-size:18px;line-height:1.6;font-weight:300;color:var(--ash);max-width:46ch}
 .hero .actions{margin-top:32px;display:flex;flex-wrap:wrap;gap:12px}
-.hero .fine{margin-top:24px;font-size:13px;color:var(--fog);font-family:var(--mono);letter-spacing:0}
 
 /* signature: the live issue card */
 .issue{background:var(--surface);border-radius:16px;padding:32px;box-shadow:var(--inset);
@@ -69,6 +68,17 @@
 .on .box{border-color:rgb(253,137,37);box-shadow:0 0 10px rgba(255,142,93,.45)}
 .issue .foot{margin-top:20px;padding-top:16px;border-top:1px solid var(--smoke);
   font-family:var(--mono);font-size:11px;color:var(--fog);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+/* pulse: the instance's own totals from /api/pulse; hidden until they load */
+.pulse{padding:0 0 32px}
+.pulse .grid{margin-top:16px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.pulse .tile{box-shadow:var(--inset);border-radius:24px;padding:24px 28px}
+.pulse .n{display:block;font-size:clamp(36px,4vw,48px);line-height:.94;letter-spacing:-.86px;font-weight:300;
+  color:#fff;font-variant-numeric:tabular-nums}
+.pulse .k{display:block;margin-top:12px;font-size:14px;color:var(--fog);font-weight:300}
+.pulse .kit{margin-top:24px;display:flex;flex-wrap:wrap;gap:8px 28px;font-family:var(--mono);font-size:13px;
+  letter-spacing:0;color:var(--fog)}
+.pulse .kit b{color:var(--ash);font-weight:400}
 
 /* sections */
 .sec{padding:96px 0}
@@ -103,6 +113,7 @@
 .close{background:var(--panel);border-radius:24px;padding:64px 48px;text-align:center;margin-bottom:96px}
 .close h2{font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:-.86px}
 .close p{margin:20px auto 32px;color:var(--fog);max-width:50ch;font-weight:300}
+.close code{font-family:var(--mono);font-size:14px;color:#fff}
 
 footer{border-top:1px solid var(--smoke);padding:56px 0 72px;position:relative}
 footer::before{content:"";position:absolute;inset:0;pointer-events:none;
@@ -156,7 +167,6 @@ footer .links a:hover{color:#fff}
       <a class="cta" href="portal.html">Open portal</a>
       <a class="ghost" href="#how">See the loop</a>
     </div>
-    <p class="fine">stdlib python · gh + claude on PATH · no database</p>
   </div>
 
   <article class="issue" aria-label="Example issue, running">
@@ -177,13 +187,30 @@ footer .links a:hover{color:#fff}
   </article>
 </div></section>
 
+<section class="pulse" id="pulse" aria-label="Rookery by the numbers" hidden><div class="wrap">
+  <div class="eyebrow">Live from this instance</div>
+  <div class="grid">
+    <div class="tile"><span class="n" data-k="merged">0</span><span class="k">pull requests merged</span></div>
+    <div class="tile"><span class="n" data-k="prs">0</span><span class="k">draft pull requests opened</span></div>
+    <div class="tile"><span class="n" data-k="reviews">0</span><span class="k">pull requests reviewed</span></div>
+    <div class="tile"><span class="n" data-k="tasks">0</span><span class="k">tasks completed</span></div>
+  </div>
+  <div class="kit">
+    <span><b data-k="issues">0</b> issues planned</span>
+    <span><b data-k="repos">0</b> repositories</span>
+    <span><b data-k="agents">0</b> agents</span>
+    <span><b data-k="skills">0</b> skills</span>
+    <span><b data-k="providers">0</b> model providers</span>
+  </div>
+</div></section>
+
 <section class="sec" id="how"><div class="wrap rail-grid">
   <div class="sec-head">
     <div class="eyebrow">The loop</div>
     <h2>Every step is a label, two of them yours</h2>
-    <p>State lives on GitHub, not in a database here. The labels on the issue
-      <em>are</em> the state machine — you can read where a run stands from the issue
-      alone. Nothing moves past a gate until you do.</p>
+    <p>State lives on GitHub. The labels on the issue <em>are</em> the state machine — you
+      can read where a run stands from the issue alone; the local database keeps only the run
+      log. Nothing moves past a gate until you do.</p>
   </div>
   <div>
     <div id="loop"></div>
@@ -202,7 +229,7 @@ footer .links a:hover{color:#fff}
   </div>
   <div class="cards">
     <div class="card"><div class="eyebrow">Cost</div>
-      <h3>Issue 300 costs what issue 3 did</h3>
+      <h3>Task 15 costs what task 1 did</h3>
       <p>Every task gets its own session, so context never snowballs across a long issue.
         <code>decisions.md</code> is the only thing that crosses between tasks.</p></div>
     <div class="card"><div class="eyebrow">Authorship</div>
@@ -240,7 +267,7 @@ footer .links a:hover{color:#fff}
     <div><span class="no">never</span><b>Merge anything</b>
       <p>The output is a draft pull request. A human merges, every time.</p></div>
     <div><span class="no">never</span><b>Act on an unsigned webhook</b>
-      <p>The signature is verified first, and repositories you haven't configured are dropped.</p></div>
+      <p>The signature is verified first, and repositories without the App installed are dropped.</p></div>
     <div><span class="no">never</span><b>Guess at a result</b>
       <p>A task reports its status as a literal marker. A missing one is an error, not an assumption.</p></div>
   </div>
@@ -248,8 +275,8 @@ footer .links a:hover{color:#fff}
 
 <div class="wrap"><section class="close">
   <h2>Point it at a repository</h2>
-  <p>Configure the repos you want covered, invite the agents you trust, and watch the queue
-    from one place.</p>
+  <p>Install the GitHub App on the repos you want covered, steer each one with
+    <code>.rookery/workflow.json</code>, and watch every run from one place.</p>
   <a class="cta" href="portal.html">Open portal</a>
 </section></div>
 
@@ -310,4 +337,22 @@ async function loop(){
 
 if (still){ show(PHASES[5]); items.forEach(li => li.className = 'done'); }
 else loop();
+
+// The pulse band: no numbers (a static host, a failed call) means no band, never zeros we made up.
+fetch('/api/pulse').then(r => r.ok ? r.json() : Promise.reject()).then(p => {
+  const band = document.getElementById('pulse');
+  band.querySelectorAll('[data-k]').forEach(el => {
+    const v = p[el.dataset.k];
+    if (v == null) { el.closest('.tile, span').remove(); return; }   // e.g. GitHub search down: drop the tile
+    if (still) { el.textContent = v.toLocaleString(); return; }
+    const t0 = performance.now();
+    const tick = t => {
+      const f = Math.min(1, (t - t0) / 1200);
+      el.textContent = Math.round(v * (1 - (1 - f) ** 3)).toLocaleString();
+      if (f < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  band.hidden = false;
+}).catch(() => {});
 </script>

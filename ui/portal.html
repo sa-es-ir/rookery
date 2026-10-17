@@ -456,18 +456,19 @@ function signedOut(){ $('#app').hidden = true; $('#gate').hidden = false; state.
 
 const LBL = {running: 'live', ok: 'ok', failed: 'err', cancelled: 'err', interrupted: 'err'};
 const ACT = {plan: 'plan', reply: 'plan revision', implement: 'implementation', 'pr-review': 'PR review',
-  memory: 'repo notes'};
+  memory: 'repo notes', 'follow-up': 'follow-up'};
 
 // the one line the whole page exists for: where a run is, or where it stopped
 function where(r){
   const t = r.task && ('task ' + r.task.i + ' of ' + r.task.of);
-  const doing = {implement: 'starting', 'pr-review': 'reviewing', memory: 'updating notes'}[r.act] || 'planning';
+  const doing = {implement: 'starting', 'pr-review': 'reviewing', memory: 'updating notes',
+    'follow-up': 'following up'}[r.act] || 'planning';
   if (r.status === 'running') return t ? 'Running ' + t : doing[0].toUpperCase() + doing.slice(1);
   if (r.status === 'failed') return t ? 'Failed at ' + t : 'Failed while ' + doing;
   if (r.status === 'cancelled') return 'Cancelled' + (t ? ' at ' + t : '');
   if (r.status === 'interrupted') return 'Interrupted by a restart' + (t ? ' at ' + t : '');
   return {implement: 'Done — draft PR opened', plan: 'Plan posted', 'pr-review': 'Review posted',
-    memory: 'Notes checked'}[r.act] || 'Plan revised';
+    memory: 'Notes checked', 'follow-up': 'Follow-up posted'}[r.act] || 'Plan revised';
 }
 
 function progress(r){
@@ -567,11 +568,13 @@ function stepView(s){
     task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
     claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
     tick: () => ['Ticked task ' + s.i + ' in tasks.md'],
-    commit: () => [s.step ? 'Committed step ' : 'Committed task ', s.step ? h('span', {class: 'mono'}, 'rk:' + s.step) : String(s.i),
-      h('small', null, s.sha)],
+    commit: () => [s.step ? 'Committed step ' : s.i ? 'Committed task ' : 'Committed the follow-up',
+      s.step ? h('span', {class: 'mono'}, 'rk:' + s.step) : s.i ? String(s.i) : '', h('small', null, s.sha)],
     step: () => [s.mode === 'check' ? 'Check ' : 'Write step ', h('span', {class: 'mono'}, 'rk:' + s.agent)],
-    reverted: () => ['Reverted what check ', h('span', {class: 'mono'}, 'rk:' + s.agent), ' edited',
-      h('small', null, s.paths.join(', '))],
+    reverted: () => [...(s.agent ? ['Reverted what check ', h('span', {class: 'mono'}, 'rk:' + s.agent), ' edited']
+      : ['Reverted what the follow-up edited']), h('small', null, s.paths.join(', '))],
+    merge: () => ['Merged ', h('span', {class: 'mono'}, s.base),
+      h('small', null, s.conflicts.length ? 'conflicts: ' + s.conflicts.join(', ') : 'no conflicts')],
     push: () => ['Pushed ', h('span', {class: 'mono'}, s.branch)],
     // only a github.com URL becomes a link: the value came out of a CLI's stdout
     pr: () => /^https:\/\/github\.com\//.test(s.url)

@@ -30,7 +30,23 @@ CLI argument, file, environment, message, webhook) to where it is used.
   up by an id from the request without checking it belongs to the caller.
 - **Secrets.** Keys, tokens or passwords in code, config, tests or logs. A
   secret passed on a command line or into an environment a child process
-  inherits.
+  inherits. A secret behind an env prefix the build ships to the browser
+  (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `EXPO_PUBLIC_`, `REACT_APP_`), or a
+  server-only key (a Supabase `service_role` key) imported where client code
+  can reach it. A key that is public by design (a publishable or anon key) is
+  not a finding. A leaked secret's `detail` says to rotate it at the provider:
+  deleting it from the code does not un-leak it. Never quote the value; name
+  its type and where it is.
+- **Row-level security.** A new table without a policy, a policy of
+  `USING (true)` or `WITH CHECK (true)` on data that belongs to a user, a
+  storage bucket made public. A permission check that reads a field the user
+  can write themselves (Supabase `user_metadata`, a role in the request body
+  or a header the client sets) in place of server-side state (`app_metadata`,
+  the session).
+- **Input to a model.** Request input concatenated into a system prompt, or
+  into one instruction string with no role boundary. `high` when that call
+  also gives the model tools or function calling: an injection then acts, not
+  just talks. Input in its own user message, with no tools, is not a finding.
 - **Paths and URLs.** A file path built from input (`..`, absolute paths,
   symlinks). A URL fetched from input (SSRF). A redirect to a URL from input.
 - **Untrusted data.** Deserialising input with pickle, `BinaryFormatter`,

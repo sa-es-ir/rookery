@@ -6,3 +6,5 @@ __pycache__/
 .playwright-mcp/
 # internal plans, notes and deploy logs: not for the public repo
 ai-plans/
+# talk slides and notes: not part of the product
+presentation/

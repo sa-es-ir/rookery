@@ -84,8 +84,27 @@ Flow: label `rookery:trigger` → `plan()` (`rookery:planning`) → either `rook
 `approve` comment from someone with write access → `implement()` → `rookery:reviewing` → `rookery:done` /
 `rookery:changes-wanted` (a `changes-needed` verdict) / `rookery:error`.
 
+**Follow-up.** Once the PR is open (`rookery:done` / `rookery:changes-wanted`, or `rookery:error`
+so a failed follow-up can be asked again), a `continue` job whose comment is a `mention()` runs
+`follow_up()` (`act` `follow-up`); anything else there does nothing. `handle()` routes in order — `APPROVE` → `implement()`, `awaiting-*` → `plan()`,
+then the mention — reading the phase when the job runs, not when the comment came. It 👀s the
+comment, needs an open PR on `feature/issue-<n>` (else `NO_PR`), fetches its head and moves the
+worktree up to it with `--ff-only` (never `worktree()`, whose `-B` would reset the branch; a
+missing worktree is re-added at the PR head; diverged raises, never forces). Base is merged
+(`#<n> merge <base>`, by the orchestrator) only when the PR is `CONFLICTING` / `BEHIND` or the
+note names base, so a question stays a question; conflicted files go into `FOLLOW_UP` with the
+merge left in progress. One `claude` call, `slot="task"`, `key="follow-up"`, `per_job=True`,
+replies `FOLLOW_VERDICTS`; the worktree holds it to that: `answered` is reverted
+(`keep_plans_only(keep=())`) and invalid with conflicts open, `changed` is refused while a
+conflicted file holds a `CONFLICT` marker, then committed (the merge commit, or `#<n>
+follow-up: <note>`), with `tasks.md` restored so a follow-up adds no tasks. Any raise aborts
+the merge and reverts the worktree. HEAD past `origin/feature/issue-<n>` → `publish()`
+(implement()'s tail: `after` steps, review, push, the sections as a comment on the open PR);
+else the answer goes on the issue, phase unchanged.
+
 **Named roles are plugin agents, `--agent rk:<name>`.** `planmaker` runs `plan()`,
-`reviewer` runs the review pass; implementation tasks deliberately run as _no_ agent — the
+`reviewer` runs the review pass, `scope-checker` is a built-in for an `after` check (no slot
+uses it by default); implementation tasks deliberately run as _no_ agent — the
 default harness plus the deny rules is the point. They live in `agents/*.md` (root, in the
 native Claude Code agent format) and `pin()` copies them into the job's plugin, where
 `parse_agent()` holds their frontmatter to `AGENT_KEYS`. Not `.claude/agents/*.md`:
@@ -157,9 +176,12 @@ comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
 (`rk:pr-reviewer` by default, `claude(wt=)`), and posts `gh pr review --comment`. Its verdict is
 `PR_VERDICTS` (`safe-to-merge` / `minor-changes` / `changes-needed`, the `STATUS` marker) and its
-findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, table,
-collapsed details) and cuts to `REVIEW_CAPS`, and a reply off that shape, or `safe-to-merge` with a
-`high` finding, fails the job. The implement-flow `reviewer` uses the same JSON and renderer
+findings are JSON in `<review>` tags; `render_review()` writes the posted markdown (header, the
+finding count before the summary, each finding on its own bold line with its detail below) and cuts to `REVIEW_CAPS`, and a reply
+off that shape, or `safe-to-merge` with a `high` finding, fails the job. Given the worktree, it
+marks ❔ a finding whose `where` names a file or line not in it (`located()`) — flagged, never
+dropped, so it renders before the PR worktree is removed. One bug in several places is one
+finding. The implement-flow `reviewer` uses the same JSON and renderer
 (`REVIEW_VERDICTS`: `review-ok` / `changes-needed`, a `###` header under `## 🤖 Reviewer agent`);
 the `after` checks too (`CHECK_VERDICTS`: `check-ok` / `changes-needed`, under the step's
 header). A bad reply fails the job before the push, like a missing marker.
@@ -203,6 +225,10 @@ failing part is `null`, never an error) cached 5 min per `(repo, days)` in `_sta
 and `runlog()` (the `jobs`/`steps` rows in the window) read fresh. Nothing is stored. The
 portal lands on the last-picked repo (`localStorage`), else the first; no repos at all shows
 the install card instead of the runs list.
+`GET /api/pulse` is the one `/api/` route with no session: `agent.pulse()`, instance-wide totals
+for the landing page's band (repos, agents, skills, providers, issues, PRs, reviews, tasks, and
+merged PRs from one GitHub search per owner, cached `PULSE_TTL`): counts only, never a repo,
+owner, title, login or cost. No numbers, no band: the page never shows zeros it made up.
 `callback()` upserts the `users` row (first, last, sign-ins); `serve()` seeds it once from
 `sessions`. `/admin.html` (unlinked) is for `ADMINS` (`.env`, GitHub logins): `GET /api/admin`
 lists providers, overrides, owners and users, `POST /api/admin/provider` sets the default or

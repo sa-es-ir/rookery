@@ -19,7 +19,7 @@
   </nav>
   <div class="right">
     <a class="frost" href="https://github.com/sa-es-ir/rookery">github</a>
-    <a class="cta" href="portal.html">open portal</a>
+    <a class="cta" href="../portal.html">open portal</a>
   </div>
 </div></header>
 
@@ -36,10 +36,9 @@
       writes a plan you sign off on, then works the task list one task at a time and opens a
       draft pull request. It never merges. That part is still yours.</p>
     <div class="actions">
-      <a class="cta" href="portal.html">open portal</a>
+      <a class="cta" href="../portal.html">open portal</a>
       <a class="ghost" href="#how">see the loop</a>
     </div>
-    <p class="fine">stdlib python · gh + claude on PATH · no database</p>
   </div>
 
   <article class="box hot issue" aria-label="Example issue, running">
@@ -67,20 +66,20 @@
 <section class="sec" id="how"><div class="wrap tree-grid">
   <div class="sec-head">
     <div class="eyebrow">/the-loop</div>
-    <h2>Six labels, one of them yours</h2>
-    <p>State lives on GitHub, not in a database here. The labels on the issue
-      <em>are</em> the state machine — you can read where a run stands without opening
-      anything else, and you can stop it by removing a label.</p>
+    <h2>Six labels, two of them yours</h2>
+    <p>State lives on GitHub. The labels on the issue <em>are</em> the state machine — you
+      can read where a run stands without opening anything else; the local database keeps
+      only the run log. A running job is cancelled from the portal.</p>
   </div>
   <ol class="tree">
     <li class="gate"><span class="pin">◆</span><span class="lbl live">rookery:trigger</span>
       <h3>You start it</h3>
-      <p>Nothing runs until someone puts the label on. There is no polling and no autonomous pickup.</p>
+      <p>Nothing runs until someone puts the label on, or assigns the agent's account. There is no polling and no autonomous pickup.</p>
       <span class="you">└ requires you</span></li>
     <li><span class="pin">◇</span><span class="lbl">rookery:planning</span>
       <h3>planmaker reads the repo</h3>
       <p>It writes <code>plan.md</code>, <code>tasks.md</code> and
-        <code>decisions.md</code> into the target repo and touches nothing else.</p></li>
+        <code>decisions.md</code> into <code>agent-plans/&lt;n&gt;/</code>. Anything else it touches is reverted.</p></li>
     <li><span class="pin">◇</span><span class="lbl">rookery:awaiting-input</span>
       <h3>It asks when it has to</h3>
       <p>An open question comes back as an issue comment. Reply and planning resumes in the
@@ -88,7 +87,7 @@
     <li class="gate"><span class="pin">◆</span><span class="lbl live">rookery:awaiting-approval</span>
       <h3>You approve it</h3>
       <p>The plan is posted for review. Comment <code>approve</code> to start the
-        work — matched as text, from a login on your allowlist.</p>
+        work — matched as text, from someone with write access on the repo.</p>
       <span class="you">└ requires you</span></li>
     <li><span class="pin">◇</span><span class="lbl">rookery:implementing</span>
       <h3>One task, then the next</h3>
@@ -97,7 +96,7 @@
     <li><span class="pin">◇</span><span class="lbl">rookery:reviewing</span>
       <h3>A second agent reads the diff</h3>
       <p>Advisory, and it runs once. The branch is pushed and the draft PR opened either way,
-        so work is never stranded on someone's laptop.</p></li>
+        so work is never stranded in a local worktree.</p></li>
   </ol>
 </div></section>
 
@@ -110,7 +109,7 @@
   </div>
   <div class="cards">
     <div class="box"><span class="cap">cost</span>
-      <h3>Issue 300 costs what issue 3 did</h3>
+      <h3>Task 15 costs what task 1 did</h3>
       <p>Every task gets its own session, so context never snowballs across a long issue.
         <code>decisions.md</code> is the only thing that crosses between tasks.</p></div>
     <div class="box"><span class="cap">authorship</span>
@@ -119,7 +118,7 @@
         The orchestrator ticks the checkbox and writes the commit, so history stays legible.</p></div>
     <div class="box"><span class="cap">approval</span>
       <h3>Your approval is read, not judged</h3>
-      <p>The word is matched against a pattern and the author against your allowlist.
+      <p>The word is matched against a pattern, and the author must have write access on that repository.
         No model decides whether you meant yes, and the bot is filtered out so it can't approve itself.</p></div>
     <div class="box"><span class="cap">review</span>
       <h3>The plan ships inside the PR</h3>
@@ -130,9 +129,9 @@
       <p>Each issue gets its own branch and its own checkout, so two repositories can share an
         issue number and never meet.</p></div>
     <div class="box"><span class="cap">throughput</span>
-      <h3>One job at a time, on purpose</h3>
-      <p>A single worker drains the queue. A long implementation blocks the others — a
-        deliberate trade for a machine you can reason about.</p></div>
+      <h3>Repos in parallel, one job per repo</h3>
+      <p>Each repository drains its own queue, so a long run on one never blocks another.
+        Within a repo it is one job at a time — two jobs on one issue would race on its worktree.</p></div>
   </div>
 </div></section>
 
@@ -147,7 +146,7 @@
     <div class="box"><span class="cap">[!] deny</span><b>Merge anything</b>
       <p>The output is a draft pull request. A human merges, every time.</p></div>
     <div class="box"><span class="cap">[!] deny</span><b>Act on an unsigned webhook</b>
-      <p>The signature is verified first, and repositories you haven't configured are dropped.</p></div>
+      <p>The signature is verified first, and repositories without the App installed are dropped.</p></div>
     <div class="box"><span class="cap">[!] deny</span><b>Guess at a result</b>
       <p>A task reports its status as a literal marker. A missing one is an error, not an assumption.</p></div>
   </div>
@@ -156,9 +155,9 @@
 <div class="wrap"><section class="box close">
   <span class="cap">next</span>
   <h2>Point it at a repository</h2>
-  <p>Configure the repos you want covered, invite the agents you trust, and watch the queue
-    from one place.</p>
-  <a class="cta" href="portal.html">open portal</a>
+  <p>Install the GitHub App on the repos you want covered, steer each one with
+    <code>.rookery/workflow.json</code>, and watch every run from one place.</p>
+  <a class="cta" href="../portal.html">open portal</a>
 </section></div>
 
 <footer><div class="wrap">
@@ -167,7 +166,7 @@
     <p>An orchestrator for coding agents. It runs your issues; it never merges them.</p>
   </div>
   <div class="links">
-    <a href="portal.html">portal</a>
+    <a href="../portal.html">portal</a>
     <a href="../index.html">classic view</a>
     <a href="https://github.com/sa-es-ir/rookery">source</a>
   </div>
