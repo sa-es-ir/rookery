@@ -72,8 +72,17 @@ and clears them (clear needs `can_write()`).
 
 **State lives on GitHub and in the target repo, not here.** The `rookery:*` labels _are_ the
 state machine (`PHASES`), advanced only via `set_phase()`, which removes stale phase labels.
-Per-issue files live in `agent-plans/<n>/` inside the target repo — `plan.md`, `tasks.md`,
-`decisions.md` — and are committed and pushed with the change so they land in the PR. Nothing
+Per-issue files can live in `agent-plans/<n>/` inside the target repo — `plan.md`, `tasks.md`,
+`decisions.md` — and are committed and pushed with the change so they land in the PR. A repo
+with `local_plans` on (the default) keeps them at `wt_root/plans-<n>/` instead (`plans()`): never committed,
+passed to `claude` by `--add-dir`, the plan call keeps nothing in the worktree, removed with the
+worktree. Wherever an issue's plan already is wins, outside first; `frozen()` restores `tasks.md`
+around the review, `after` steps and follow-ups, since git cannot revert it out there.
+
+**Repo settings.** `REPO_SETTINGS` (`local_plans` on, `review_prs` off), one JSON row
+`repo:<owner/repo>` in `settings`, read by `repo_settings()`, set by
+`POST /api/repos/<o>/<r>/settings` (`can_write()`), dropped by `offboard()`. Not in
+`workflow.json`: `enqueue()` reads `review_prs` on the webhook thread, with no fetch. Nothing
 local persists between runs: Claude session ids are `uuid5(NS, "repo#n/key")`, so re-running
 the same issue resumes the same session. The review and `after` steps pass `per_job=True`,
 which adds the job id: they re-run whole on every approve, and a resumed one repeats its last
@@ -169,7 +178,8 @@ of any open same-repo PR. Triggers (`enqueue()`, each gated by `may()` = not `ME
 `can_write()`): a PR comment matching `MENTION` (`@AGENT_USER`, default `rookery-agent`, a
 plain machine account with no token on the box; `mention()` ignores quoted lines and code,
 the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
-`AGENT_USER`. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
+`AGENT_USER`; with `review_prs` on, also `opened` (`auto`, no `may()`: a writer turned it on),
+never on `ME`'s PRs or a fork's. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
 on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
 no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
 comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
@@ -347,7 +357,7 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   go in through `textContent` (`h()`).
 - **The push goes to `https://github.com/<repo>.git`**, not `origin`, so it carries the
   App's token even when the clone's origin is ssh.
-- **Planning writes `agent-plans/<n>/` and nothing else**, enforced by `keep_plans_only()`
+- **Planning writes `plans()` and nothing else** (`agent-plans/<n>/`, or nothing in the worktree when the plan is outside), enforced by `keep_plans_only()`
   after every `plan()` call, not by the PLAN prompt's wording. It reverts rather than raises,
   so the awaiting-input reply loop can call `plan()` repeatedly without accumulating stray
   edits. It parses `git status --porcelain -uall` — `-uall` matters, since plain `--porcelain`

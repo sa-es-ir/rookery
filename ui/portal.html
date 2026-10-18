@@ -254,6 +254,17 @@ main{min-width:0}
 .mem .row b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
 .mem .row a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
 .mem .row .ghost{margin-left:auto}
+/* repo settings: one row per box, the label over its explanation */
+.opt{display:flex;gap:14px;align-items:flex-start;cursor:pointer}
+.opt input{margin-top:4px;width:16px;height:16px;flex:none;accent-color:rgb(107,33,239);cursor:pointer}
+.opt input:focus-visible{outline:2px solid rgb(7,122,199);outline-offset:2px}
+.opt span{display:flex;flex-direction:column;gap:4px}
+.opt b{font-weight:400;color:#fff;font-size:15px}
+.opt small{font-size:13px;line-height:1.5;color:var(--fog);font-weight:300}
+.trees{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:12px 16px;margin-left:37px}   /* under the label text: the box, its margins and the gap */
+.trees > div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.trees pre{white-space:pre;overflow-x:auto;font-variant-ligatures:none}
+.trees .note{grid-column:1/-1;margin:0}
 .files{display:flex;gap:6px;flex-wrap:wrap}
 .files button{background:transparent;border:1px solid var(--smoke);border-radius:8px;padding:5px 12px;cursor:pointer;
   font:400 12px var(--mono);letter-spacing:0;color:var(--fog)}
@@ -332,6 +343,7 @@ main{min-width:0}
   .gate .box{padding:36px 24px}
   .gate h1{font-size:40px}
   .edit,.mem{padding:20px}
+  .trees{margin-left:0}
   .edit .row .cta{margin-left:0;width:100%}
   .keyc .add{grid-template-columns:1fr}
   .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -785,8 +797,67 @@ async function flow(){
     idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
+    settings(repo),
     notes(repo),
     edit);
+}
+
+/* --- the repo's settings: kept on Rookery's server, not in the repo, so a change needs no PR.
+   Changing one needs write access to the repo; the server checks, a refusal unticks the box. --- */
+const SETTING = {
+  local_plans: ['Keep plans out of the repo',
+    'On by default. Rookery writes plan.md, tasks.md and decisions.md on its server, next to the issue\'s worktree, '
+    + 'and does not commit them. The plan summary is still posted on the issue. Rookery deletes the files when the '
+    + 'pull request closes. An issue that already has a plan keeps it where it is.',
+    {on: ['On (default)',
+      'feature/issue-<n>     the PR\n'
+      + '└── src/…             code only\n\n'
+      + 'Rookery\'s server\n'
+      + '└── <owner>_<repo>/\n'
+      + '    ├── issue-<n>/    the worktree\n'
+      + '    └── plans-<n>/    deleted on close\n'
+      + '        ├── plan.md\n'
+      + '        ├── tasks.md\n'
+      + '        └── decisions.md'],
+     off: ['Off',
+      'feature/issue-<n>     the PR\n'
+      + '├── agent-plans/\n'
+      + '│   └── <n>/          committed\n'
+      + '│       ├── plan.md\n'
+      + '│       ├── tasks.md\n'
+      + '│       └── decisions.md\n'
+      + '└── src/…             code'],
+     note: 'When this is off, the three files are in the pull request, so reviewers can read the plan and the '
+      + 'decisions. If you merge the pull request, the files also go into your base branch, and they stay there '
+      + 'until you delete them. Issues that started with this off keep their plan in agent-plans/<n>/.'}],
+  review_prs: ['Review every new pull request',
+    'When someone opens a pull request on this repo, Rookery reviews it once, as if they added rookery:pr-review. '
+    + 'Not Rookery\'s own pull requests, and not pull requests from forks. Each review counts against the daily caps.']};
+// the two folder layouts side by side, under the box they explain (outside the label, so a click on them flips nothing)
+const layouts = t => h('div', {class: 'trees'},
+  ...[t.on, t.off].map(([cap, tree]) => h('div', null, h('span', {class: 'cap'}, cap), h('pre', null, tree))),
+  h('p', {class: 'note'}, t.note));
+function settings(repo){
+  const box = h('div', {class: 'mem'}, h('p', {class: 'note'}, 'Reading the settings…'));
+  const flip = async (e, k, label) => {
+    const on = e.target.checked;
+    e.target.disabled = true;
+    try {
+      await call('/api/repos/' + repo + '/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({[k]: on})});
+      toast(label + (on ? ': on' : ': off'));
+    } catch (err) { e.target.checked = !on; toast(err.message); }
+    e.target.disabled = false;
+  };
+  call('/api/repos/' + repo + '/settings').then(v => box.replaceChildren(
+    h('div', null, h('h3', null, 'Repo settings'),
+      h('p', {class: 'note'}, 'Kept on Rookery\'s server, not in your repo, so a change needs no pull request. '
+        + 'To change one, you need write access to ' + repo + '.')),
+    ...Object.entries(SETTING).flatMap(([k, [label, help, trees]]) => [h('label', {class: 'opt'},
+      h('input', {type: 'checkbox', checked: v[k], onchange: e => flip(e, k, label)}),
+      h('span', null, h('b', null, label), h('small', null, help))), ...(trees ? [layouts(trees)] : [])])
+  )).catch(e => box.replaceChildren(h('p', {class: 'note'}, e.message)));
+  return box;
 }
 
 /* --- the builder: workflow.json as boxes. Drag an agent or a skill from the shelf onto a slot;

@@ -22,7 +22,7 @@ The diagram plays the loop. Select a step to stop it and see what the step does.
 ## What you get
 
 - A branch `feature/issue-<n>` with one commit for each task.
-- A folder `agent-plans/<n>/` in the pull request. It holds the plan, the task list and the decisions log.
+- The plan, the task list and the decisions log. Rookery keeps them on its server and does not commit them. To put them in the pull request as `agent-plans/<n>/`, clear a repository setting in the portal.
 - A draft pull request. Its body holds the review and the result of each extra step.
 
 ## What Rookery does not do

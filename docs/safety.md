@@ -28,7 +28,7 @@ Rookery also blocks:
 
 ## The planning step writes only the plan
 
-The plan agent can change only `agent-plans/<n>/`. Rookery reverts all other changes after each planning call.
+By default, the plan agent can change nothing in the worktree. It writes the plan files on the Rookery server. If the repository puts plans in the repo, the plan agent can change only `agent-plans/<n>/`. Rookery reverts all other changes after each planning call.
 
 ## Daily limits
 

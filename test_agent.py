@@ -70,21 +70,25 @@ d.mkdir(parents=True)
 Not a task: - [ ] inline mention, and `- [ ] ` in prose.
 """, encoding="utf-8")
 
-tasks = agent.read_tasks(wt, 7)
+tasks = agent.read_tasks(d)
 assert [t[1] for t in tasks] == [True, False, False], tasks
 assert [t[2] for t in tasks] == ["scaffold the module", "wire the handler", "add the test"]
 
 first_open = next(t for t in tasks if not t[1])
-agent.tick(wt, 7, first_open[0])
-after = agent.read_tasks(wt, 7)
+agent.tick(d, first_open[0])
+after = agent.read_tasks(d)
 assert [t[1] for t in after] == [True, True, False]
 assert [t[2] for t in after] == [t[2] for t in tasks], "ticking must not disturb the text"
 assert "- [x] wire the handler" in (d / "tasks.md").read_text(encoding="utf-8")
 
 # every tick strictly reduces the open count, so the loop terminates
 for at, _, _ in [t for t in after if not t[1]]:
-    agent.tick(wt, 7, at)
-assert not [t for t in agent.read_tasks(wt, 7) if not t[1]]
+    agent.tick(d, at)
+assert not [t for t in agent.read_tasks(d) if not t[1]]
+# only tick() changes the list: whatever an agent does to it inside frozen() is undone
+with agent.frozen(d / "tasks.md"):
+    (d / "tasks.md").write_text("- [ ] a task an agent added\n", encoding="utf-8")
+assert not [t for t in agent.read_tasks(d) if not t[1]]
 
 # the two named roles, and the review verdicts the orchestrator branches on
 roles = {p.stem: agent.parse_agent(p, p.stem) for p in (agent.HERE / "agents").glob("*.md")}
@@ -182,11 +186,27 @@ git("add", "-A"), git("commit", "-qm", "base")
 (repo / "src.py").write_text("planner edited this\n", encoding="utf-8")  # tracked, revert
 (repo / "stray.txt").write_text("junk\n", encoding="utf-8")              # untracked, delete
 
+agent.WORKSPACE = Path(tempfile.mkdtemp())   # repo_settings() reads rookery.db there
 agent.keep_plans_only(agent.Ctx("o/r", 7, repo, "main"), repo)
 
 assert (repo / agent.pdir(7) / "plan.md").read_text(encoding="utf-8") == "the plan\n"
 assert (repo / "src.py").read_text(encoding="utf-8") == "original\n", "tracked edit not reverted"
 assert not (repo / "stray.txt").exists(), "untracked stray not cleaned"
+
+# local_plans: a new issue's plan goes beside the worktree, never into it; a plan already
+# somewhere stays there whichever way the setting flips
+c8, c7, c9 = (agent.Ctx("o/r", n, repo, "main") for n in (8, 7, 9))
+out8 = agent.wt_root("o/r") / "plans-8"
+assert agent.plans(c8, repo) == (out8, str(out8.absolute())) and out8.is_dir(), "on by default: outside"
+assert agent.plans(c7, repo)[1] == agent.pdir(7), "issue 7's plan is in the worktree already"
+(repo / agent.pdir(8)).mkdir(parents=True)   # an agent writing the in-repo path by mistake
+assert agent.plans(c8, repo)[0] == out8, "outside first: a stray agent-plans/8 moves nothing back"
+with agent.closing(agent.db()) as con, con:
+    con.execute("INSERT INTO settings VALUES ('repo:o/r', ?)", ('{"local_plans": false}',))
+assert agent.plans(c9, repo) == (repo / agent.pdir(9), agent.pdir(9)), "off: in the repo"
+assert agent.plans(c8, repo)[0] == out8, "turned off mid-issue: the plan stays where it is"
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
 
 # GitHub App: the JWT is RS256 and verifies against the App's public key
 import base64  # noqa: E402
@@ -360,6 +380,20 @@ pr_event("review_requested", "alice", requested_team={"name": "core"})
 pr_event("review_requested", "carol", requested_reviewer={"login": "rookery-agent"})
 assert [(j["kind"], j["by"], j.get("label"), j.get("requested")) for j in drain()] == [
     ("pr-review", "bob", True, None), ("pr-review", "alice", None, True)]
+# review_prs: every same-repo PR once, when it is opened. Off by default; never Rookery's own, never a fork's
+opened = lambda user, head: pr_event("opened", user, pull_request={
+    "number": 12, "title": "Fix", "head": {"ref": "x", "repo": head and {"full_name": head}}, "user": {"login": user}})
+opened("dave", "o/r")
+assert not drain() and agent.repo_settings("o/r") == {"local_plans": True, "review_prs": False}
+with agent.closing(agent.db()) as con, con:
+    con.execute("INSERT INTO settings VALUES ('repo:o/r', ?)", ('{"review_prs": true}',))
+for user, head in [("dave", "o/r"), (agent.ME, "o/r"), ("dave", "mallory/r"), ("dave", None)]:
+    opened(user, head)
+pr_event("synchronize", "dave")
+assert drain() == [{"kind": "pr-review", "repo": "o/r", "n": 12, "title": "Fix", "by": "dave", "auto": True}], \
+    "no write check: a writer turned it on, and a same-repo head can push"
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
 # assigning AGENT_USER to an issue starts it, like the trigger label, and only before any phase
 for who, phases in [("rookery-agent", set()), ("dave", set()), ("rookery-agent", {"rookery:planning"})]:
     agent.labels_of = lambda repo, n: phases
@@ -1027,6 +1061,25 @@ agent.handle({"kind": "continue", "repo": "o/r", "n": 5, "body": "approve"})
 assert reran == [5], "approve on rookery:changes-wanted re-checks"
 agent.implement, agent.submit = saved_impl, saved_sub
 agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
+# local_plans: the task loop reads and ticks tasks.md beside the worktree, and commits only the code
+with agent.closing(agent.db()) as con, con:
+    con.execute("INSERT INTO settings VALUES ('repo:o/r', ?)", ('{"local_plans": true}',))
+out6 = agent.wt_root("o/r") / "plans-6"
+out6.mkdir(parents=True)
+(out6 / "tasks.md").write_text("- [ ] one\n- [ ] two\n", encoding="utf-8")
+seen_d, saved_pub = [], agent.publish
+def fake_claude(c, prompt, key="plan", **k):
+    seen_d.append(f"{out6.absolute()}/decisions.md" in prompt)
+    (wt / f"{key}.txt").write_text("code", encoding="utf-8")
+    return "task-done", "did it"
+agent.claude, agent.publish = fake_claude, lambda c, wt_, done: seen_d.append(len(done))
+agent.implement(agent.ctx("o/r", 6))
+assert seen_d == [True, True, 2], seen_d
+assert (out6 / "tasks.md").read_text(encoding="utf-8") == "- [x] one\n- [x] two\n"
+assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt", "task-1.txt"]
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
+agent.publish = saved_pub
 agent.claude = real_claude
 
 # PR review: one comment-type review; a failure is a PR comment, never a phase label on the PR
@@ -1443,6 +1496,20 @@ agent.propose = lambda *a: (_ for _ in ()).throw(RuntimeError("`plan` names the 
 code, _, out = edit("o/r", {"files": {"workflow.json": "{}"}})
 assert code == 422 and "ghost" in json.loads(out)["error"], "the check's own words"
 assert len(proposed) == 1
+# repo settings: kept here, not in the repo, so no PR; seen by whoever sees the repo, changed by a writer
+put = lambda repo, data, s=sid, c=None: req("POST", f"/api/repos/{repo}/settings", sid=s, csrf=c or me["csrf"],
+                                            data=json.dumps(data).encode())
+assert body(req("GET", "/api/repos/o/r/settings", sid=sid)) == {"local_plans": True, "review_prs": False}
+assert req("GET", "/api/repos/o/other/settings", sid=sid)[0] == 404 and put("o/other", {"review_prs": True})[0] == 404
+assert req("POST", "/api/repos/o/r/settings", sid=sid, data=b'{"review_prs": true}')[0] == 403, "no CSRF token"
+assert put("o/r", {"review_prs": True}, dave, body(req("GET", "/api/me", sid=dave))["csrf"])[0] == 403, "seeing is not steering"
+for bad in ({}, {"review_prs": 1}, {"plans": True}, ["review_prs"]):
+    assert put("o/r", bad)[0] == 400, bad
+assert body(put("o/r", {"review_prs": True})) == {"local_plans": True, "review_prs": True}
+assert body(put("o/r", {"local_plans": False})) == {"local_plans": False, "review_prs": True}, "one key changes one setting"
+assert agent.repo_settings("o/r") == {"local_plans": False, "review_prs": True}
+with agent.closing(agent.db()) as con, con:
+    con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
 cat = {s["name"]: s for s in body(req("GET", "/api/skills", sid=sid))["skills"]}
 assert sorted(cat) == ["changelog", "repo-recon", "security-review", "systematic-debugging",
                        "verification-before-completion"], cat

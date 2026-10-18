@@ -2,7 +2,7 @@
 """GitHub issue -> Claude Code agent, for every repo the GitHub App is installed on.
 
 State lives on GitHub (installations, labels, comments) and in the target repo
-(agent-plans/<n>/). The only local state is a clone per repo, a git worktree
+(agent-plans/<n>/, or beside the worktree for a repo that keeps them out). The only local state is a clone per repo, a git worktree
 per issue, and rookery.db (the per-repo daily usage behind the caps, and the run
 log the UI reads). Claude
 session ids are derived from repo#issue/key, so no session state is persisted.
@@ -32,7 +32,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
@@ -241,6 +241,32 @@ def pdir(n):
     return f"agent-plans/{n}"
 
 
+def plans(c, wt):
+    """-> (issue n's plan dir, how the prompts name it): pdir() in the worktree, or — for a repo
+    whose `local_plans` is on — plans-<n>/ beside the worktree in wt_root (shared with RUN_AS like
+    the worktrees), never committed, removed with the worktree. A plan already in either place
+    wins, so flipping the setting mid-issue never strands one; outside first, so an agent writing
+    pdir() by mistake cannot move a plan back into the repo."""
+    inside, outside = wt / pdir(c.n), wt_root(c.repo) / f"plans-{c.n}"
+    if outside.exists() or not inside.exists() and repo_settings(c.repo)["local_plans"]:
+        shared(outside.parent)
+        outside.mkdir(exist_ok=True)
+        return outside, str(outside.absolute())
+    return inside, pdir(c.n)
+
+
+@contextmanager
+def frozen(p):
+    """p (a tasks.md) as it was before the block, whatever the agent in it did: only tick()
+    changes the task list. Git reverts it inside the worktree; beside it, nothing else would."""
+    was = p.read_bytes() if p.exists() else None
+    try:
+        yield
+    finally:
+        if was is not None:
+            p.write_bytes(was)
+
+
 # --- shell / gh --------------------------------------------------------------
 
 def sh(*args, cwd=None, check=True, env=None, input=None, track=None):
@@ -419,6 +445,18 @@ def unseal(blob):
         raise ValueError("the stored key does not match KEY_SECRET")
     return sh("openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass", "env:K", "-a", "-A",
               env={**os.environ, "K": KEY_SECRET}, input=ct + "\n")
+
+
+# per repo, set on the portal (POST /api/repos/<o>/<r>/settings, can_write()): one JSON row
+# `repo:<owner/repo>` in `settings`, never in the target repo. Whatever the row leaves out is this.
+REPO_SETTINGS = {"local_plans": True,    # plan.md, tasks.md, decisions.md beside the worktree (plans())
+                 "review_prs": False}    # review every same-repo PR once, when it is opened (enqueue())
+
+
+def repo_settings(repo):
+    with closing(db()) as con:
+        row = con.execute("SELECT value FROM settings WHERE key = ?", (f"repo:{repo}",)).fetchone()
+    return {**REPO_SETTINGS, **(json.loads(row[0]) if row else {})}
 
 
 def fallback(owner):
@@ -897,6 +935,8 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
            "--strict-mcp-config", *s.get("args", [])]
     if a.get("plugin"):
         cmd.append(f"--plugin-dir={a['plugin']}")
+    if (out := wt_root(c.repo) / f"plans-{c.n}").exists():   # plans() put this issue's plan outside cwd
+        cmd.append(f"--add-dir={out.absolute()}")
     # the slot's instructions land after the persona, which --agent puts in the system prompt
     rules = [f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}"
              if a.get("claude_md") else "",
@@ -1254,19 +1294,19 @@ MEMORY_SLOT = {"agent": None, "skills": [], "instructions": "", "model": "haiku"
 
 # --- tasks -------------------------------------------------------------------
 
-def read_tasks(wt, n):
-    """-> [(offset of the checkbox char, done?, text)] in file order."""
-    p = wt / pdir(n) / "tasks.md"
+def read_tasks(d):
+    """-> [(offset of the checkbox char, done?, text)] in file order, from plan dir d."""
+    p = d / "tasks.md"
     if not p.exists():
-        raise RuntimeError(f"{pdir(n)}/tasks.md is missing — the plan produced no task list")
+        raise RuntimeError("tasks.md is missing — the plan produced no task list")
     text = p.read_text(encoding="utf-8")
     return [(m.start(1), m.group(1).lower() == "x", m.group(2)[2:].strip())
             for m in TASK_LINE.finditer(text)]
 
 
-def tick(wt, n, at):
+def tick(d, at):
     """The orchestrator marks tasks done, never the agent."""
-    p = wt / pdir(n) / "tasks.md"
+    p = d / "tasks.md"
     text = p.read_text(encoding="utf-8")
     p.write_text(text[:at] + "x" + text[at + 1:], encoding="utf-8")
 
@@ -1274,7 +1314,7 @@ def tick(wt, n, at):
 # --- jobs --------------------------------------------------------------------
 
 def keep_plans_only(c, wt, keep=None):
-    """Planning writes agent-plans/<n>/ and nothing else — revert the rest. `keep=()`
+    """Planning writes plans() and nothing else — revert the rest. `keep=()`
     reverts everything, for a step that may not edit at all. -> the reverted paths.
 
     The PLAN prompt asks for this; here it is enforced, because a prompt is not
@@ -1304,11 +1344,13 @@ def keep_plans_only(c, wt, keep=None):
 
 def plan(c, title, body, resume):
     set_phase(c, "rookery:planning")
-    prompt = (REPLY.format(n=c.n, body=body, d=pdir(c.n)) if resume
-              else PLAN.format(n=c.n, repo=c.repo, title=title, body=body,
-                               d=pdir(c.n), max=MAX_TASKS))
+    wt = worktree(c)
+    d = plans(c, wt)[1]
+    prompt = (REPLY.format(n=c.n, body=body, d=d) if resume
+              else PLAN.format(n=c.n, repo=c.repo, title=title, body=body, d=d, max=MAX_TASKS))
     status, msg = claude(c, prompt, resume=resume, slot="plan")
-    keep_plans_only(c, worktree(c))
+    # a plan beside the worktree: nothing in the worktree is the plan's
+    keep_plans_only(c, wt, keep=(d + "/",) if d == pdir(c.n) else ())
     comment(c, msg)
     set_phase(c, "rookery:awaiting-input" if status == "questions" else "rookery:awaiting-approval")
 
@@ -1317,8 +1359,9 @@ def implement(c):
     """One fresh session per unticked task. Re-running resumes where it stopped."""
     set_phase(c, "rookery:implementing")
     wt, done = worktree(c), []
+    p, d = plans(c, wt)
     for _ in range(MAX_TASKS + 1):
-        tasks = read_tasks(wt, c.n)
+        tasks = read_tasks(p)
         if len(tasks) > MAX_TASKS:
             raise RuntimeError(f"{len(tasks)} tasks exceeds the {MAX_TASKS}-task cap — "
                                "split the issue or shorten the plan")
@@ -1328,11 +1371,11 @@ def implement(c):
         i, at, text = todo
         log(f"#{c.n} task {i + 1}/{len(tasks)}: {text}")
         step(c.repo, "task", i=i + 1, of=len(tasks), text=text)
-        status, msg = claude(c, TASK.format(n=c.n, d=pdir(c.n), task=text, base=c.base),
+        status, msg = claude(c, TASK.format(n=c.n, d=d, task=text, base=c.base),
                              key=f"task-{i}")
         if status != "task-done":
             raise RuntimeError(f"task {i + 1} ({text}) reported {status}:\n\n{msg}")
-        tick(wt, c.n, at)
+        tick(p, at)
         step(c.repo, "tick", i=i + 1, of=len(tasks))
         sh("git", "add", "-A", cwd=wt)
         sh("git", "commit", "-m", f"#{c.n} task {i + 1}: {text}", cwd=wt)
@@ -1356,8 +1399,9 @@ def publish(c, wt, done, reply=""):
     assert branch != c.base
 
     set_phase(c, "rookery:reviewing")
-    verdict, review = claude(c, REVIEW.format(n=c.n, d=pdir(c.n), base=c.base),
-                             key="review", slot="review", per_job=True)
+    p, d = plans(c, wt)
+    with frozen(p / "tasks.md"):
+        verdict, review = claude(c, REVIEW.format(n=c.n, d=d, base=c.base), key="review", slot="review", per_job=True)
     keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
     s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
     review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
@@ -1409,6 +1453,7 @@ def after_steps(c, wt, after):
         return [], []
     on_branch = set(sh("git", "log", "--format=%s", f"origin/{c.base}..HEAD", cwd=wt).splitlines())
     sections, wanting = [], []
+    p, d = plans(c, wt)
     for s in after:
         name, mode = s["agent"], s["mode"]
         subject = f"#{c.n} step {name}"
@@ -1416,8 +1461,9 @@ def after_steps(c, wt, after):
             log(f"#{c.n} step {name} already committed — skipping")
             continue
         step(c.repo, "step", agent=name, mode=mode)
-        status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=pdir(c.n), base=c.base),
-                             key=f"step-{name}", slot=s, per_job=True)
+        with frozen(p / "tasks.md"):   # neither mode adds tasks
+            status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=d, base=c.base),
+                                 key=f"step-{name}", slot=s, per_job=True)
         # enforced, not asked: whatever a check leaves in the worktree is reverted, and flagged
         reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
         if reverted:
@@ -1495,9 +1541,11 @@ def follow_up(c, job, note):
             merge = FOLLOW_CONFLICTS.format(base=c.base, files="\n".join(f"- {f}" for f in conflicts))
         elif sh("git", "rev-parse", "HEAD", cwd=wt) != before:
             merge = FOLLOW_MERGED.format(base=c.base)
+    p, d = plans(c, wt)
     try:
-        status, msg = claude(c, FOLLOW_UP.format(n=c.n, d=pdir(c.n), base=c.base, url=pr["url"], note=note,
-                                                 merge=merge), key="follow-up", per_job=True, wt=wt)
+        with frozen(p / "tasks.md"):   # a follow-up adds no tasks, so every tick still reduces the open count
+            status, msg = claude(c, FOLLOW_UP.format(n=c.n, d=d, base=c.base, url=pr["url"], note=note,
+                                                     merge=merge), key="follow-up", per_job=True, wt=wt)
         if status not in FOLLOW_VERDICTS:
             raise RuntimeError(f"the follow-up replied `STATUS: {status}`; it replies {', '.join(FOLLOW_VERDICTS)}.")
         if status == "failed":
@@ -1517,8 +1565,6 @@ def follow_up(c, job, note):
         raise
     said = msg
     if status == "changed":
-        # a follow-up adds no tasks, so every tick still reduces the open count
-        sh("git", "checkout", "HEAD", "--", f"{pdir(c.n)}/tasks.md", cwd=wt, check=False)
         sh("git", "add", "-A", cwd=wt)
         if sh("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", cwd=wt, check=False):
             sh("git", "commit", "--no-edit", cwd=wt)   # the merge commit carries the resolution
@@ -1609,7 +1655,7 @@ def review_pr(c, job):
     # "queued and running": on the mention, or on the PR itself for a label or review request.
     # Cosmetic, so never fatal.
     on = f"issues/comments/{job['comment']}" if job.get("comment") else f"issues/{c.n}"
-    if job.get("comment") or job.get("label") or job.get("requested"):
+    if job.get("comment") or job.get("label") or job.get("requested") or job.get("auto"):
         try:
             api("POST", f"/repos/{c.repo}/{on}/reactions", token(c.repo), {"content": "eyes"})
         except Exception as e:
@@ -2043,6 +2089,8 @@ def drop_worktree(repo, n):
         log(f"{repo}#{n} {branch} has unpushed commits — keeping {wt}")
         return
     sh("git", "worktree", "remove", "--force", str(wt), cwd=clone)
+    if (out := wt_root(repo) / f"plans-{n}").exists():   # a plan kept out of the repo goes with it
+        rmtree(out)
     log(f"{repo}#{n} removed worktree {wt}")
 
 
@@ -2060,7 +2108,9 @@ def offboard(repo):
         rmtree(wt_root(repo))
     rmtree(clone)
     memory_file(repo).unlink(missing_ok=True)
-    log(f"{repo} removed {clone}, its worktrees and its notes")
+    with closing(db()) as con, con:
+        con.execute("DELETE FROM settings WHERE key = ?", (f"repo:{repo}",))
+    log(f"{repo} removed {clone}, its worktrees, its notes and its settings")
 
 
 # --- dispatch ----------------------------------------------------------------
@@ -2214,6 +2264,11 @@ def enqueue(event, p):
             submit({"kind": "wrong-label", "repo": repo, "n": pr["number"], "label": TRIGGER})
         elif act == "review_requested" and me(p.get("requested_reviewer")) and may(sender):
             review(requested=True)
+        # no may(): a writer turned review_prs on, and a same-repo head means its author can push.
+        # Not Rookery's own (its reviewer ran already), never a fork's (review_pr() refuses them).
+        elif act == "opened" and pr["user"]["login"] != ME and (pr["head"].get("repo") or {}).get("full_name") == repo \
+                and repo_settings(repo)["review_prs"]:
+            review(auto=True)
         return
     n = p.get("issue", {}).get("number")
     # `labeled` only: an issue created with the label fires `opened` *and* `labeled`,

@@ -376,6 +376,27 @@ def route(method, url, headers, body=b""):
                 return js(201, {"url": agent.propose(repo, files, s["login"])})
             except Exception as e:   # the check the next job would fail, or git/gh saying no
                 return js(422, {"error": str(e)})
+        if method in ("GET", "POST") and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/settings", path)):
+            repo = m.group(1)
+            if repo not in visible(s):
+                return js(404, {"error": "no such repo"})
+            if method == "POST":
+                # they steer the repo's runs (and spend its caps): what cancel needs
+                if not agent.can_write(repo, s["login"]):
+                    return js(403, {"error": f"changing the settings needs write access to {repo}"})
+                try:
+                    d = json.loads(body)
+                    if not isinstance(d, dict) or not d or d.keys() - agent.REPO_SETTINGS.keys() \
+                            or not all(isinstance(v, bool) for v in d.values()):
+                        raise TypeError
+                except (ValueError, TypeError):
+                    return js(400, {"error": "expected one or more of "
+                                             + ", ".join(f'"{k}": true or false' for k in agent.REPO_SETTINGS)})
+                with closing(agent.db()) as con, con:
+                    con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)",
+                                (f"repo:{repo}", json.dumps({**agent.repo_settings(repo), **d})))
+                log(f"{repo} settings {d} by {s['login']}")
+            return js(200, agent.repo_settings(repo))
         if method in ("GET", "DELETE") and (m := re.fullmatch(r"/api/repos/([\w.-]+/[\w.-]+)/memory", path)):
             mem = memory(s, m.group(1))
             if not mem:

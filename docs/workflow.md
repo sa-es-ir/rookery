@@ -20,13 +20,29 @@ Add `rookery:trigger` to an issue only. If you add it to a pull request, Rookery
 
 ## Planning
 
-The plan agent reads the issue and the code. It writes three files in `agent-plans/<n>/`:
+The plan agent reads the issue and the code. It writes three files:
 
 - `plan.md`: the plan.
 - `tasks.md`: a checklist of tasks.
 - `decisions.md`: a log. Each task can add to it. The next task reads it.
 
-The plan agent can change only `agent-plans/<n>/`. Rookery reverts any other change that the plan agent makes.
+Rookery keeps these files on its server, next to the issue's worktree. Rookery does not commit them, and the plan agent can change nothing in the worktree. Rookery deletes the files when the pull request closes. Rookery reverts any change that the plan agent makes in the worktree.
+
+To put the files in your repository, clear **Keep plans out of the repo** in the portal (Workflow tab, Repo settings). This setting is on by default. When it is off, the plan agent writes the files in `agent-plans/<n>/`, and Rookery commits them with each task:
+
+```
+feature/issue-<n>
+├── agent-plans/
+│   └── <n>/
+│       ├── plan.md
+│       ├── tasks.md
+│       └── decisions.md
+└── src/…
+```
+
+The files are then in the pull request. If you merge the pull request, the files also go into your base branch. They stay there until you delete them. The plan agent can change only `agent-plans/<n>/`.
+
+An issue that already has a plan keeps its plan where it is when you change the setting.
 
 If you comment while the label is `rookery:awaiting-input` or `rookery:awaiting-approval`, Rookery reads the comment as a reply. It updates the plan in the same Claude session.
 
@@ -110,6 +126,8 @@ Rookery can review a pull request that it did not write. Ask for the review in o
 | Request a review from `rookery-agent`. | This works only if `rookery-agent` is a collaborator on the repository. Rookery removes the request when the review is complete. |
 
 Only a person with write, maintain or admin access can ask for a review. A review uses the daily limit of the repository, the same as other runs.
+
+To review each new pull request, set **Review every new pull request** in the portal (Workflow tab, Repo settings). This setting is off by default. When it is on, Rookery reviews a pull request one time when someone opens it. Rookery does not review its own pull requests or pull requests from forks. To get a review again, use one of the ways in the table.
 
 Rookery ignores a mention in a quote (`> …`) or in code. Thus a reply that quotes an earlier request does not start a second review.
 
