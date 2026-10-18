@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rookery — About</title>
+<meta name="description" content="Why Rookery exists, what it stands for, and how to reach us.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="rookery.png">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* nav — same bar as index.html */
+.nav{height:66px;border-bottom:1px solid var(--smoke);position:sticky;top:0;background:var(--void);z-index:30}
+.nav .wrap{height:100%;display:flex;align-items:center;gap:32px}
+.nav nav{display:none;gap:28px;margin-left:24px}
+.nav nav a{font-size:14px;color:var(--ash)}
+.nav nav a:hover,.nav nav a.on{color:#fff}
+.nav .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+@media(min-width:900px){.nav nav{display:flex}}
+@media(max-width:560px){.nav .frost{display:none}}
+
+.intro{padding:96px 0 64px;position:relative;overflow:hidden}
+.intro::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(126% 234% at 10% 142%,rgba(217,126,75,.133) 0%,rgba(255,255,255,0) 37%)}
+.intro .wrap{position:relative}
+.intro h1{font-size:clamp(36px,5vw,54px);line-height:.92;letter-spacing:-1.08px;margin-top:16px;max-width:18ch}
+.intro h1 em{font-style:normal;color:var(--fog)}
+.intro p{margin-top:28px;font-size:18px;line-height:1.7;font-weight:300;max-width:60ch}
+.intro p + p{margin-top:16px}
+
+.sec{padding:64px 0}
+.sec h2{font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:-.86px;margin:12px 0 40px}
+.cards{display:grid;gap:24px}
+@media(min-width:620px){.cards{grid-template-columns:1fr 1fr}}
+@media(min-width:1080px){.cards{grid-template-columns:repeat(4,1fr)}}
+.card{background:var(--surface);border-radius:16px;padding:36px 32px}
+.card h3{font-size:20px;font-weight:400;line-height:1.25;margin-bottom:12px}
+.card p{font-weight:300;font-size:15px}
+
+.contact{background:var(--panel);border-radius:24px;padding:64px 48px;margin:32px 0 96px;
+  display:grid;gap:40px}
+@media(min-width:900px){.contact{grid-template-columns:1fr 1fr;align-items:center}}
+.contact h2{font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:-.86px;margin-top:12px}
+.contact p{margin-top:20px;color:var(--fog);font-weight:300;max-width:44ch}
+.ways{display:grid;gap:16px}
+.way{display:block;box-shadow:var(--inset);border-radius:24px;padding:24px 28px;transition:background .2s}
+.way:hover{background:rgba(255,255,255,.03)}
+.way b{display:block;color:#fff;font-weight:400;font-size:17px;margin-top:6px;overflow-wrap:anywhere}
+.way span{font-size:14px;color:var(--fog);font-weight:300}
+
+footer{border-top:1px solid var(--smoke);padding:40px 0 56px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:24px;justify-content:space-between;align-items:center}
+footer .links{display:flex;flex-wrap:wrap;gap:28px;font-size:14px;color:var(--fog)}
+footer .links a:hover{color:#fff}
+
+@media(max-width:600px){
+  .intro{padding:56px 0 40px}
+  .sec{padding:40px 0}
+  .card{padding:28px 24px}
+  .contact{padding:40px 24px;margin-bottom:64px}
+}
+</style>
+
+<header class="nav"><div class="wrap">
+  <a class="logo" href="index.html"><span class="mark"><img src="rookery.png" alt=""></span>rookery</a>
+  <nav>
+    <a href="index.html#how">How it works</a>
+    <a href="index.html#invariants">Guarantees</a>
+    <a href="index.html#refusals">What it won't do</a>
+    <a href="docs.html">Docs</a>
+    <a class="on" href="about.html">About</a>
+  </nav>
+  <div class="right">
+    <a class="cta" href="portal.html">Open portal</a>
+  </div>
+</div></header>
+
+<section class="intro"><div class="wrap">
+  <div class="eyebrow">About Rookery</div>
+  <h1>Your backlog should not wait for <em>a free afternoon.</em></h1>
+  <p>Every team has a list of issues that matter but never come first: the small fix, the
+    missing test, the cleanup everyone agrees on. They sit for months because the people who
+    could do them are busy with the work that does come first.</p>
+  <p>Rookery exists to move that list. You label an issue at the end of the day, and in the
+    morning there is a plan to read or a pull request to review. The work keeps going while
+    you are away. The decisions wait for you.</p>
+</div></section>
+
+<section class="sec"><div class="wrap">
+  <div class="eyebrow">What we believe</div>
+  <h2>An agent you can trust is one you can steer</h2>
+  <div class="cards">
+    <div class="card">
+      <h3>People decide, agents do</h3>
+      <p>Rookery asks before it starts and never merges. You approve the plan, you review the
+        result, and the last word on your code is always yours.</p>
+    </div>
+    <div class="card">
+      <h3>No surprises</h3>
+      <p>You see the plan before any code is written, and every step is visible on the issue
+        itself. If something goes wrong, you hear about it there, in plain words.</p>
+    </div>
+    <div class="card">
+      <h3>Fits how you already work</h3>
+      <p>No new tool to learn and no new place to look. Issues, comments, labels and pull
+        requests on GitHub are the whole interface.</p>
+    </div>
+    <div class="card">
+      <h3>Predictable cost</h3>
+      <p>Daily limits per repository and a steady cost per task, so a big issue never turns
+        into a big bill you did not expect.</p>
+    </div>
+  </div>
+</div></section>
+
+<div class="wrap"><section class="contact" id="contact">
+  <div>
+    <div class="eyebrow">Contact</div>
+    <h2>Talk to us</h2>
+    <p>Questions, a bug, an idea, or a repository you want to try Rookery on — we read every
+      message and reply in person.</p>
+  </div>
+  <div class="ways">
+    <a class="way" href="mailto:support@rookery.run"><span>Email</span><b>support@rookery.run</b></a>
+    <a class="way" href="https://www.linkedin.com/in/sa-es-ir/" target="_blank" rel="noopener"><span>Or message directly on</span><b>LinkedIn</b></a>
+  </div>
+</section></div>
+
+<footer><div class="wrap">
+  <a class="logo" href="index.html"><span class="mark"><img src="rookery.png" alt=""></span>rookery</a>
+  <div class="links">
+    <a href="portal.html">Portal</a>
+    <a href="docs.html">Docs</a>
+    <a href="about.html#contact">Contact</a>
+  </div>
+</div></footer>
