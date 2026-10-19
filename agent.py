@@ -1104,8 +1104,9 @@ missing), `medium` (it can break, or a path that can break has no test) or
 several places, make it one finding and list every place in `where`,
 comma-separated, so the fix covers them all. Sound work has an empty
 `findings` list. Rookery turns this JSON into the review section of the pull
-request body, for the person about to read the diff. It posts nothing outside
-the tags.
+request body, for the person about to read the diff. It posts nothing outside the tags,
+but the STATUS line still goes outside them, alone on its line: the reply
+fails without it.
 """
 
 CHECK = """Check the finished work for GitHub issue #{n} before it goes to a
@@ -1138,7 +1139,9 @@ fence:
 several places, make it one finding and list every place in `where`,
 comma-separated, so the fix covers them all. Sound work has an empty
 `findings` list. Rookery turns this JSON into your section of the pull request
-body, for the person about to read the diff. It posts nothing outside the tags.
+body, for the person about to read the diff. It posts nothing outside the tags,
+but the STATUS line still goes outside them, alone on its line: the reply
+fails without it.
 """
 
 WRITE = """The tasks for GitHub issue #{n} are done and committed. You run after
@@ -1201,7 +1204,9 @@ that can break has no test) or `low` (worth a look). Put the worst first, ten
 at most. When one mistake is in several places, make it one finding and list
 every place in `where`, comma-separated, so the fix covers them all. A sound
 change has an empty `findings` list. Rookery turns this JSON into the review it
-posts, for the person about to read the diff. It posts nothing outside the tags.
+posts, for the person about to read the diff. It posts nothing outside the tags,
+but the STATUS line still goes outside them, alone on its line: the reply
+fails without it.
 """
 
 FOLLOW_UP = """GitHub issue #{n} is implemented, and its draft pull request
