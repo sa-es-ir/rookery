@@ -156,13 +156,6 @@ main{min-width:0}
 .warn p{color:var(--ash);font-weight:300;max-width:60ch}
 .warn .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
 
-/* workflow: the shared diagram (flow.js, styles.css) plus what only this view shows */
-.pr-head{margin:56px 0 20px}   /* the PR review flow, under the issue flow */
-.flow .who .from{font-size:12px;font-family:var(--mono);letter-spacing:0}
-.flow .who .from.repo{color:#fff}
-.flow .chips{display:flex;gap:6px;flex-wrap:wrap}
-.flow .say{margin:0;background:var(--panel);border-radius:8px;padding:12px 14px;max-height:200px;overflow:auto;
-  font:400 12px/1.6 var(--mono);letter-spacing:0;color:var(--ash);white-space:pre-wrap;word-break:break-word}
 .wfacts{display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:var(--fog);margin-bottom:24px}
 .wfacts b{font-weight:400;color:var(--ash);font-family:var(--mono);letter-spacing:0}
 .broken{max-width:680px}
@@ -174,11 +167,22 @@ main{min-width:0}
 
 /* the builder: a shelf of agents and skills beside the run as a column of slots joined by
    Electric Current wires. Where the thing in hand can go turns dashed electric; over it, filled. */
-.build{display:grid;grid-template-columns:232px minmax(0,1fr);gap:20px 24px;align-items:start;margin-bottom:56px}
+.builder{margin-bottom:56px}
+.build{display:grid;grid-template-columns:232px minmax(0,1fr);gap:20px 24px;align-items:start}
 .bbar{grid-column:1/-1;display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;box-shadow:var(--inset);
   border-radius:24px;padding:12px 20px;font-size:14px;color:var(--fog);font-weight:300}
 .bbar b{font:400 13px var(--mono);letter-spacing:0;color:#fff}
-.bbar .frost{margin-left:auto}
+/* the next step once the draft differs from base: pinned to the bottom while the builder is on screen */
+.ship{position:sticky;bottom:16px;z-index:5;margin-top:20px;display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--smoke);border-radius:16px;padding:14px 20px;box-shadow:var(--inset);
+  font-size:14px;color:var(--ash)}
+.ship>span{flex:1 1 280px}
+.ship b{font-weight:400;color:#fff}
+.ship small{font-size:13px;color:var(--fog);font-weight:300}
+.ship .bad{color:#ffb3a5}
+.ship a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
+.ship .cta{margin-left:auto}
+.ship .cta:disabled{filter:grayscale(1);opacity:.4;cursor:default}
 .shelf{position:sticky;top:86px;background:var(--panel);border:1px solid transparent;border-radius:16px;padding:18px;
   display:flex;flex-direction:column;gap:10px}
 .shelf .stack{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-bottom:10px}
@@ -239,7 +243,7 @@ main{min-width:0}
   .shelf{position:static}
   .shelf .stack{flex-direction:row;flex-wrap:wrap}
   .parts{grid-template-columns:minmax(0,1fr)}
-  .bbar .frost{margin-left:0}
+  .ship .cta{margin-left:0}
 }
 
 /* propose a change: a Feature Card. Its Ember CTA opens a PR — the view's one primary action */
@@ -408,7 +412,7 @@ main{min-width:0}
       <p class="intro">What Rookery runs on this repo's next issue: <span class="mono">.rookery/workflow.json</span>
         as it is on the base branch right now, over the owner's <span class="mono">&lt;owner&gt;/.rookery</span>
         defaults if the App is installed there, checked the way a job checks it at start. To change it,
-        propose a change below: Rookery opens a pull request, and nothing changes until someone merges it.</p>
+        drag agents and skills below, then open a pull request: nothing changes until someone merges it.</p>
       <div id="wf"></div>
     </section>
 
@@ -436,7 +440,6 @@ main{min-width:0}
   </main>
 </div>
 
-<script src="flow.js"></script>
 <script>
 // ponytail: polls every 4s while the tab is visible; a push channel is not worth it at this size.
 const $ = s => document.querySelector(s);
@@ -723,10 +726,8 @@ async function numbers(){
 /* --- one repo's workflow. The GET is a git fetch plus the job's own checks, so it loads
    on show(), not on the 4s poll. Every string in it came from the repo: h() only. --- */
 const SLOT = {
-  plan: ['Plan', 'rookery:planning', 'One session per issue. It may write agent-plans/<n>/; anything else it touches is reverted.',
-    () => ['a question → ', h('span', {class: 'lbl'}, 'rookery:awaiting-input'), ' → your reply → plans again, same session']],
-  task: ['Work the tasks', 'rookery:implementing', 'A fresh session per task; decisions.md is the only memory between them.',
-    () => ['next unticked task → ', h('code', null, 'task-done'), ' → Rookery ticks and commits · at most 15']],
+  plan: ['Plan', 'rookery:planning', 'One session per issue. It may write agent-plans/<n>/; anything else it touches is reverted.'],
+  task: ['Work the tasks', 'rookery:implementing', 'A fresh session per task; decisions.md is the only memory between them.'],
   review: ['Review the diff', 'rookery:reviewing', 'Once, before the push. Advisory: its verdict flags the run, it never blocks the push.'],
   'pr-review': ['Review the pull request', 'rookery:pr-review', 'A fresh session per request, on the PR head. Read-only, from base config like every job. Forks are refused.'],
 };
@@ -735,31 +736,6 @@ const STEP = {
   check: ['Check', 'rookery:implementing', 'Read-only: Rookery reverts any edit it leaves and flags the run. Its findings go into the PR body; changes-needed sets rookery:changes-wanted, it never blocks the push.'],
   write: ['Write', 'rookery:implementing', 'May edit. Rookery commits its work as one commit; approving again skips it once that commit is on the branch.'],
 };
-
-function slotNode([title, phase, note, again], s, w){
-  const ag = w.agents[s.agent] || {};
-  return h('div', {class: 'node'},
-    h('header', null, h('span', {class: 'kind'}, 'agent'), h('h3', null, title), h('span', {class: 'lbl'}, phase)),
-    h('div', {class: 'who'}, s.agent ? h('b', {title: (ag.description || '') + '\n\nfrom ' + (ag.source || '?')}, 'rk:' + s.agent) : 'no agent',
-      ' · ', s.model || 'default model', ' · ', origin(s.from, w)),
-    s.skills.length > 0 && h('div', {class: 'chips'}, s.skills.map(k => {
-      const d = w.skills[k] || {};
-      return h('span', {class: 'lbl', title: (d.description || '') + '\n\nfrom ' + (d.source || '?')}, 'rk:' + k);
-    })),
-    s.instructions && h('pre', {class: 'say'}, s.instructions),
-    h('p', {class: 'note'}, note),
-    again && h('p', {class: 'again'}, again()));   // a fresh element per render
-}
-
-// which layer set a slot: this repo's workflow.json, the owner's <owner>/.rookery, or Rookery
-const origin = (from, w) => from === 'repo'
-  ? h('span', {class: 'from repo', title: 'set by ' + w.config.dir + 'workflow.json in this repo'}, 'workflow.json')
-  : from === 'org' ? h('span', {class: 'from repo', title: "set by the owner's defaults, workflow.json in " + w.org.repo}, w.org.repo)
-  : h('span', {class: 'from', title: "Rookery's default"}, 'built-in');
-
-// a slot as a diagram node (flow.js): the canvas shows its agent and model, the panel its full card
-const node = (def, s, w, extra) => ({who: s.agent ? 'rk:' + s.agent : 'no agent', model: s.model || 'default model',
-  detail: () => slotNode(def, s, w), ...extra});
 
 async function flow(){
   const repo = state.repo, box = $('#wf');
@@ -775,11 +751,6 @@ async function flow(){
     ...(w.config ? [editor(w)] : []));   // no config yet: still cloning
   const named = new Set([...Object.values(w.slots), ...w.after].flatMap(s => s.skills));
   const idle = Object.keys(w.skills).filter(k => !named.has(k));
-  const loop = h('div'), prs = h('div');
-  Flow.draw(loop, Flow.issue({plan: node(SLOT.plan, w.slots.plan, w), task: node(SLOT.task, w.slots.task, w),
-    review: node(SLOT.review, w.slots.review, w)},
-    w.after.map(s => node(STEP[s.mode], s, w, {title: STEP[s.mode][0], mode: s.mode, tag: s.mode}))));
-  Flow.draw(prs, Flow.pr(node(SLOT['pr-review'], w.slots['pr-review'], w), w.agent_user));
   const edit = editor(w);   // first: it resets the draft on a repo switch, and the builder reads the draft
   box.replaceChildren(
     h('div', {class: 'wfacts'},
@@ -788,18 +759,12 @@ async function flow(){
       h('span', null, 'CLAUDE.md ', h('b', null, w.claude_md ? (w.claude_md / 1024).toFixed(1) + ' KB' : 'none')),
       w.org && h('span', null, 'Owner defaults ', h('b', null, w.org.repo + ' @ ' + w.org.sha.slice(0, 12)))),
     builder(w, cat),
-    h('div', {class: 'eyebrow pr-head', style: 'margin-top:0'}, 'How a run goes, as merged on ' + w.base),
-    loop,
-    h('p', {class: 'fx-foot'}, 'A failure at any step: ', h('span', {class: 'lbl err'}, 'rookery:error'),
-      ' and the error as a comment. approve again resumes at the first unticked task.'),
-    h('div', {class: 'eyebrow pr-head'}, 'On any pull request'),
-    prs,
+    edit,
     idle.length > 0 && h('p', {class: 'idle'}, 'Also in the plugin, but named in no slot, so it rarely fires: ',
       idle.flatMap((k, i) => [i ? ', ' : '', h('span', {class: 'mono'}, 'rk:' + k + ' (' + w.skills[k].source + ')')]),
       '. Name it under a slot\'s skills to use it.') || '',   // replaceChildren() would print `false`
     settings(repo),
-    notes(repo),
-    edit);
+    notes(repo));
 }
 
 /* --- the repo's settings: kept on Rookery's server, not in the repo, so a change needs no PR.
@@ -873,7 +838,7 @@ const obj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 addEventListener('keydown', e => { if (e.key === 'Escape' && ed.letgo) ed.letgo(); });
 
 function builder(w, cat){
-  const box = h('div', {class: 'build'});
+  const box = h('div', {class: 'build'}), bar = h('div', {class: 'ship', role: 'status'});
   let held = null, dragging = null, typing = false;
   const opened = new Set();   // instruction panels left open across repaints
 
@@ -1034,6 +999,7 @@ function builder(w, cat){
   function paint(){
     const j = draft();
     ed.letgo = letgo;
+    ship();
     if (!j) return box.replaceChildren(h('p', {class: 'bbar'},
       'The workflow.json in the editor below is not a JSON object. Fix it there, or discard the change, and the builder comes back.'));
     // the shelf: every agent in the plugin plus any this pull request adds; the catalog plus the repo's own skills
@@ -1042,13 +1008,12 @@ function builder(w, cat){
     const known = {agents: {...Object.fromEntries(fresh), ...w.agents},
       skills: Object.fromEntries([...cat.map(s => [s.name, {source: 'catalog', description: s.description, hint: s.slot}]),
         ...Object.entries(w.skills).map(([n, s]) => [n, {...(cat.find(c => c.name === n) && {hint: cat.find(c => c.name === n).slot}), ...s}])])};
-    const l = steps(j), dirty = changed().includes('workflow.json'), wire = () => h('div', {class: 'wire', 'aria-hidden': 'true'});
+    const l = steps(j), wire = () => h('div', {class: 'wire', 'aria-hidden': 'true'});
     const what = held && (held.kind === 'step' ? 'step ' + (held.at + 1) : 'rk:' + held.name);
     box.replaceChildren(
       h('div', {class: 'bbar', role: 'status'}, ...(held
         ? ['Holding ', h('b', null, what), '. Click where it goes. ', h('button', {class: 'link', onclick: letgo}, 'Cancel')]
-        : ['Drag agents and skills onto a slot. Drag one slot\'s agent onto another to swap them. No mouse: click a box, then where it goes.']),
-        dirty && h('button', {class: 'frost', onclick: () => $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'})}, 'Review and open a pull request ↓')),
+        : ['Drag agents and skills onto a slot. Drag one slot\'s agent onto another to swap them. No mouse: click a box, then where it goes.'])),
       drop(h('aside', {class: 'shelf', 'aria-label': 'Agents and skills'},
         h('div', {class: 'eyebrow'}, 'Agents'),
         h('div', {class: 'stack'}, Object.keys(known.agents).sort().map(n => agentBox(n, null, known)),
@@ -1082,9 +1047,28 @@ function builder(w, cat){
         slot(j, 'pr-review', SLOT['pr-review'][0], SLOT['pr-review'][2], known, [], SLOT['pr-review'][1])));
   }
 
-  ed.hook = () => typing || paint();
+  // what to do next, once the draft differs from base: the editor's own submit and discard, kept in view
+  function ship(){
+    const dirty = changed(), bad = dirty.some(q => problems(q, ed.edits[q]).length);
+    bar.hidden = !dirty.length && !ed.made;
+    if (!dirty.length) return bar.replaceChildren(ed.made ? h('span', null, 'Opened ', /^https:\/\/github\.com\//.test(ed.made)
+      ? h('a', {href: ed.made, target: '_blank', rel: 'noopener'}, ed.made.replace('https://github.com/', '')) : ed.made,
+      '. Nothing changes until someone merges it.') : '');
+    const n = dirty.length + (dirty.length > 1 ? ' files' : ' file');
+    bar.replaceChildren(
+      h('span', null, h('b', null, 'Unsaved: ' + n + ' changed. '),
+        ed.error ? h('span', {class: 'bad'}, 'The pull request was not opened. ')
+        : bad ? h('span', {class: 'bad'}, 'Fix the problems in the editor first. ')
+        : h('small', null, 'Next: open a pull request. Nothing changes until someone merges it.')),
+      h('button', {class: 'link', onclick: () => $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'})},
+        ed.error || bad ? 'See why ↓' : 'Review the files ↓'),
+      h('button', {class: 'link', onclick: ed.discard}, 'Discard'),
+      h('button', {class: 'cta', disabled: bad, onclick: e => ed.submit(e.target)}, 'Open pull request · ' + n));
+  }
+
+  ed.hook = () => typing ? ship() : paint();
   paint();
-  return box;
+  return h('div', {class: 'builder'}, box, bar);
 }
 
 /* --- the repo's notes: what Rookery learned from earlier runs, kept on its server, not in the repo.
@@ -1200,8 +1184,7 @@ function editor(w){
         ? h('button', {class: 'link', onclick: () => { delete ed.edits[p]; draw(); }}, 'Restore')
         : p in ed.files ? h('button', {class: 'link', onclick: () => { ed.edits[p] = null; draw(); }}, 'Delete agent')
         : h('button', {class: 'link', onclick: () => { delete ed.edits[p]; go('workflow.json'); }}, 'Discard')),
-      dirty.length > 0 && h('button', {class: 'link', onclick: () => {
-        Object.assign(ed, {edits: {}, error: null}); go(ed.tab in ed.files || ed.tab === '+' ? ed.tab : 'workflow.json'); }}, 'Discard all'),
+      dirty.length > 0 && h('button', {class: 'link', onclick: ed.discard}, 'Discard all'),
       h('button', {class: 'cta', disabled: !dirty.length || bad, onclick: e => submit(e.target, dirty)},
         'Open pull request' + (dirty.length ? ' · ' + dirty.length + (dirty.length > 1 ? ' files' : ' file') : ''))].filter(Boolean));
     if (ed.hook) ed.hook();   // the builder draws from the same draft
@@ -1249,6 +1232,8 @@ function editor(w){
   // for the builder: open a tab, or show a draft it changed (the + tab keeps its input and focus)
   ed.go = go;
   ed.redraw = () => ed.tab === '+' ? status() : draw();
+  ed.submit = btn => submit(btn, changed());
+  ed.discard = () => { Object.assign(ed, {edits: {}, error: null}); go(ed.tab in ed.files || ed.tab === '+' ? ed.tab : 'workflow.json'); };
   draw();
   return card;
 }
