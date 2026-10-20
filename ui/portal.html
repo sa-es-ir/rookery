@@ -607,7 +607,9 @@ function stepView(s){
 
 async function one(){
   const r = await call('/api/runs/' + state.run);
-  $('#title').textContent = title(r);
+  const heading = title(r);
+  $('#title').textContent = heading;
+  document.title = heading + ' · Rookery';
   const cancel = r.status === 'running' && h('button', {class: 'ghost', onclick: () => stop(r)}, 'Cancel run');
   $('#detail').replaceChildren(
     h('div', {class: 'head'},
@@ -1329,7 +1331,11 @@ function show(){
   const sw = $('#switch');
   sw.hidden = !state.repo || v === 'one' || v === 'skills' || v === 'keys';
   ['stats', 'list', 'flow'].forEach((t, i) => sw.children[i].setAttribute('aria-current', v === t));
-  if (v !== 'one') $('#title').textContent = v === 'skills' ? 'Skill catalog' : v === 'keys' ? 'API keys' : state.repo || 'Runs';
+  if (v !== 'one'){
+    const heading = v === 'skills' ? 'Skill catalog' : v === 'keys' ? 'API keys' : state.repo || 'Runs';
+    $('#title').textContent = heading;
+    document.title = heading + ' · Rookery';
+  }
   if (v === 'flow') flow();
   if (v === 'stats') numbers();
   if (v === 'skills') catalog().catch(e => toast(e.message));
