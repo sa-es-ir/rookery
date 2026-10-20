@@ -388,7 +388,18 @@ def set_phase(c, phase):
     args = ["issue", "edit", str(c.n), "--add-label", phase]
     for l in stale:
         args += ["--remove-label", l]
-    gh(c.repo, *args)
+    # GitHub's GraphQL 500s now and then ("Something went wrong while executing your query"),
+    # and a lost label strands the issue: a reply to rookery:error does nothing. The edit is
+    # idempotent, so it is retried; a comment never is, since a retry could post it twice.
+    for wait in (5, 20, None):
+        try:
+            gh(c.repo, *args)
+            break
+        except RuntimeError:
+            if wait is None:
+                raise
+            log(f"#{c.n} phase {phase} failed — retrying in {wait}s")
+            time.sleep(wait)
     step(c.repo, "phase", label=phase)
     log(f"#{c.n} phase: {phase}")
 
@@ -1767,9 +1778,10 @@ def render_review(verdict, text, by, verdicts=PR_VERDICTS, level="##", wt=None):
             s = " ".join(s.split()).replace("|", "\\|")
         return s if len(s) <= cap else s[:cap - 1].rstrip() + "…"
     # the count first, so "nothing to fix" is plain before anyone reads on
-    tally = ", ".join(f"{k} {sev}" for sev in SEVERITY if (k := sum(f["severity"] == sev for f in fs)))
-    lead = f"**{len(fs)} finding{'s' * (len(fs) != 1)}** ({tally})." if fs else "**No findings.**"
-    out = [f"{level} {verdicts[verdict]}", f"{lead} {cut(r['summary'], REVIEW_CAPS['summary'])}"]
+    tally = "".join(f" · {icon} {k} {sev}" for sev, icon in SEVERITY.items()
+                    if (k := sum(f["severity"] == sev for f in fs)))
+    lead = f"🔎 **{len(fs)} finding{'s' * (len(fs) != 1)}**{tally}" if fs else "✅ **No findings**"
+    out = [f"{level} {verdicts[verdict]}", lead, cut(r['summary'], REVIEW_CAPS['summary'])]
     if answer := cut(r.get("answer"), REVIEW_CAPS["answer"]):
         out.append("> **Your note:** " + answer.replace("\n", "\n> "))
     shown = fs[:REVIEW_CAPS["findings"]]

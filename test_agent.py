@@ -119,21 +119,41 @@ def rv(verdict, review, raw=False):
 out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
                            "findings": [{"severity": "medium", "where": "a.py:3", "title": "a | b\nc",
                                          "detail": "why"}, {"severity": "low", "title": "nit"}]})
-assert out.startswith("## 🟡 Minor changes\n\n**2 findings** (1 medium, 1 low). Mostly fine.\n\n"
+assert out.startswith("## 🟡 Minor changes\n\n🔎 **2 findings** · 🟡 1 medium · ⚪ 1 low\n\nMostly fine.\n\n"
                       "> **Your note:** yes\n> it is\n\n"), out
 assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
 assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
 assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
 out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
-assert out == "## 🟢 Safe to merge\n\n**No findings.** Sound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
+assert out == "## 🟢 Safe to merge\n\n✅ **No findings**\n\nSound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
 out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
                                                                "detail": "d" * 900}] * 12})
 assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
 assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
-assert "**12 findings** (12 low)." in out, "the count is of all findings, not the ones shown"
+assert "🔎 **12 findings** · ⚪ 12 low\n\n" in out, "the count is of all findings, not the ones shown"
 assert agent.UNCONFIRMED not in out, "no wt, no location check"
 fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
 assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
+# set_phase: a GitHub 500 on the label edit is retried (DotNet.RateLimit#52), a lasting one still raises
+sp_saved, edits, waits = (agent.gh, agent.labels_of, agent.time.sleep), [], []
+def flaky(repo, *args, **kw):
+    edits.append(args)
+    if len(edits) < 3:
+        raise RuntimeError("gh failed (1): GraphQL: Something went wrong while executing your query")
+agent.gh, agent.labels_of, agent.time.sleep = flaky, lambda r, n: {"rookery:planning"}, waits.append
+agent.set_phase(agent.Ctx("o/r", 52, None, "main"), "rookery:awaiting-input")
+assert len(edits) == 3 and waits == [5, 20] and edits[0][-1] == "rookery:planning", (edits, waits)
+edits.clear()
+def down(repo, *args, **kw):
+    edits.append(args)
+    raise RuntimeError("gh failed (1): GraphQL: Something went wrong while executing your query")
+agent.gh = down
+try:
+    agent.set_phase(agent.Ctx("o/r", 52, None, "main"), "rookery:awaiting-input")
+    raise AssertionError("a lasting failure must raise")
+except RuntimeError as e:
+    assert "Something went wrong" in str(e) and len(edits) == 3, edits
+agent.gh, agent.labels_of, agent.time.sleep = sp_saved
 unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
 assert "| 1 | ⚪ low |" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
 for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
@@ -883,11 +903,11 @@ assert (wt / "CLAUDE.md").read_text(encoding="utf-8") == "Use spaces.\n" and not
 assert not (wt / "review.txt").exists() and not git(wt, "status", "--porcelain"), "nothing left for a later commit"
 body_ = prs[0]
 assert body_.startswith(agent.CONFIG_WARNING), "the branch touches CLAUDE.md"
-assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\n**No findings.** No holes.\n\n<sub>rk:sec · rk:verify</sub>\n\n" \
+assert "## 🤖 Sec agent · check · rk:verify\n\n### 🟢 Looks good\n\n✅ **No findings**\n\nNo holes.\n\n<sub>rk:sec · rk:verify</sub>\n\n" \
        "_Rookery reverted" in body_, body_
 assert "## 🤖 Docs agent · write\n\nwrote docs" in body_, body_
 assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## 🤖 Reviewer agent")
-assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n**1 finding** (1 low). Fine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
+assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n🔎 **1 finding** · ⚪ 1 low\n\nFine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
@@ -1110,7 +1130,7 @@ job_ = {"kind": "pr-review", "repo": "o/r", "n": 8, "title": "Fix", "by": "bob",
 agent.handle(job_)
 assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made == [("add", "dev"), ("drop",)]
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
-        "## 🔴 Changes needed\n\n**1 finding** (1 high). Breaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
+        "## 🔴 Changes needed\n\n🔎 **1 finding** · 🔴 1 high\n\nBreaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
         "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
 assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
