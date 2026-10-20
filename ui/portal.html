@@ -494,6 +494,13 @@ function progress(r){
 
 const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 const day = t => new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+const dur = s => {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+};
 const usd = n => '$' + n.toFixed(2);
 const issue = r => 'https://github.com/' + r.repo + '/issues/' + r.n;
 const title = r => r.title || r.repo + '#' + r.n;
@@ -621,6 +628,7 @@ async function one(){
       h('div', {class: 'facts'},
         h('span', null, 'Started ',h('b', null, day(r.started))),
         r.ended && h('span', null, 'Ended ', h('b', null, day(r.ended))),
+        r.ended && h('span', null, 'Duration ', h('b', null, dur(r.ended - r.started))),
         h('span', null, 'Model cost ', h('b', null, usd(r.usd))),
         h('span', null, 'Claude calls ', h('b', null, String(r.steps.filter(s => s.what === 'claude').length))))),
     r.steps.length ? h('div', {class: 'steps'}, r.steps.map(stepView))
