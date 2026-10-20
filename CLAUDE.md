@@ -311,7 +311,8 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   cannot resolve a PR number, and a phase label on a PR would let a later `approve` comment
   run `implement()` on it. A PR review reads its steering from base like every job, never
   from the PR head.
-- **Approval is `APPROVE`, a regex — never an LLM judgement**, and only from a commenter with
+- **Approval is `APPROVE`, a regex — never an LLM judgement**, matched on `unquoted()` (the
+  comment minus quoted lines and fenced code, as `mention()` reads it), and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
   bot login) is filtered out so the bot can't approve itself.

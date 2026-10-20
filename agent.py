@@ -1590,11 +1590,16 @@ def follow_up(c, job, note):
 
 # --- pull request review -----------------------------------------------------
 
+def unquoted(body):
+    """The comment without its quoted lines and fenced code: what the commenter wrote themselves."""
+    text = re.sub(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1|\Z)", "", body or "", flags=re.M | re.S)
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(">"))
+
+
 def mention(body):
     """The comment without its @rookery-agent, or None when it does not address Rookery.
     Quoted lines and code do not count: a reply quoting a request is not a second one."""
-    text = re.sub(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1|\Z)", "", body or "", flags=re.M | re.S)
-    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(">"))
+    text = unquoted(body)
     if not MENTION.search(re.sub(r"`[^`\n]*`", "", text)):
         return None
     note = MENTION.sub("", text).strip()
@@ -2147,7 +2152,8 @@ def handle(job):
             phase = labels_of(c.repo, c.n)
             # approving again after an error resumes at the first unticked task; after
             # changes-wanted every box is ticked, so it re-runs the checks and the review
-            if APPROVE.match(job["body"]) and phase & {"rookery:awaiting-approval", "rookery:error",
+            # prod: a quote-reply to the plan starts with "> …"; only the commenter's own words count
+            if APPROVE.match(unquoted(job["body"])) and phase & {"rookery:awaiting-approval", "rookery:error",
                                                        "rookery:changes-wanted"}:
                 begin(c, "implement")
                 pin(c)

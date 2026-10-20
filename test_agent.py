@@ -15,6 +15,9 @@ assert agent.APPROVE.match("go ahead")
 assert not agent.APPROVE.match("please approve later")
 assert not agent.APPROVE.match("not approved yet")
 assert not agent.APPROVE.match("approver should look first")
+# a quote-reply to the plan: the quote is not the commenter's, the reply under it is
+assert agent.APPROVE.match(agent.unquoted("> ## Plan\n>     Reply `approve` to implement.\n\napprove"))
+assert not agent.APPROVE.match(agent.unquoted("> approve\n\nnot yet, use sqlite"))
 
 # STATUS marker is parsed, never inferred; the rest is the comment body
 m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
