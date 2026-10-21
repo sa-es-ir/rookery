@@ -88,6 +88,11 @@ assert "- [x] wire the handler" in (d / "tasks.md").read_text(encoding="utf-8")
 for at, _, _ in [t for t in after if not t[1]]:
     agent.tick(d, at)
 assert not [t for t in agent.read_tasks(d) if not t[1]]
+# a PR body's task line: the first sentence, plain, cut at a word; the task under it, folded
+assert agent.summary("Add `X` to `a.csproj`. Then run the build.") == "Add X to a.csproj."
+assert agent.summary("word " * 40).endswith("word…") and len(agent.summary("word " * 40)) <= agent.SUMMARY_CAP
+assert agent.fold("✅ 1. a <b>", "> `t`") == "<details><summary>✅ 1. a &lt;b&gt;</summary>\n\n> `t`\n\n</details>"
+
 # only tick() changes the list: whatever an agent does to it inside frozen() is undone
 with agent.frozen(d / "tasks.md"):
     (d / "tasks.md").write_text("- [ ] a task an agent added\n", encoding="utf-8")
@@ -863,6 +868,7 @@ git(clone, "fetch", "-q", "origin", "main"), git(clone, "worktree", "add", "-q",
 agent.worktree = lambda c: wt
 (wt / agent.pdir(3)).mkdir(parents=True)
 (wt / agent.pdir(3) / "tasks.md").write_text("- [x] one\n", encoding="utf-8")
+(wt / agent.pdir(3) / "plan.md").write_text("# Plan\n\nDo it.\n", encoding="utf-8")
 (wt / "CLAUDE.md").write_text("Use spaces.\n", encoding="utf-8")   # the branch changes what steers the agent
 git(wt, "add", "-A"), git(wt, "commit", "-qm", "#3 task 1: one")
 said, prs, phases, calls = [], [], [], []
@@ -910,6 +916,7 @@ assert body_.index("Sec agent") < body_.index("Docs agent") < body_.index("## �
 assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n🔎 **1 finding** · ⚪ 1 low\n\nFine.\n\n| # |" in body_ and "<sub>rk:reviewer</sub>" in body_, \
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
+assert "<details><summary>📋 Plan</summary>\n\n# Plan\n\nDo it.\n\n</details>" in body_, "the plan leads the PR, folded"
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again
 calls.clear()
@@ -917,6 +924,7 @@ agent.implement(pc)
 assert calls == ["step-sec", "review"], calls
 assert len(prs) == 1 and pr_said[0][0] == "https://github.com/o/r/pull/1" and "Sec agent" in pr_said[0][1], \
     "the re-run's sections go on the open PR"
+assert "📋 Plan" not in pr_said[0][1], "the plan is in the PR body once, not in every comment"
 # STATUS is held to the step's mode
 for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "failed")]:
     agent.claude = lambda c, p, key="plan", resume=False, slot="task", **k: (status, "x")
@@ -1097,7 +1105,7 @@ def fake_claude(c, prompt, key="plan", **k):
     return "task-done", "did it"
 agent.claude, agent.publish = fake_claude, lambda c, wt_, done: seen_d.append(len(done))
 agent.implement(agent.ctx("o/r", 6))
-assert seen_d == [True, True, 2], seen_d
+assert seen_d == [True, True, 3], seen_d   # the Tasks heading and two tasks
 assert (out6 / "tasks.md").read_text(encoding="utf-8") == "- [x] one\n- [x] two\n"
 assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt", "task-1.txt"]
 with agent.closing(agent.db()) as con, con:

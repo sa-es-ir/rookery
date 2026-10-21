@@ -12,6 +12,7 @@ import calendar
 import collections
 import hashlib
 import hmac
+import html
 import io
 import json
 import logging
@@ -188,6 +189,10 @@ CONFIG_FILE = re.compile(r"workflow\.json|agents/[a-z0-9][a-z0-9-]*\.md")
 # it, whole files are left out and the reviewer reads them. Lockfiles never go in.
 DIFF_CAP = 100_000
 LOCKFILES = (":(exclude)*package-lock.json", ":(exclude)*.lock")
+# the PR body folds each task under a one-line summary of this many characters, and the plan
+# under one line, cut at PLAN_CAP: GitHub refuses a body over 65536 characters
+SUMMARY_CAP = 100
+PLAN_CAP = 30_000
 # repo memory: one notes file per repo, written by a `memory` job after each job, read by pin().
 # MEMORY=0 turns off both, for the whole instance.
 MEMORY = os.environ.get("MEMORY", "1") != "0"
@@ -1397,10 +1402,21 @@ def implement(c):
         sh("git", "commit", "-m", f"#{c.n} task {i + 1}: {text}", cwd=wt)
         step(c.repo, "commit", i=i + 1, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
         log(f"#{c.n} committed task {i + 1}")
-        done.append(f"**{i + 1}. {text}**\n\n{msg}")
+        done.append(fold(f"✅ {i + 1}. {summary(text)}", f"> {text}\n\n{msg}"))
     else:
         raise RuntimeError("task loop did not converge")
-    publish(c, wt, done)
+    publish(c, wt, ["## Tasks", *done] if done else [])
+
+
+def summary(text):
+    """A task's first sentence, plain and cut to SUMMARY_CAP: the line a reader scans."""
+    s = re.split(r"(?<=\.)\s", text.replace("`", ""), maxsplit=1)[0]
+    return s if len(s) <= SUMMARY_CAP else s[:SUMMARY_CAP - 1].rsplit(" ", 1)[0] + "…"
+
+
+def fold(title, body):
+    """Collapsed on GitHub: `title` is plain text (a <summary> renders no markdown), `body` is."""
+    return f"<details><summary>{html.escape(title)}</summary>\n\n{body}\n\n</details>"
 
 
 def publish(c, wt, done, reply=""):
@@ -1434,20 +1450,25 @@ def publish(c, wt, done, reply=""):
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     # what steers the agent changes only by a human merging it (pin()): say so where they merge
     steers = sh("git", "diff", "--name-only", f"origin/{c.base}...HEAD", "--", *STEERING, cwd=wt)
-    body = ((CONFIG_WARNING if steers else "")
-            + "\n\n".join(done + sections) + f"\n\n## 🤖 Reviewer agent\n\n{review}\n\nCloses #{c.n}"
-            # the commit every steering input was read at; GitHub links owner/repo@sha
-            f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
-            + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
+    def body(lead=()):
+        return ((CONFIG_WARNING if steers else "")
+                + "\n\n".join([*lead, *done, *sections]) + f"\n\n## 🤖 Reviewer agent\n\n{review}\n\nCloses #{c.n}"
+                # the commit every steering input was read at; GitHub links owner/repo@sha
+                f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
+                + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
     # approve again after a run that opened the PR (a check flagged it): `gh pr create`
     # refuses a second PR for the branch, so this run's sections go on that PR as a comment
     url = gh(c.repo, "pr", "view", branch, "--json", "state,url", "--jq",
              'select(.state == "OPEN") | .url', check=False)
     if url:
-        gh(c.repo, "pr", "comment", url, "--body-file", "-", input=body)
+        gh(c.repo, "pr", "comment", url, "--body-file", "-", input=body())
     else:
-        url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch,
-                 "--title", title, "--body-file", "-", input=body)
+        # the plan leads the PR once, folded; a local_plans plan is on GitHub nowhere else
+        plan = (p / "plan.md").read_text(encoding="utf-8").strip() if (p / "plan.md").exists() else ""
+        if len(plan) > PLAN_CAP:
+            plan = plan[:PLAN_CAP] + f"\n\n_…cut at {PLAN_CAP} characters._"
+        url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch, "--title", title,
+                 "--body-file", "-", input=body([fold("📋 Plan", plan)] if plan else []))
     # The review and the checks are advisory: the PR opens either way, so the work is
     # always on GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)
