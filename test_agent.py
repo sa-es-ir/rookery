@@ -1168,6 +1168,9 @@ assert said[0].endswith("<!-- rookery:with o/shop -->") and "o/admin" not in sai
 assert noticed == [1], "the notice went out before the plan call"
 assert "The issue also names `o/shop`, `o/admin`. Rookery cannot change them" in prompts[0], "both, noticed or not"
 assert f"- `o/front` at `{fwt(12).absolute()}`, base `main`." in prompts[0] and agent.WITH_PLAN in prompts[0]
+# prod (Mantis#88): "Change a repo only when the work needs it" alone, the planner left out the
+# companion's button and modal the issue described, without asking
+assert "plan that part in\nits repo too" in prompts[0] and "when\nyou cannot tell, ask" in prompts[0]
 assert f"--add-dir={fwt(12).absolute()}" in argv[0]
 sysp = next(x for x in argv[0] if x.startswith("--append-system-prompt="))
 assert sysp.index("Backend rule.") < sysp.index("Contents of CLAUDE.md in o/front") < sysp.index("Frontend rule."), sysp
@@ -1204,6 +1207,7 @@ assert g(fwt(12), "log", "--format=%s", "origin/main..HEAD").splitlines() == ["o
     "the companion commits only what changed in it, under the home's full name"
 assert (fwt(12) / "app.txt").read_text(encoding="utf-8") == "front changed\n", "the check's edit is reverted"
 assert all(f"--add-dir={fwt(12).absolute()}" in x for x in argv) and all("Its change is" in p for p in prompts)
+assert not any(agent.WITH_PLAN in p for p in prompts), "the scope rule is planning's: a task changes only what its task says"
 assert pushed == [("https://github.com/o/front.git", "feature/back-issue-12:feature/back-issue-12"),
                   ("https://github.com/o/back.git", "feature/issue-12:feature/issue-12")], "the companion first"
 assert not agent.unpushed(agent.clone_dir("o/front"), "feature/back-issue-12"), "its tracking ref is recorded"

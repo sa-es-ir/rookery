@@ -1361,7 +1361,11 @@ WITH_REPOS = """This issue can also change these repos. Each one is a separate g
 Change a repo only when the work needs it. Do not commit in any of them: the
 orchestrator commits each repo for you."""
 WITH_PLAN = """ Planning changes no file in them.
-Name the repo at the start of each task that changes one of them."""
+Name the repo at the start of each task that changes one of them.
+The owner listed these repos for work like this. When the issue describes something a
+companion holds (a page, a button, a form, a client of a changed API), plan that part in
+its repo too. Leave a companion out only when the issue clearly does not touch it; when
+you cannot tell, ask."""
 # after PLAN or REPLY, when the issue names a repo of the owner that `with` does not list (named())
 NOT_MOUNTED = """The issue also names {repos}. Rookery cannot change {them} in this run.
 Plan only this repo's part. End plan.md with a section `## Not in this plan`:
