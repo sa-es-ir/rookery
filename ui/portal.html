@@ -221,6 +221,16 @@ main{min-width:0}
 .lane-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
 .lane-head small{font-size:12px;color:var(--fog);font-weight:300}
 .lane-head .link,.bnode header .link{font-size:12px}
+/* the Repos lane: repo chips are workflow nodes (12px, the card surface) on Electric Current wires */
+.lane.rl{margin-bottom:32px}
+.rrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px 0}
+.rwire{width:20px;height:2px;background:var(--current);flex:none}
+.chip.repo{border-radius:12px;background:var(--surface);padding:8px 12px}
+.chip.repo.home{cursor:default}
+.shelf .hint a{color:#fff;border-bottom:1px solid rgb(107,33,239)}
+.chip.repo.home:hover{border-color:var(--smoke)}
+.rdrop{margin-left:12px;border:1px dashed var(--smoke);border-radius:12px;padding:8px 14px;font-size:13px;color:var(--fog);
+  font-weight:300;transition:background .15s,border-color .15s}
 .addstep{border:1px dashed var(--smoke);border-radius:12px;padding:14px;font-size:13px;color:var(--fog);
   font-weight:300;text-align:center}
 .bnode+.addstep{margin-top:10px}
@@ -235,6 +245,7 @@ main{min-width:0}
   border:1px solid var(--smoke);border-radius:8px;padding:10px 12px;font:400 12px/1.6 var(--mono);letter-spacing:0}
 .say-edit textarea:focus{outline:none;border-color:rgb(107,33,239);box-shadow:rgb(7,122,199) 0 0 0 1px}
 .build.want-agent :is(.sock,.addstep),.build.want-skill .tray,.build.want-out .shelf,.build.want-step .bnode.step,
+.build.want-repo .rdrop,
 .build .can{border-color:rgb(7,122,199);border-style:dashed}
 .build .can{cursor:copy}
 .build .over,.build .can:hover{background:rgba(7,122,199,.12);border-color:rgb(107,33,239);border-style:solid}
@@ -581,26 +592,32 @@ async function list(){
 
 /* --- one run, step by step --- */
 function stepView(s){
+  // a companion's commit, push or PR names its repo; the home's says nothing more
+  const inRepo = () => s.repo ? [' in ', h('span', {class: 'mono'}, s.repo)] : [];
   const t = {
     phase: () => ['Label ', h('span', {class: 'lbl'}, s.label)],
     base: () => ['Read CLAUDE.md and skills from ', h('span', {class: 'mono'}, s.branch),
       h('small', null, s.sha.slice(0, 12) + (s.skills.length ? ' · ' + s.skills.join(', ') : '')
         + (s.org ? ' · owner defaults ' + s.org.replace(/@(\w{12})\w*$/, '@$1') : '')
+        + (s.with ? ' · with ' + s.with.map(w => w.replace(/@(\w{12})\w*$/, '@$1')).join(', ') : '')
+        + (s.skipped ? ' · kept the home\'s ' + s.skipped.join(', ') : '')
         + (s.memory ? ' · notes ' + s.memory : ''))],
     task: () => ['Task ' + s.i + ' of ' + s.of + ' — ' + s.text],
     claude: () => ['claude ', h('span', {class: 'mono'}, s.key), ' → ' + s.status, h('small', null, usd(s.usd || 0))],
     tick: () => ['Ticked task ' + s.i + ' in tasks.md'],
     commit: () => [s.step ? 'Committed step ' : s.i ? 'Committed task ' : 'Committed the follow-up',
-      s.step ? h('span', {class: 'mono'}, 'rk:' + s.step) : s.i ? String(s.i) : '', h('small', null, s.sha)],
+      s.step ? h('span', {class: 'mono'}, 'rk:' + s.step) : s.i ? String(s.i) : '', ...inRepo(), h('small', null, s.sha)],
     step: () => [s.mode === 'check' ? 'Check ' : 'Write step ', h('span', {class: 'mono'}, 'rk:' + s.agent)],
     reverted: () => [...(s.agent ? ['Reverted what check ', h('span', {class: 'mono'}, 'rk:' + s.agent), ' edited']
       : ['Reverted what the follow-up edited']), h('small', null, s.paths.join(', '))],
     merge: () => ['Merged ', h('span', {class: 'mono'}, s.base),
       h('small', null, s.conflicts.length ? 'conflicts: ' + s.conflicts.join(', ') : 'no conflicts')],
-    push: () => ['Pushed ', h('span', {class: 'mono'}, s.branch)],
+    push: () => ['Pushed ', h('span', {class: 'mono'}, s.branch), ...inRepo()],
     // only a github.com URL becomes a link: the value came out of a CLI's stdout
-    pr: () => /^https:\/\/github\.com\//.test(s.url)
-      ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url],
+    pr: () => [...(/^https:\/\/github\.com\//.test(s.url)
+      ? ['Opened ', h('a', {href: s.url, target: '_blank', rel: 'noopener'}, 'draft PR')] : ['Opened draft PR ' + s.url]), ...inRepo()],
+    named: () => ['Said how to add ', h('span', {class: 'mono'}, s.repo), ' to ', h('span', {class: 'mono'}, 'with')],
+    refused: () => ['Refused: @' + s.by + ' has no write access on ', h('span', {class: 'mono'}, s.repos.join(', '))],
     error: () => ['Stopped', h('pre', null, s.message)],
     posted: () => ['Posted the review → ' + s.verdict],
     skipped: () => ['Already reviewed at ', h('span', {class: 'mono'}, s.head.slice(0, 7)), ' — no claude call'],
@@ -873,12 +890,16 @@ function builder(w, cat){
     j.after = l.map(s => ({agent: s.agent, mode: s.mode, ...(s.skills.length ? {skills: s.skills} : {}),
       ...(s.instructions ? {instructions: s.instructions} : {})}));
   }
-  // workflow()'s rules for `after` that a move can break; the server checks everything again
+  // the companions: the repo's own file only, never a layer below it
+  const withs = j => Array.isArray(j.with) ? j.with.filter(r => typeof r === 'string') : [];
+  const setWith = (j, l) => { if (l.length) j.with = l; else delete j.with; };   // no companions, no key
+  // workflow()'s rules for `after` and `with` that a move can break; the server checks everything again
   function check(j){
     const names = steps(j).map(s => s.agent), twice = names.find((n, i) => names.indexOf(n) !== i);
     if (names.some(n => !n)) return 'A step after the tasks needs an agent.';
     if (twice) return 'rk:' + twice + ' already runs a step. Each step needs its own agent.';
     if (names.length > 5) return 'At most 5 steps after the tasks.';
+    if ('with' in j) return withProblem(j.with);
   }
   function edit(f){
     const j = draft();
@@ -891,8 +912,12 @@ function builder(w, cat){
     ed.redraw();   // the editor shows the new text; its status() calls ed.hook, which repaints this
   }
 
-  // it: {kind: 'agent' | 'skill' | 'step', name, at: a slot, a step's index, or null for the shelf}
+  // it: {kind: 'agent' | 'skill' | 'step' | 'repo', name, at: a slot, a step's index, 'with', or null for the shelf}
   function move(j, it, to){
+    if (it.kind === 'repo'){   // added at the end: the order matters only when two bring the same name
+      const l = withs(j).filter(r => r !== it.name);
+      return setWith(j, to.part === 'repos' ? [...l, it.name] : l);
+    }
     if (it.kind === 'step'){
       const l = steps(j), [s] = l.splice(it.at, 1);
       l.splice(to.at, 0, s);
@@ -913,7 +938,8 @@ function builder(w, cat){
     put(j, to.at, t);
   }
   const takes = {sock: it => it.kind === 'agent', add: it => it.kind === 'agent', tray: it => it.kind === 'skill',
-    shelf: it => it.kind === 'skill' && it.at != null, step: it => it.kind === 'step'};
+    shelf: it => (it.kind === 'skill' || it.kind === 'repo') && it.at != null, step: it => it.kind === 'step',
+    repos: it => it.kind === 'repo' && it.at == null};
   const apply = (it, to) => { held = null; edit(j => move(j, it, to)); };
   const letgo = () => { if (held){ held = null; paint(); } };
 
@@ -928,7 +954,7 @@ function builder(w, cat){
       ev.dataTransfer.effectAllowed = 'move';
       ev.dataTransfer.setData('text/plain', it.name);
       box.classList.add('want-' + it.kind);
-      if (it.kind === 'skill' && it.at != null) box.classList.add('want-out');
+      if ((it.kind === 'skill' || it.kind === 'repo') && it.at != null) box.classList.add('want-out');
     };
     e.ondragend = () => { dragging = null; box.className = 'build'; };
     e.onclick = ev => {
@@ -977,6 +1003,27 @@ function builder(w, cat){
       {kind: 'skill', name, at});
   }
 
+  function repoBox(name, at){
+    return pick(h('button', {type: 'button', class: 'chip repo', title: name + (at == null ? ''
+      : '\n\nWhen two companions bring a skill or an agent of the same name, the one added first wins.')},
+      h('i'), name.split('/')[1]), {kind: 'repo', name, at});
+  }
+  // the first lane: the home, fixed, then each companion on a wire, then room for one more
+  function repos(j){
+    const l = withs(j), fresh = l.filter(r => !w.with.includes(r));
+    return h('div', {class: 'lane rl'},
+      h('div', {class: 'lane-head'}, h('span', {class: 'eyebrow'}, 'Repos'),
+        h('small', null, 'Rookery can change these repos on every issue · ' + l.length + ' of ' + w.max_with)),
+      h('div', {class: 'rrow'},
+        h('span', {class: 'chip repo home', title: w.repo + ': the issue\'s own repo. Its labels, comments, caps and key run the issue.'},
+          h('i'), w.repo.split('/')[1], h('small', null, 'home')),
+        ...l.flatMap(r => [h('span', {class: 'rwire', 'aria-hidden': 'true'}),
+          h('span', {class: 'pair'}, repoBox(r, 'with'), x('Remove ' + r, j => setWith(j, withs(j).filter(k => k !== r))))]),
+        l.length < w.max_with && drop(h('div', {class: 'rdrop'}, '+ Drop a repo here'), 'repos', {})),
+      fresh.length > 0 && h('p', {class: 'hint'}, fresh.map(r => r.split('/')[1]).join(', ')
+        + ': its skills and agents show on the shelf once this pull request is merged.'));
+  }
+
   function slot(j, at, title, note, known, head, phase){
     const s = get(j, at), step = typeof at === 'number';
     const base = step ? w.after[at] && norm(w.after[at]) : norm(w.slots[at]);
@@ -1019,19 +1066,26 @@ function builder(w, cat){
       skills: Object.fromEntries([...cat.map(s => [s.name, {source: 'catalog', description: s.description, hint: s.slot}]),
         ...Object.entries(w.skills).map(([n, s]) => [n, {...(cat.find(c => c.name === n) && {hint: cat.find(c => c.name === n).slot}), ...s}])])};
     const l = steps(j), wire = () => h('div', {class: 'wire', 'aria-hidden': 'true'});
-    const what = held && (held.kind === 'step' ? 'step ' + (held.at + 1) : 'rk:' + held.name);
+    const what = held && (held.kind === 'step' ? 'step ' + (held.at + 1) : held.kind === 'repo' ? held.name : 'rk:' + held.name);
+    // the owner's other repos this session sees, plus any the draft took out of `with`
+    const shelved = [...new Set([...w.repos, ...w.with])].filter(r => !withs(j).includes(r)).sort();
     box.replaceChildren(
       h('div', {class: 'bbar', role: 'status'}, ...(held
         ? ['Holding ', h('b', null, what), '. Click where it goes. ', h('button', {class: 'link', onclick: letgo}, 'Cancel')]
-        : ['Drag agents and skills onto a slot. Drag one slot\'s agent onto another to swap them. No mouse: click a box, then where it goes.'])),
-      drop(h('aside', {class: 'shelf', 'aria-label': 'Agents and skills'},
+        : ['Drag agents and skills onto a slot, and repos onto Repos. Drag one slot\'s agent onto another to swap them. No mouse: click a box, then where it goes.'])),
+      drop(h('aside', {class: 'shelf', 'aria-label': 'Agents, skills and repos'},
         h('div', {class: 'eyebrow'}, 'Agents'),
         h('div', {class: 'stack'}, Object.keys(known.agents).sort().map(n => agentBox(n, null, known)),
           h('button', {class: 'link', onclick: () => { ed.go('+'); $('#edit').scrollIntoView({behavior: 'smooth', block: 'start'}); }}, '+ New agent')),
         h('div', {class: 'eyebrow'}, 'Skills'),
         h('div', {class: 'stack'}, Object.keys(known.skills).sort().map(n => skillBox(n, null, known))),
-        h('p', {class: 'hint'}, 'Drop a skill here to take it off a slot.')), 'shelf', {}),
+        h('div', {class: 'eyebrow'}, 'Repos'),
+        h('div', {class: 'stack'}, shelved.map(r => repoBox(r, null)),
+          !shelved.length && h('span', {class: 'hint'}, 'No other repo of ' + w.repo.split('/')[0] + ' that you can see.')),
+        h('p', {class: 'hint'}, 'Not here? ', h('a', {href: w.install, target: '_blank', rel: 'noopener'}, 'Install the Rookery App on it'), '.'),
+        h('p', {class: 'hint'}, 'Drop a skill or a repo here to take it off.')), 'shelf', {}),
       h('div', {class: 'canvas'},
+        repos(j),
         h('div', {class: 'eyebrow'}, 'On every issue'),
         slot(j, 'plan', SLOT.plan[0], SLOT.plan[2], known, [], SLOT.plan[1]),
         wire(),
@@ -1115,16 +1169,28 @@ const now = p => p in ed.edits ? ed.edits[p] : ed.files[p] ?? null;   // null: n
 const changed = () => Object.keys(ed.edits).filter(p => ed.edits[p] !== (ed.files[p] ?? null));
 
 // the §3.2 allowlist and the shape checks, while you type. The server runs the real ones again.
+// workflow()'s rules for `with`, and the ones of steer() a browser can check: the server checks them all again
+function withProblem(l){
+  const home = state.repo, owner = home.split('/')[0];
+  if (!Array.isArray(l) || l.length > 3 || l.some(r => typeof r !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r)))
+    return '`with` is a list of at most 3 repos, each owner/name.';
+  if (new Set(l).size < l.length) return '`with` names a repo twice.';
+  if (l.includes(home)) return '`with` cannot name ' + home + ' itself.';
+  const other = l.find(r => r.split('/')[0] !== owner);
+  if (other) return other + ' has another owner. A companion is another repo of ' + owner + '.';
+}
+
 function problems(p, text){
   if (text == null) return [];
   if (p === 'workflow.json'){
     let j;
     try { j = JSON.parse(text); } catch (e) { return ['Not valid JSON: ' + e.message]; }
     if (!j || typeof j !== 'object' || Array.isArray(j)) return ['The top level is an object.'];
-    const out = Object.keys(j).filter(k => !['plan', 'task', 'review', 'pr-review', 'after'].includes(k))
-      .map(k => '`' + k + '` is not a slot: only plan, task, review, pr-review, after.');
+    const out = Object.keys(j).filter(k => !['plan', 'task', 'review', 'pr-review', 'after', 'with'].includes(k))
+      .map(k => '`' + k + '` is not a slot: only plan, task, review, pr-review, after, with.');
     if ('after' in j && (!Array.isArray(j.after) || j.after.length > 5)) out.push('`after` is a list of at most 5 steps.');
-    return out;
+    const bad = 'with' in j && withProblem(j.with);
+    return bad ? [...out, bad] : out;
   }
   const name = p.slice('agents/'.length, -'.md'.length), out = [];
   if (!NAME.test(name)) out.push('An agent name is lowercase letters, digits and dashes.');

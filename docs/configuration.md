@@ -9,7 +9,7 @@ Rookery does not read configuration from the branch that the agent changes. Thus
 | Path | Purpose |
 | --- | --- |
 | `CLAUDE.md` | Instructions for the agent. Rookery reads only the file at the root. The maximum size is 64 KB. |
-| `.rookery/workflow.json` | The agent, the skills and the instructions for each part of a run. |
+| `.rookery/workflow.json` | The agent, the skills and the instructions for each part of a run, and the other repositories that an issue can change. |
 | `.rookery/agents/<name>.md` | Agents for Rookery only. |
 | `.rookery/skills/<name>/SKILL.md` | Skills for Rookery only. |
 | `.claude/skills/<name>/SKILL.md` | Skills that your developers also use. |
@@ -25,6 +25,8 @@ The file has one entry for each slot. A slot is one part of a run:
 - `review`: the review after the last task.
 - `pr-review`: the review of a pull request that a person asks for (see [Workflow](workflow.md)).
 - `after`: a list of extra steps before the review.
+
+It can also have `with`, a list of other repositories that an issue can change (see below).
 
 Each slot can set:
 
@@ -112,6 +114,36 @@ The portal shows the catalog in **Skills**.
 | `write` | Yes | `step-done` or `failed` | Rookery commits the change as `#<n> step <agent>`. `failed` stops the run. |
 
 When you approve again, Rookery does not repeat a `write` step that has a commit on the branch. It runs each `check` step again.
+
+## Change more than one repository (with)
+
+An issue can need a change in two repositories. For example, a field in the API and the page that shows it. To let Rookery change a second repository, add its name to `with`:
+
+```json
+{ "with": ["sa-es-ir/shop-frontend"] }
+```
+
+The repository of the issue is the home. Each repository in `with` is a companion.
+
+- The list has a maximum of 3 repositories.
+- Each companion has the same owner as the home. The Rookery App must be installed on it.
+- Rookery reads `with` only from `.rookery/workflow.json` of the repository. It does not read `with` from the owner defaults.
+
+On each issue, Rookery gives the agent a worktree for each companion. The plan agent decides which repositories the issue needs. When the run is complete:
+
+- Each companion that has changes gets a branch `feature/<home>-issue-<n>` and a draft pull request. Its body names the issue and the pull request of the home. It does not close an issue.
+- The pull request of the home lists the companion pull requests under **Companion PRs**.
+- A companion that has no changes gets no branch and no pull request.
+
+The labels, the comments, the caps and the API key are the ones of the home. Rookery never puts a label or a comment on an issue of a companion. Merge the pull requests together. Rookery does not merge them.
+
+To approve, or to ask for a follow-up, you must have write access to the home and to each companion. Replies during planning need write access to the home only.
+
+A companion can add skills and agents from its `.rookery/skills/`, `.claude/skills/` and `.rookery/agents/`. If the home already has a skill or an agent with the same name, Rookery uses the one of the home. Rookery also gives the agent the `CLAUDE.md` of each companion. It does not read the `workflow.json` of a companion.
+
+If an issue names a repository of the same owner, for example `sa-es-ir/shop-frontend`, and `with` does not list it, Rookery writes a comment that tells you how to add it. The run continues with the home only. The plan lists what the other repository needs. After you add the repository to `with`, reply on the issue to make the plan again.
+
+In the portal builder, drag a repository from **Repos** on the shelf onto **Repos** at the top of the workflow. Drag it back to the shelf, or select ×, to remove it.
 
 ## Owner defaults
 

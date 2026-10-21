@@ -157,6 +157,10 @@ TASK_LINE = re.compile(r"^[ \t]*[-*] \[( |x)(\] .+)$", re.M | re.I)
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 MAX_TASKS = 15
 MAX_STEPS = 5   # `after` steps in .rookery/workflow.json; per issue, like MAX_TASKS, and apart from it
+# `with` in .rookery/workflow.json: the companion repos an issue may also change. Each is a
+# worktree per issue and a block in every prompt.
+MAX_WITH = 3
+REPO = re.compile(r"[\w.-]+/[\w.-]+")
 # CLAUDE.md goes to the CLI as one argv entry, and Linux caps one at 128 KB
 CLAUDE_MD_MAX = 64 * 1024
 # every skill and agent name: it is rendered into prompts ("Use the `rk:x` skill") and --agent
@@ -538,8 +542,9 @@ def begin(c, act, title=None):
     active[c.repo] = {"job": job, "proc": None, "cancel": None}
 
 
-def step(repo, what, **detail):
-    """Append to the running job's log; outside a job (dry-run helpers, tests) a no-op."""
+def step(repo, what, /, **detail):
+    """Append to the running job's log; outside a job (dry-run helpers, tests) a no-op. `/`:
+    a companion's steps carry `repo` in their detail."""
     if a := active.get(repo):
         with closing(db()) as con, con:
             con.execute("INSERT INTO steps VALUES (?, ?, ?, ?)", (a["job"], time.time(), what, json.dumps(detail)))
@@ -616,17 +621,35 @@ def cost_of(out, name):
 
 # --- claude ------------------------------------------------------------------
 
-def worktree(c):
-    """Per-issue branch + working dir, namespaced by repo, so nothing collides."""
-    wt = wt_root(c.repo) / f"issue-{c.n}"
+def worktree(c, home=None):
+    """Per-issue branch + working dir, namespaced by repo, so nothing collides. With `home`, c is
+    a companion of home's issue (mates()): the names carry the home's name (tag())."""
+    wt = wt_root(c.repo) / tag(c, home)
     if not wt.exists():
         log(f"#{c.n} creating worktree {wt} from origin/{c.base}")
         shared(wt.parent)
         fetch(c.repo, c.path, c.base)
-        sh("git", "worktree", "add", "-B", f"feature/issue-{c.n}", str(wt),
+        sh("git", "worktree", "add", "-B", f"feature/{tag(c, home)}", str(wt),
            f"origin/{c.base}", cwd=c.path)
         sealed(wt)
     return wt
+
+
+def tag(c, home=None):
+    """An issue's worktree dir, and its branch after `feature/`. A companion's is never
+    `issue-<n>`: that repo has its own issue n, and drop_worktree() keys off that name."""
+    return f"{home.repo.split('/')[1]}-issue-{c.n}" if home else f"issue-{c.n}"
+
+
+def mates(c):
+    """This job's companions (`with`, as pin() read it), each a Ctx of its own repo with the
+    home's issue number. Only for the home's issue worktree: never a PR review's or memory's."""
+    return [Ctx(w["repo"], c.n, clone_dir(w["repo"]), w["base"]) for w in (active.get(c.repo) or {}).get("with", [])]
+
+
+def mate_wts(c):
+    """(companion, its worktree) for each companion whose worktree exists."""
+    return [(m, wt) for m in mates(c) if (wt := wt_root(m.repo) / tag(m, c)).exists()]
 
 
 def shared(d):
@@ -680,16 +703,21 @@ def parse_agent(p, where):
 def workflow(text, where, under=None):
     """.rookery/workflow.json -> every slot with every key, `under` (the owner's workflow, else
     WORKFLOW) filling what the file leaves out, plus its `after` steps — `under`'s unless the
-    file has its own. An invalid file fails the job: silently running the default is worse."""
+    file has its own — and its `with`, the file's own only: an owner-wide list would let every
+    repo write every repo. An invalid file fails the job: silently running the default is worse."""
     under = under or {**WORKFLOW, "after": []}
     try:
         given = json.loads(text) if text else {}
     except ValueError as e:
         raise RuntimeError(f"{where} is not valid JSON: {e}")
-    if not isinstance(given, dict) or given.keys() - WORKFLOW.keys() - {"after"}:
-        raise RuntimeError(f"{where}: the top level is an object with only {', '.join(WORKFLOW)}, after.")
+    if not isinstance(given, dict) or given.keys() - WORKFLOW.keys() - {"after", "with"}:
+        raise RuntimeError(f"{where}: the top level is an object with only {', '.join(WORKFLOW)}, after, with.")
     if not isinstance(given.get("after", []), list) or len(given.get("after", [])) > MAX_STEPS:
         raise RuntimeError(f"{where}: `after` is a list of at most {MAX_STEPS} steps.")
+    mates = given.get("with", [])
+    if not isinstance(mates, list) or len(mates) > MAX_WITH \
+            or not all(isinstance(r, str) and REPO.fullmatch(r) for r in mates) or len(set(mates)) < len(mates):
+        raise RuntimeError(f"{where}: `with` is a list of at most {MAX_WITH} different repos, each `owner/name`.")
 
     def one(slot, s, default):
         if not isinstance(s, dict) or s.keys() - default.keys():
@@ -712,6 +740,7 @@ def workflow(text, where, under=None):
     # a step's commit subject and PR section carry its agent's name: two would collide
     if len(names := [s["agent"] for s in wf["after"]]) > len(set(names)):
         raise RuntimeError(f"{where}: `after` names an agent twice; each step needs its own.")
+    wf["with"] = mates
     return wf
 
 
@@ -741,7 +770,8 @@ def pin(c):
     # once per job, like CLAUDE.md, so every call in it reads the same notes, and the log names them
     notes = memory_file(c.repo).read_text(encoding="utf-8") if MEMORY and memory_file(c.repo).exists() else ""
     most = max(len(s["instructions"].encode()) for _, s in slots(a["workflow"]))
-    if notes and len((a["claude_md"] + notes).encode()) + most > CLAUDE_MD_MAX:
+    mds = a["claude_md"] + "".join(w["claude_md"] for w in a["with"])
+    if notes and len((mds + notes).encode()) + most > CLAUDE_MD_MAX:
         # steer() already failed the job if CLAUDE.md alone were over: the notes are the extra
         log(f"#{c.n} repo notes left out: CLAUDE.md, notes and instructions would pass {CLAUDE_MD_MAX // 1024} KB")
         notes, said = "", "left out: over the 64 KB limit"
@@ -752,6 +782,8 @@ def pin(c):
          skills=sorted(a["sources"]), sources=a["sources"],
          agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
          **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}),
+         **({"with": [f"{w['repo']}@{w['sha']}" for w in a["with"]]} if a["with"] else {}),
+         **({"skipped": a["skipped"]} if a["skipped"] else {}),
          **({"memory": said} if said else {}))
     log(f"#{c.n} pinned origin/{c.base} at {a['sha'][:12]}: {len(a['claude_md'])} chars of CLAUDE.md, "
         f"skills {a['sources']}")
@@ -803,9 +835,22 @@ def steer(repo, path, base, plug, sha=None):
     md = blob(path, sha, "CLAUDE.md")
     owf = workflow(blob(org[1], org[2], "workflow.json"), f"workflow.json in {org[0]}") if org else None
     wf = workflow(blob(path, sha, ".rookery/workflow.json"), f".rookery/workflow.json on {base}", owf)
+    mates = []   # (repo, clone, sha) of each companion in `with`, at its own freshly fetched base
+    for r in wf["with"]:
+        why = ("is the repo itself" if r == repo else "has another owner" if r.split("/")[0] != repo.split("/")[0]
+               else "is not a repo Rookery is installed on" if r not in REPOS or r.split("/")[1] == ORG else "")
+        if why:
+            raise RuntimeError(f".rookery/workflow.json on {base}: `with` names {r}, which {why}. A companion is "
+                               "another repo of the same owner, with the Rookery App installed on it.")
+        if not REPOS[r] or not clone_dir(r).exists():   # never run without it, even once
+            raise RuntimeError(f"Rookery is still cloning {r}, which `with` names. Try again in a minute.")
+        fetch(r, clone_dir(r), REPOS[r])
+        mates.append((r, clone_dir(r), sh("git", "rev-parse", f"origin/{REPOS[r]}", cwd=clone_dir(r))))
+    mds = [blob(p, at, "CLAUDE.md") for _, p, at in mates]
     for slot, s in slots(wf):
-        if (size := len((md + s["instructions"]).encode())) > CLAUDE_MD_MAX:
-            also = f" plus the `{slot}` instructions in .rookery/workflow.json" if s["instructions"] else ""
+        if (size := len((md + "".join(mds) + s["instructions"]).encode())) > CLAUDE_MD_MAX:
+            also = (" and the companions' CLAUDE.md" if any(mds) else "") \
+                + (f" plus the `{slot}` instructions in .rookery/workflow.json" if s["instructions"] else "")
             raise RuntimeError(f"CLAUDE.md{also} on {base} is {size // 1024} KB; Rookery passes it to "
                                f"the agent in one argument, which is capped at {CLAUDE_MD_MAX // 1024} KB. "
                                "Shorten it on the base branch, then comment again.")
@@ -839,8 +884,28 @@ def steer(repo, path, base, plug, sha=None):
         if (HERE / "skills" / name).is_dir():
             shutil.copytree(HERE / "skills" / name, skills / name)
             won[name] = "catalog"
+    # a companion only adds, never replaces: a name the home's assembly has stays the home's, so a
+    # frontend `reviewer` can never become a backend run's reviewer. Between companions, first wins.
+    skipped = set()
+    for r, p, at_ in mates:
+        label = f"with:{r}"
+
+        def new(name, have):   # logs what the companion lost; its own second source is no loss
+            if name in have and have[name] != label:
+                skipped.add(f"{name} ({r})")
+            return name not in have
+        if oid(p, at_, ".rookery/agents"):
+            by.update((Path(f).stem, label) for f in untar(
+                p, at_, ".rookery/agents", plug / "agents", lambda m: top(m) and new(Path(m.name).stem, by)))
+        for src in (".rookery/skills", ".claude/skills"):
+            if oid(p, at_, src):
+                untar(p, at_, src, skills, lambda m: new(m.name.split("/")[0], won))
+                for d in skills.iterdir():
+                    if d.is_dir():
+                        won.setdefault(d.name, label)
     # where a file came from, for the error that names it
-    at = lambda src, sub, f: (f"{sub}/{f} in {src}" if org and src == org[0] else f"{src}/{f} on {base}")
+    at = lambda src, sub, f: (f"{sub}/{f} in {src.removeprefix('with:')}" if org and src == org[0]
+                              or src.startswith("with:") else f"{src}/{f} on {base}")
     described = {}
     for name, src in sorted(won.items()):
         where = at(src, "skills", name) if src != "catalog" else f"catalog skill {name}"
@@ -860,7 +925,8 @@ def steer(repo, path, base, plug, sha=None):
                                    f"{kind} by that name.")
     return {"sha": sha, "claude_md": md, "workflow": wf, "agents": agents, "agent_sources": by,
             "sources": won, "skills": described, "org": org and {"repo": org[0], "sha": org[2]},
-            "org_workflow": owf}
+            "org_workflow": owf, "skipped": sorted(skipped),
+            "with": [{"repo": r, "base": REPOS[r], "sha": at_, "claude_md": m} for (r, _, at_), m in zip(mates, mds)]}
 
 
 def config_dir(repo):
@@ -931,6 +997,13 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
     a = active.get(c.repo) or {}
     sid = str(uuid.uuid5(NS, f"{c.repo}#{c.n}/{key}" + (f"/job-{a.get('job')}" if per_job else "")))
     s = slot if isinstance(slot, dict) else (a.get("workflow") or WORKFLOW)[slot]
+    # the companions' worktrees beside the issue's; a PR review is of one PR, in one repo
+    both = [] if slot == "pr-review" else mate_wts(c)
+    if both:
+        prompt += "\n\n" + WITH_REPOS.format(repos="\n".join(
+            f"- `{m.repo}` at `{w.absolute()}`, base `{m.base}`. Its change is "
+            f"`git -C {w.absolute()} diff origin/{m.base}...HEAD`." for m, w in both)) \
+            + (WITH_PLAN if slot == "plan" else "")
     # a skill in the plugin alone almost never fires (S5: 0/3); named in the prompt, 3/3
     prompt = "\n\n".join([prompt] + [USE_SKILL.format(name=k) for k in s["skills"]])
     # the repo's and owner's own skills, unnamed by this slot, are offered, not ordered: a repo
@@ -953,9 +1026,13 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
         cmd.append(f"--plugin-dir={a['plugin']}")
     if (out := wt_root(c.repo) / f"plans-{c.n}").exists():   # plans() put this issue's plan outside cwd
         cmd.append(f"--add-dir={out.absolute()}")
+    cmd += [f"--add-dir={w.absolute()}" for _, w in both]
+    mds = {w["repo"]: w for w in a.get("with") or []}
     # the slot's instructions land after the persona, which --agent puts in the system prompt
     rules = [f"Contents of CLAUDE.md (the repo's own instructions, from {c.base}):\n\n{a['claude_md']}"
              if a.get("claude_md") else "",
+             *(f"Contents of CLAUDE.md in {m.repo} (a companion repo's own instructions, from {m.base}), for "
+               f"its files only:\n\n{mds[m.repo]['claude_md']}" for m, _ in both if mds[m.repo]["claude_md"]),
              MEMORY_NOTE + a["memory"] if a.get("memory") else "",
              f"Instructions for this step (.rookery/workflow.json, from {c.base}):\n\n{s['instructions']}"
              if s["instructions"] else ""]
@@ -1276,6 +1353,31 @@ STEERING = (".rookery", ".claude", "CLAUDE.md")
 CONFIG_WARNING = ("> ⚠ This PR changes agent configuration (`.rookery/`, `.claude/` or the root "
                   "`CLAUDE.md`). Once merged, it steers how Rookery works on this repo.\n\n")
 
+# after the prompt of every issue call, when `with` lists companions (claude())
+WITH_REPOS = """This issue can also change these repos. Each one is a separate git worktree:
+
+{repos}
+
+Change a repo only when the work needs it. Do not commit in any of them: the
+orchestrator commits each repo for you."""
+WITH_PLAN = """ Planning changes no file in them.
+Name the repo at the start of each task that changes one of them."""
+# after PLAN or REPLY, when the issue names a repo of the owner that `with` does not list (named())
+NOT_MOUNTED = """The issue also names {repos}. Rookery cannot change {them} in this run.
+Plan only this repo's part. End plan.md with a section `## Not in this plan`:
+what {each} needs, in a few bullets, so that a person can do it or open an issue
+there. Repeat that section in your comment."""
+# the issue names a repo `with` does not list: once per repo per issue, before the plan call
+NOT_LISTED = """This issue names `{repo}`, but Rookery can change only `{home}`: `.rookery/workflow.json` on `{base}` does not list it in `with`.
+
+**To change both repos:** {install}add it and merge, then reply on this issue.
+- In the portal: {url}/portal.html#workflow → pick `{name}` → drag `{short}` from the shelf onto **Repos** → open the pull request.
+- Or by hand on `{base}`: `.rookery/workflow.json` ⟶ `"with": {listed}`
+
+Your next reply re-plans with both repos. Approving the plan before that changes only `{name}`; the plan lists what `{short}` needs, for a person or for a later issue.
+<!-- rookery:with {repo} -->"""
+NOT_INSTALLED = "install the Rookery App on `{repo}` (https://github.com/apps/{app}/installations/new), then "
+
 # one line per skill the slot enables in .rookery/workflow.json, after the slot's prompt
 USE_SKILL = "Use the `rk:{name}` skill."
 OFFER_SKILLS = "This repo has its own skills: {names}. Use each one whose description fits this work."
@@ -1363,15 +1465,54 @@ def keep_plans_only(c, wt, keep=None):
     return reverted
 
 
+def named(c, text):
+    """-> the home owner's repos that `text` names and this job does not mount. A regex, not the
+    model: `owner/name`, `owner/name#12` or its github.com URL, outside quotes and code. Another
+    owner's repo (`facebook/react#1` in a bug report) is ordinary text, and so is a bare name:
+    a repo called `api` or `web` would match ordinary words."""
+    owner, canon = c.repo.split("/")[0], {r.lower(): r for r in REPOS}
+    found = re.findall(rf"(?<![\w.@/-])(?:(?:https?://)?github\.com/)?{re.escape(owner)}/([\w.-]+)", unquoted(text), re.I)
+    have = {c.repo.lower()} | {m.repo.lower() for m in mates(c)}
+    out = {}   # lower-case -> as REPOS spells it, else as first written
+    for r in (f"{owner}/{f.rstrip('.').removesuffix('.git')}" for f in found):
+        if r.lower() not in have and r.split("/")[1] not in ("", ORG):
+            out.setdefault(r.lower(), canon.get(r.lower(), r))
+    return list(out.values())
+
+
+def notice(c, repos):
+    """NOT_LISTED on the issue, before the plan call, so it is there in seconds: once per repo per
+    issue, since its hidden marker in an earlier comment is enough. No label, no claude call.
+    ponytail: any comment with the marker counts, not only the bot's; a copied marker only mutes a hint."""
+    said = gh(c.repo, "issue", "view", str(c.n), "--json", "comments", "--jq", ".comments[].body", check=False)
+    listed = [m.repo for m in mates(c)]
+    for r in repos:
+        if f"<!-- rookery:with {r} -->" in said:
+            continue
+        comment(c, NOT_LISTED.format(repo=r, home=c.repo, base=c.base, url=PUBLIC_URL, name=c.repo.split("/")[1],
+                                     short=r.split("/")[1], listed=json.dumps(listed + [r]),
+                                     install="" if r in REPOS else NOT_INSTALLED.format(repo=r, app=ME.removesuffix("[bot]"))))
+        step(c.repo, "named", repo=r)
+
+
 def plan(c, title, body, resume):
     set_phase(c, "rookery:planning")
     wt = worktree(c)
+    for m in mates(c):   # mounted for every issue: the planner decides whether the issue needs it
+        worktree(m, c)
     d = plans(c, wt)[1]
     prompt = (REPLY.format(n=c.n, body=body, d=d) if resume
               else PLAN.format(n=c.n, repo=c.repo, title=title, body=body, d=d, max=MAX_TASKS))
+    if missing := named(c, f"{title or ''}\n{body}"):
+        notice(c, missing)
+        many = len(missing) > 1
+        prompt += "\n" + NOT_MOUNTED.format(repos=", ".join(f"`{r}`" for r in missing),
+                                            them="them" if many else "it", each="each of them" if many else "it")
     status, msg = claude(c, prompt, resume=resume, slot="plan")
     # a plan beside the worktree: nothing in the worktree is the plan's
     keep_plans_only(c, wt, keep=(d + "/",) if d == pdir(c.n) else ())
+    for _, mw in mate_wts(c):   # planning changes no companion
+        keep_plans_only(c, mw, keep=())
     comment(c, msg)
     set_phase(c, "rookery:awaiting-input" if status == "questions" else "rookery:awaiting-approval")
 
@@ -1380,6 +1521,8 @@ def implement(c):
     """One fresh session per unticked task. Re-running resumes where it stopped."""
     set_phase(c, "rookery:implementing")
     wt, done = worktree(c), []
+    for m in mates(c):   # `with` as of this job: a companion merged since the plan is mounted too
+        worktree(m, c)
     p, d = plans(c, wt)
     for _ in range(MAX_TASKS + 1):
         tasks = read_tasks(p)
@@ -1398,14 +1541,34 @@ def implement(c):
             raise RuntimeError(f"task {i + 1} ({text}) reported {status}:\n\n{msg}")
         tick(p, at)
         step(c.repo, "tick", i=i + 1, of=len(tasks))
-        sh("git", "add", "-A", cwd=wt)
-        sh("git", "commit", "-m", f"#{c.n} task {i + 1}: {text}", cwd=wt)
-        step(c.repo, "commit", i=i + 1, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
+        commit_all(c, wt, f"#{c.n} task {i + 1}: {text}", i=i + 1)
         log(f"#{c.n} committed task {i + 1}")
         done.append(fold(f"✅ {i + 1}. {summary(text)}", f"> {text}\n\n{msg}"))
     else:
         raise RuntimeError("task loop did not converge")
     publish(c, wt, ["## Tasks", *done] if done else [])
+
+
+def commit_all(c, wt, subject, empty=False, merge=False, **detail):
+    """Commit what the agent left in the home worktree and in each companion's -> [(repo, sha)],
+    logged as `commit` steps. A companion commits only when it changed, under the home's full
+    name: `#12` there would be its own issue 12. The home commits when it changed, or `empty`
+    (--allow-empty), or `merge` (the merge in progress, --no-edit), or when nothing else did:
+    then git's "nothing to commit" fails the job, as it always has."""
+    made = []
+    for m, mw in mate_wts(c):
+        if sh("git", "status", "--porcelain", cwd=mw):
+            sh("git", "add", "-A", cwd=mw)
+            sh("git", "commit", "-m", c.repo + subject, cwd=mw)
+            made.append((m.repo, mw))
+    sh("git", "add", "-A", cwd=wt)
+    if empty or merge or not made or sh("git", "status", "--porcelain", cwd=wt):
+        sh("git", "commit", *(["--no-edit"] if merge else ["--allow-empty"] * empty + ["-m", subject]), cwd=wt)
+        made.insert(0, (c.repo, wt))
+    made = [(r, sh("git", "rev-parse", "--short", "HEAD", cwd=w)) for r, w in made]
+    for r, sha in made:   # where each commit went, in the run log
+        step(c.repo, "commit", **detail, sha=sha, **({"repo": r} if r != c.repo else {}))
+    return made
 
 
 def summary(text):
@@ -1434,32 +1597,56 @@ def publish(c, wt, done, reply=""):
     p, d = plans(c, wt)
     with frozen(p / "tasks.md"):
         verdict, review = claude(c, REVIEW.format(n=c.n, d=d, base=c.base), key="review", slot="review", per_job=True)
-    keep_plans_only(c, wt, keep=())   # read-only too; a write step on a later run would commit its edits
+    revert_all(c, wt)   # read-only too; a write step on a later run would commit its edits
     s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
     review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
                            verdicts=REVIEW_VERDICTS, level="###", wt=wt)
 
-    log(f"#{c.n} pushing {branch} and opening draft PR")
-    # an explicit https URL, so the push is the App's even when origin is ssh
-    sh("git", "push", f"https://github.com/{c.repo}.git", f"{branch}:{branch}",
-       cwd=wt, env=auth(c.repo))
-    # a push to a URL updates no remote-tracking ref; record it, so unpushed()
-    # sees this work as safe on GitHub
-    sh("git", "update-ref", f"refs/remotes/origin/{branch}", branch, cwd=wt)
-    step(c.repo, "push", branch=branch)
+    # a companion with no commit for this issue gets no push and no PR
+    parts = [(m, mw, f"feature/{tag(m, c)}") for m, mw in mate_wts(c)
+             if sh("git", "rev-list", "-1", f"origin/{m.base}..HEAD", cwd=mw)]
+    log(f"#{c.n} pushing {branch}{''.join(f', {m.repo} {b}' for m, _, b in parts)} and opening draft PRs")
+    for m, mw, b in [*parts, (c, wt, branch)]:
+        assert b != m.base
+        # an explicit https URL, so the push is the App's even when origin is ssh
+        sh("git", "push", f"https://github.com/{m.repo}.git", f"{b}:{b}", cwd=mw, env=auth(m.repo))
+        # a push to a URL updates no remote-tracking ref; record it, so unpushed()
+        # sees this work as safe on GitHub
+        sh("git", "update-ref", f"refs/remotes/origin/{b}", b, cwd=mw)
+        step(c.repo, "push", branch=b, **({"repo": m.repo} if m is not c else {}))
     title = json.loads(gh(c.repo, "issue", "view", str(c.n), "--json", "title"))["title"]
     # what steers the agent changes only by a human merging it (pin()): say so where they merge
-    steers = sh("git", "diff", "--name-only", f"origin/{c.base}...HEAD", "--", *STEERING, cwd=wt)
+    steers = lambda m, mw: sh("git", "diff", "--name-only", f"origin/{m.base}...HEAD", "--", *STEERING, cwd=mw)
+    open_pr = lambda m, b: gh(m.repo, "pr", "view", b, "--json", "state,url", "--jq",
+                              'select(.state == "OPEN") | .url', check=False)
+    # approve again after a run that opened the PR (a check flagged it): `gh pr create`
+    # refuses a second PR for the branch, so this run's sections go on that PR as a comment
+    url = open_pr(c, branch)
+
+    def part(m, mw, home):
+        # never `Closes #<n>`: in the companion, #<n> is its own issue n
+        log_ = sh("git", "log", "--no-merges", "--reverse", "--format=- %s", f"origin/{m.base}..HEAD", cwd=mw)
+        return ((CONFIG_WARNING if steers(m, mw) else "") + f"Part of {c.repo}#{c.n}. Merge it together with "
+                + (home or f"the pull request for {c.repo}#{c.n}") + f".\n\n## Commits\n\n{log_}")
+    links, new = [], []
+    for m, mw, b in parts:   # first, so the home's body can list them
+        if u := open_pr(m, b):
+            gh(m.repo, "pr", "comment", u, "--body-file", "-", input=part(m, mw, url))
+        else:
+            u = gh(m.repo, "pr", "create", "--draft", "--base", m.base, "--head", b, "--title", title,
+                   "--body-file", "-", input=part(m, mw, url))
+            new.append((m, mw, u))
+        step(c.repo, "pr", url=u, repo=m.repo)
+        links.append(f"- `{m.repo}`: {u}")
+    with_ = ["## Companion PRs\n\nMerge these together with this one.\n\n" + "\n".join(links)] if links else []
+
     def body(lead=()):
-        return ((CONFIG_WARNING if steers else "")
-                + "\n\n".join([*lead, *done, *sections]) + f"\n\n## 🤖 Reviewer agent\n\n{review}\n\nCloses #{c.n}"
+        return ((CONFIG_WARNING if steers(c, wt) else "")
+                + "\n\n".join([*lead, *done, *with_, *sections])
+                + f"\n\n## 🤖 Reviewer agent\n\n{review}\n\nCloses #{c.n}"
                 # the commit every steering input was read at; GitHub links owner/repo@sha
                 f"\n\n---\nworkflow: {c.repo}@{active[c.repo]['sha']}"
                 + (f" · steps: {', '.join(s['agent'] for s in after)}" if after else ""))
-    # approve again after a run that opened the PR (a check flagged it): `gh pr create`
-    # refuses a second PR for the branch, so this run's sections go on that PR as a comment
-    url = gh(c.repo, "pr", "view", branch, "--json", "state,url", "--jq",
-             'select(.state == "OPEN") | .url', check=False)
     if url:
         gh(c.repo, "pr", "comment", url, "--body-file", "-", input=body())
     else:
@@ -1469,16 +1656,25 @@ def publish(c, wt, done, reply=""):
             plan = plan[:PLAN_CAP] + f"\n\n_…cut at {PLAN_CAP} characters._"
         url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch, "--title", title,
                  "--body-file", "-", input=body([fold("📋 Plan", plan)] if plan else []))
+        for m, mw, u in new:   # opened before the home's PR existed: now they can name it
+            gh(m.repo, "pr", "edit", u, "--body-file", "-", input=part(m, mw, url))
     # The review and the checks are advisory: the PR opens either way, so the work is
     # always on GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)
     if verdict != "review-ok":
         wanting.append("the reviewer")
-    lead = f"{reply}\n\nUpdated: {url}" if reply else f"Draft PR: {url}"
+    lead = (f"{reply}\n\nUpdated: {url}" if reply else f"Draft PR: {url}") + "".join(f"\nAnd in {l[2:]}" for l in links)
     comment(c, lead if not wanting else
             f"{lead}\n\nChanges wanted by {', '.join(wanting)} — see their sections on the PR.")
     # the run finished: an advisory verdict is not a failure, so not rookery:error
     set_phase(c, "rookery:changes-wanted" if wanting else "rookery:done")
+
+
+def revert_all(c, wt):
+    """keep_plans_only(keep=()) on the home worktree and on each companion's: a step that may not
+    edit, edited nowhere. -> the reverted paths, a companion's as `<repo>:<path>`."""
+    return keep_plans_only(c, wt, keep=()) + [f"{m.repo}:{p}" for m, mw in mate_wts(c)
+                                              for p in keep_plans_only(c, mw, keep=())]
 
 
 def after_steps(c, wt, after):
@@ -1502,7 +1698,7 @@ def after_steps(c, wt, after):
             status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=d, base=c.base),
                                  key=f"step-{name}", slot=s, per_job=True)
         # enforced, not asked: whatever a check leaves in the worktree is reverted, and flagged
-        reverted = keep_plans_only(c, wt, keep=()) if mode == "check" else []
+        reverted = revert_all(c, wt) if mode == "check" else []
         if reverted:
             step(c.repo, "reverted", agent=name, paths=reverted)
         if status not in MODES[mode]:
@@ -1516,15 +1712,42 @@ def after_steps(c, wt, after):
         if reverted:
             msg += f"\n_Rookery reverted this check's edits to {', '.join(reverted)}: a check is read-only._\n"
         if mode == "write":
-            sh("git", "add", "-A", cwd=wt)
-            sh("git", "commit", "--allow-empty", "-m", subject, cwd=wt)
-            step(c.repo, "commit", step=name, sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
+            commit_all(c, wt, subject, empty=True, step=name)
         elif status == "changes-needed" or reverted:
             wanting.append(name)
         # an icon and "agent", so a reader sees whose words these are, not a part of the PR
         sections.append(f"## 🤖 {name[0].upper()}{name[1:]} agent · {mode}"
                         + "".join(f" · rk:{k}" for k in s["skills"]) + f"\n\n{msg}")
     return sections, wanting
+
+
+def at_head(c, home=None):
+    """follow_up()'s worktree, at its branch's head on GitHub, not the local branch: a person may
+    have pushed to it since. Re-added there when missing, moved up --ff-only, never reset —
+    worktree()'s -B would reset it to base. A companion's branch is on GitHub only once a run
+    committed there; until then it is worktree()'s, from base."""
+    t = tag(c, home)
+    branch, wt = f"feature/{t}", wt_root(c.repo) / t
+    if not home:
+        fetch(c.repo, c.path, branch)
+    else:
+        with fetchlocks[c.repo]:   # fetch()'s lock; a branch not on GitHub yet is no error
+            sh("git", "fetch", "origin", branch, cwd=c.path, env=auth(c.repo), check=False)
+        if not sh("git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}", cwd=c.path, check=False):
+            return worktree(c, home)
+    if not wt.exists():
+        shared(wt.parent)
+        sh("git", "worktree", "prune", cwd=c.path)
+        mine = sh("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=c.path, check=False)
+        sh("git", "worktree", "add", *([str(wt), branch] if mine else ["-b", branch, str(wt), f"origin/{branch}"]),
+           cwd=c.path)
+        sealed(wt)
+    sh("git", "merge", "--abort", cwd=wt, check=False)   # a cancelled follow-up's merge, else nothing
+    try:
+        sh("git", "merge", "--ff-only", f"origin/{branch}", cwd=wt)
+    except RuntimeError as e:
+        raise RuntimeError(f"{branch} here and on GitHub have both moved, and Rookery never force-pushes:\n\n{e}") from None
+    return wt
 
 
 def follow_up(c, job, note):
@@ -1545,21 +1768,9 @@ def follow_up(c, job, note):
                        check=False) or "{}")
     if pr.get("state") != "OPEN":   # merged, closed or never opened; after a merge the worktree is gone too
         return comment(c, NO_PR)
-    # from the PR's head, not the local branch: a person may have pushed to it since
-    fetch(c.repo, c.path, branch)
-    wt = wt_root(c.repo) / f"issue-{c.n}"
-    if not wt.exists():   # never worktree(): its -B would reset the branch to base
-        shared(wt.parent)
-        sh("git", "worktree", "prune", cwd=c.path)
-        mine = sh("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=c.path, check=False)
-        sh("git", "worktree", "add", *([str(wt), branch] if mine else ["-b", branch, str(wt), f"origin/{branch}"]),
-           cwd=c.path)
-        sealed(wt)
-    sh("git", "merge", "--abort", cwd=wt, check=False)   # a cancelled follow-up's merge, else nothing
-    try:
-        sh("git", "merge", "--ff-only", f"origin/{branch}", cwd=wt)
-    except RuntimeError as e:
-        raise RuntimeError(f"{branch} here and on GitHub have both moved, and Rookery never force-pushes:\n\n{e}") from None
+    wt = at_head(c)
+    for m in mates(c):
+        at_head(m, c)
     # base only when the PR needs it, or the note names it: a question stays a question.
     # ponytail: GitHub's view, UNKNOWN for a while after a push to base; a local
     # `git merge-tree --write-tree` (git 2.38+) if that bites.
@@ -1598,24 +1809,22 @@ def follow_up(c, job, note):
     except Exception:
         # nothing half-merged or half-done stays for the next follow-up to commit
         sh("git", "merge", "--abort", cwd=wt, check=False)
-        keep_plans_only(c, wt, keep=())
+        revert_all(c, wt)
         raise
     said = msg
     if status == "changed":
-        sh("git", "add", "-A", cwd=wt)
-        if sh("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", cwd=wt, check=False):
-            sh("git", "commit", "--no-edit", cwd=wt)   # the merge commit carries the resolution
-        elif sh("git", "status", "--porcelain", cwd=wt):
-            sh("git", "commit", "-m", f"#{c.n} follow-up: {' '.join(note.splitlines()[0].split())[:60]}", cwd=wt)
+        # the merge commit carries the resolution
+        merging = bool(sh("git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD", cwd=wt, check=False))
+        if merging or any(sh("git", "status", "--porcelain", cwd=w) for w in [wt, *(mw for _, mw in mate_wts(c))]):
+            commit_all(c, wt, f"#{c.n} follow-up: {' '.join(note.splitlines()[0].split())[:60]}", merge=merging)
         else:
             status = "answered"   # no diff at all: it was an answer after all
-        if status == "changed":
-            step(c.repo, "commit", sha=sh("git", "rev-parse", "--short", "HEAD", cwd=wt))
-    elif reverted := keep_plans_only(c, wt, keep=()):   # an answer changes nothing
+    elif reverted := revert_all(c, wt):   # an answer changes nothing
         step(c.repo, "reverted", paths=reverted)
         said += f"\n\n_Rookery reverted the edits to {', '.join(reverted)}: an answer changes nothing._"
     # unpushed, not this run's: a commit an earlier failed follow-up left is published now
-    if sh("git", "rev-parse", "HEAD", cwd=wt) == sh("git", "rev-parse", f"origin/{branch}", cwd=wt):
+    if sh("git", "rev-parse", "HEAD", cwd=wt) == sh("git", "rev-parse", f"origin/{branch}", cwd=wt) \
+            and not any(unpushed(mw, "HEAD") for _, mw in mate_wts(c)):
         return comment(c, said)
     publish(c, wt, ["## 🤖 Follow-up\n\n> " + note.replace("\n", "\n> ") + f"\n\n{said}"], reply=said)
 
@@ -2124,17 +2333,22 @@ def rmtree(p):
 
 
 def drop_worktree(repo, n):
-    """The issue's PR is closed: its worktree has nothing left to do."""
-    wt, clone, branch = wt_root(repo) / f"issue-{n}", clone_dir(repo), f"feature/issue-{n}"
-    if not wt.exists():
-        return
-    if unpushed(clone, branch):
-        log(f"{repo}#{n} {branch} has unpushed commits — keeping {wt}")
-        return
-    sh("git", "worktree", "remove", "--force", str(wt), cwd=clone)
-    if (out := wt_root(repo) / f"plans-{n}").exists():   # a plan kept out of the repo goes with it
-        rmtree(out)
-    log(f"{repo}#{n} removed worktree {wt}")
+    """The issue's PR is closed: its worktree has nothing left to do, nor have its companions'.
+    Those are found on disk, in every repo of the owner, not from today's `with`: it may have
+    changed since. Each is kept while it has unpushed commits."""
+    home = Ctx(repo, n, clone_dir(repo), "")
+    for r in [repo] + [r for r in REPOS if r != repo and r.split("/")[0] == repo.split("/")[0]]:
+        t = tag(home, None if r == repo else home)
+        wt, clone, branch = wt_root(r) / t, clone_dir(r), f"feature/{t}"
+        if not wt.exists():
+            continue
+        if unpushed(clone, branch):
+            log(f"{repo}#{n} {r} {branch} has unpushed commits — keeping {wt}")
+            continue
+        sh("git", "worktree", "remove", "--force", str(wt), cwd=clone)
+        if r == repo and (out := wt_root(repo) / f"plans-{n}").exists():   # a plan kept out of the repo goes with it
+            rmtree(out)
+        log(f"{repo}#{n} removed worktree {wt}")
 
 
 def offboard(repo):
@@ -2157,6 +2371,21 @@ def offboard(repo):
 
 
 # --- dispatch ----------------------------------------------------------------
+
+def refused(c, job, what):
+    """Approve and follow-up write in every companion, so they need write access there too: a
+    writer on the backend must not let a backend-only person make Rookery branch in the frontend.
+    Replies need only the home: planning writes nothing in a companion. The phase stays."""
+    if "by" not in job:   # a dry run: the operator's own, from the box
+        return False
+    if no := [m.repo for m in mates(c) if not can_write(m.repo, job["by"])]:
+        step(c.repo, "refused", by=job["by"], repos=no)
+        comment(c, f"{what} needs write access on {', '.join(f'`{r}`' for r in no)} too: this issue can change "
+                   f"{'those repos' if len(no) > 1 else 'that repo'} (`with` in `.rookery/workflow.json`). "
+                   "Ask someone with write access on every one of them.")
+        return True
+    return False
+
 
 def handle(job):
     if job["kind"] == "onboard":
@@ -2190,7 +2419,8 @@ def handle(job):
                                                        "rookery:changes-wanted"}:
                 begin(c, "implement")
                 pin(c)
-                implement(c)
+                if not refused(c, job, "`approve`"):
+                    implement(c)
             elif phase & {"rookery:awaiting-input", "rookery:awaiting-approval"}:
                 begin(c, "reply")
                 pin(c)
@@ -2202,7 +2432,8 @@ def handle(job):
                                                                          "rookery:error"}:
                 begin(c, "follow-up")
                 pin(c)
-                follow_up(c, job, note)
+                if not refused(c, job, "A follow-up"):
+                    follow_up(c, job, note)
         learn = (active.get(c.repo) or {}).get("job")
         finish(c.repo, "ok")
     except Exception as e:
@@ -2337,7 +2568,7 @@ def enqueue(event, p):
         # approvals and replies alike: only people who can write to *this* repo
         if user != ME and labels_of(repo, n) & set(PHASES) and can_write(repo, user):
             submit({"kind": "continue", "repo": repo, "n": n, "body": p["comment"]["body"],
-                    "comment": p["comment"].get("id")})
+                    "comment": p["comment"].get("id"), "by": user})
 
 
 def main():
