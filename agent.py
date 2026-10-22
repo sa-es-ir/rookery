@@ -197,6 +197,7 @@ PLAN_CAP = 30_000
 # MEMORY=0 turns off both, for the whole instance.
 MEMORY = os.environ.get("MEMORY", "1") != "0"
 MEMORY_CAP = 8_000    # characters of notes
+MEMORY_REWRITES = 1   # extra memory calls to ask for shorter notes, before truncating
 DIGEST_CAP = 12_000   # characters of one job's digest, what the memory call reads
 # a second OS user every `claude` call runs as (DEPLOY.md §5b): it can't read app.pem, .env or
 # rookery.db, so an injected agent can't mint tokens for every installation. Its group shares
@@ -1308,6 +1309,23 @@ Put the notes between <notes> and </notes>, then one line:
 </digest>
 """
 
+REWRITE = """You keep the notes that Rookery's agents read at the start of every run on
+{repo}. The notes below are {n:,} characters, over the {cap:,}-character cap.
+
+Rewrite them to fit the cap. Keep the facts that help a future run most: where
+things live, the commands that build and test it and whether they work on this
+box, conventions, and traps (commands that failed, and why). Cut the least useful
+notes and any extra wording. Add nothing new: no issue or pull request, and no
+secrets, tokens or URLs with credentials. At most {cap} characters.
+
+Put the rewritten notes between <notes> and </notes>, then one line:
+`STATUS: memory-updated`.
+
+<notes>
+{notes}
+</notes>
+"""
+
 # the memory call is not a workflow slot: haiku, one turn, no tools, no agent, no plugin
 MEMORY_SLOT = {"agent": None, "skills": [], "instructions": "", "model": "haiku",
                "args": ["--max-turns", "1", "--tools", ""]}
@@ -1915,23 +1933,37 @@ def remember(job):
             os.chmod(tmp, 0o755)   # mkdtemp's 0700 would shut RUN_AS out of its own cwd
             status, text = claude(c, REMEMBER.format(repo=c.repo, cap=MEMORY_CAP, notes=old, digest=d),
                                   key="memory", slot=MEMORY_SLOT, per_job=True, wt=Path(tmp))
-        if status == "memory-updated":
-            m = re.search(r"<notes>(.*?)</notes>", text, re.S)
-            if not m:
-                raise RuntimeError("the memory reply has no <notes>…</notes>; the old notes stay")
-            notes = m.group(1).strip()
-            if len(notes) > MEMORY_CAP:
-                raise RuntimeError(f"the new notes are {len(notes):,} characters, over the {MEMORY_CAP:,} cap; "
-                                   "the old notes stay")
-            f.parent.mkdir(parents=True, exist_ok=True)
-            tmpf = f.with_suffix(".tmp")   # a portal read never sees half a file
-            tmpf.write_text(notes, encoding="utf-8")
-            tmpf.replace(f)
-            step(c.repo, "remembered", chars=len(notes), sha=hashlib.sha256(notes.encode()).hexdigest()[:12],
-                 source=job["job"])
-        elif status != "memory-unchanged":
-            raise RuntimeError(f"the memory call replied `STATUS: {status}`; it replies memory-updated "
-                               "or memory-unchanged")
+            if status == "memory-updated":
+                m = re.search(r"<notes>(.*?)</notes>", text, re.S)
+                if not m:
+                    raise RuntimeError("the memory reply has no <notes>…</notes>; the old notes stay")
+                notes = m.group(1).strip()
+                for _ in range(MEMORY_REWRITES):
+                    if len(notes) <= MEMORY_CAP:
+                        break
+                    rstatus, rtext = claude(c, REWRITE.format(repo=c.repo, cap=MEMORY_CAP, n=len(notes),
+                                                             notes=notes),
+                                            key="memory-rewrite", slot=MEMORY_SLOT, per_job=True, wt=Path(tmp))
+                    if rstatus != "memory-updated":
+                        raise RuntimeError(f"the memory rewrite replied `STATUS: {rstatus}`; it replies "
+                                           "memory-updated")
+                    m = re.search(r"<notes>(.*?)</notes>", rtext, re.S)
+                    if not m:
+                        raise RuntimeError("the memory rewrite has no <notes>…</notes>; the old notes stay")
+                    notes = m.group(1).strip()
+                if len(notes) > MEMORY_CAP:   # still too long: the job must not fail on length
+                    log(f"{c.repo}: the rewritten notes are {len(notes):,} characters; "
+                        f"truncated to {MEMORY_CAP:,}")
+                    notes = notes[:MEMORY_CAP]
+                f.parent.mkdir(parents=True, exist_ok=True)
+                tmpf = f.with_suffix(".tmp")   # a portal read never sees half a file
+                tmpf.write_text(notes, encoding="utf-8")
+                tmpf.replace(f)
+                step(c.repo, "remembered", chars=len(notes),
+                     sha=hashlib.sha256(notes.encode()).hexdigest()[:12], source=job["job"])
+            elif status != "memory-unchanged":
+                raise RuntimeError(f"the memory call replied `STATUS: {status}`; it replies memory-updated "
+                                   "or memory-unchanged")
         finish(c.repo, "ok")
     except Exception as e:
         log(f"{c.repo} memory FAILED: {e}")
