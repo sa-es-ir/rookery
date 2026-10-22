@@ -202,7 +202,7 @@ plain machine account with no token on the box; `mention()` ignores quoted lines
 the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
 `AGENT_USER`; with `review_prs` on, also `opened` (`auto`, no `may()`: a writer turned it on),
 never on `ME`'s PRs or a fork's. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
-on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
+on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`unlabel()`, REST: Ubuntu's gh 2.45 `gh pr edit` fails on classic Projects),
 no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
 comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot

@@ -437,15 +437,19 @@ for who in ("bob", agent.ME):
 wrong = drain()
 assert wrong == [{"kind": "wrong-label", "repo": "o/r", "n": 12, "label": agent.TRIGGER},
                  {"kind": "wrong-label", "repo": "o/r", "n": 1, "label": agent.REVIEW_LABEL}], wrong
-ghs, saved_gh = [], agent.gh
+ghs, saved_gh, saved_api, saved_token = [], agent.gh, agent.api, agent.token
 agent.gh = lambda repo, *a, input=None, check=True: ghs.append((a, input, check)) or ""
+# the label goes by REST, never `gh pr edit` (gh 2.45 asks for classic Projects there); a failure
+# is logged, never raised
+agent.token = lambda repo: "t"
+agent.api = lambda m, path, bearer, data=None: ghs.append((m, path)) or (_ for _ in ()).throw(OSError("404"))
 for j in wrong:
     agent.handle(j)
-agent.gh = saved_gh
+agent.gh, agent.api, agent.token = saved_gh, saved_api, saved_token
 assert ghs == [(("pr", "comment", "12", "--body-file", "-"), agent.WRONG_LABEL[agent.TRIGGER], True),
-               (("pr", "edit", "12", "--remove-label", agent.TRIGGER), None, False),
+               ("DELETE", "/repos/o/r/issues/12/labels/rookery%3Atrigger"),
                (("issue", "comment", "1", "--body-file", "-"), agent.WRONG_LABEL[agent.REVIEW_LABEL], True),
-               (("issue", "edit", "1", "--remove-label", agent.REVIEW_LABEL), None, False)], ghs
+               ("DELETE", "/repos/o/r/issues/1/labels/rookery%3Apr-review")], ghs
 assert "add `rookery:pr-review` or mention `@rookery-agent`" in agent.WRONG_LABEL[agent.TRIGGER]
 
 # caps:runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
@@ -917,6 +921,8 @@ assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n🔎 **1 finding** · �
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert "<details><summary>📋 Plan</summary>\n\n# Plan\n\nDo it.\n\n</details>" in body_, "the plan leads the PR, folded"
+assert "## Tasks\n\n<details><summary>✅ 1. one</summary>\n\n> one\n\n</details>" in body_, \
+    "a task an earlier run ticked (one a restart cut short) is listed too, without its reply"
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again
 calls.clear()
@@ -1201,7 +1207,10 @@ agent.handle({"kind": "continue", "repo": "o/back", "n": 12, "body": "approve", 
 assert not argv and phases[-1] == "rookery:awaiting-approval", "a home-only writer cannot approve; the phase stays"
 assert said == ["`approve` needs write access on `o/front` too: this issue can change that repo (`with` in "
                 "`.rookery/workflow.json`). Ask someone with write access on every one of them."], said
+patches, perm_api = [], agent.api
+agent.api = lambda m, path, bearer, data=None: patches.append((m, path, data)) if m == "PATCH" else perm_api(m, path, bearer)
 agent.handle({"kind": "continue", "repo": "o/back", "n": 12, "body": "approve", "by": "bob"})
+agent.api = perm_api
 assert g(bwt(12), "log", "--format=%s", "origin/main..HEAD").splitlines() == ["#12 task 2: backend only", "#12 task 1: change both"]
 assert g(fwt(12), "log", "--format=%s", "origin/main..HEAD").splitlines() == ["o/back#12 task 1: change both"], \
     "the companion commits only what changed in it, under the home's full name"
@@ -1218,9 +1227,9 @@ assert fbody.startswith("Part of o/back#12. Merge it together with the pull requ
 assert "- o/back#12 task 1: change both" in fbody
 assert br == "o/back" and "## Companion PRs\n\nMerge these together with this one.\n\n- `o/front`: https://github.com/o/front/pull/1" in bbody
 assert "o/front:app.txt" in bbody and "Closes #12" in bbody, "a check's companion edit is named with its repo"
-edits = [(r, a_, i) for r, a_, i in [x for x in ghs if len(x) == 3] if a_[:2] == ("pr", "edit")]
-assert edits == [("o/front", ("pr", "edit", "https://github.com/o/front/pull/1", "--body-file", "-"),
-                  fbody.replace("the pull request for o/back#12", "https://github.com/o/back/pull/2"))], edits
+assert not [a_ for _, a_, _ in [x for x in ghs if len(x) == 3] if a_[:2] == ("pr", "edit")], "never `gh pr edit`"
+assert patches == [("PATCH", "/repos/o/front/pulls/1",
+                    {"body": fbody.replace("the pull request for o/back#12", "https://github.com/o/back/pull/2")})], patches
 assert said[-1].startswith("Draft PR: https://github.com/o/back/pull/2\nAnd in `o/front`: https://github.com/o/front/pull/1")
 assert phases[-1] == "rookery:changes-wanted"
 with agent.closing(agent.db()) as con:
@@ -1352,15 +1361,15 @@ assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made ==
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
         "## 🔴 Changes needed\n\n🔎 **1 finding** · 🔴 1 high\n\nBreaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
         "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
-assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
+                ("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None),   # queued or running
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis
 assert drain()[-1]["kind"] == "memory", "a finished review teaches the repo's notes"
 # the same head again, with no note: no claude call, one comment, the trigger still cleaned up
 ghs.clear(), apis.clear(), made.clear(), ran.clear()
 agent.handle({**job_, "note": "", "comment": None, "requested": None})
 assert not ran and not made, "nothing new to look at"
-assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8")] and apis[-1:] == [("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None)], (ghs, apis)
 assert ghs[1][1].startswith("Already reviewed at `abc1234`."), ghs[1][1]
 skipped_job = drain()[-1]   # its memory job finds no claude call to learn from: see the memory tests
 # a note, or a new head, reviews again
@@ -1373,9 +1382,9 @@ drain()
 ghs.clear(), apis.clear(), made.clear(), ran.clear()
 prv["isCrossRepository"] = True
 agent.handle({**job_, "comment": None, "requested": None})
-assert apis == [("POST", "/repos/o/r/issues/8/reactions", {"content": "eyes"})], "no comment: 👀 on the PR"
+assert apis == [("POST", "/repos/o/r/issues/8/reactions", {"content": "eyes"}), ("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None)], "no comment: 👀 on the PR"
 assert not ran and not made, "a fork is refused before anything runs"
-assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8")], ghs
 assert "from forks" in ghs[1][1]
 with agent.closing(agent.db()) as con:
     assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE act = 'pr-review' ORDER BY id")] == \
@@ -1399,7 +1408,7 @@ assert said[0][2].startswith("Agent error: no API key for **acme**. Add a key at
 assert f"add `{agent.TRIGGER}` again" in said[0][2]
 said.clear()
 agent.handle({"kind": "pr-review", "repo": "acme/r", "n": 8, "note": "", "comment": None, "label": True, "requested": None})
-assert not calls and [s[:3] for s in said] == [("pr", "comment", "8"), ("pr", "edit", "8")], "a PR: no label, no gh issue"
+assert not calls and [s[:3] for s in said] == [("pr", "comment", "8")], "a PR: no phase label, no gh issue"
 assert "portal.html#keys" in said[0][3] and f"add `{agent.REVIEW_LABEL}` again" in said[0][3]
 for j in drain():   # the memory jobs find no claude call to learn from
     agent.handle(j)

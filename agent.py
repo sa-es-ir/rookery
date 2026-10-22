@@ -392,8 +392,17 @@ def labels_of(repo, n):
     return {l["name"] for l in json.loads(gh(repo, "issue", "view", str(n), "--json", "labels"))["labels"]}
 
 
+def unlabel(repo, n, label):
+    """REST, never `gh pr edit`: gh 2.45 (Ubuntu's) asks for classic Projects there, which GitHub
+    now refuses, so the edit fails whole. An issue number or a PR's, alike. Never raises."""
+    try:
+        api("DELETE", f"/repos/{repo}/issues/{n}/labels/{urllib.parse.quote(label, safe='')}", token(repo))
+    except Exception as e:
+        log(f"{repo}#{n} removing {label} failed: {e}")
+
+
 def set_phase(c, phase):
-    stale = [l for l in labels_of(c.repo, c.n) if l in PHASES and l != phase]
+    stale =[l for l in labels_of(c.repo, c.n) if l in PHASES and l != phase]
     args = ["issue", "edit", str(c.n), "--add-label", phase]
     for l in stale:
         args += ["--remove-label", l]
@@ -1527,7 +1536,7 @@ def plan(c, title, body, resume):
 def implement(c):
     """One fresh session per unticked task. Re-running resumes where it stopped."""
     set_phase(c, "rookery:implementing")
-    wt, done = worktree(c), []
+    wt, said = worktree(c), {}
     for m in mates(c):   # `with` as of this job: a companion merged since the plan is mounted too
         worktree(m, c)
     p, d = plans(c, wt)
@@ -1550,9 +1559,13 @@ def implement(c):
         step(c.repo, "tick", i=i + 1, of=len(tasks))
         commit_all(c, wt, f"#{c.n} task {i + 1}: {text}", i=i + 1)
         log(f"#{c.n} committed task {i + 1}")
-        done.append(fold(f"✅ {i + 1}. {summary(text)}", f"> {text}\n\n{msg}"))
+        said[i] = msg
     else:
         raise RuntimeError("task loop did not converge")
+    # every task, not only this run's: a run that resumes after a failure or a restart
+    # still lists what the earlier runs did (their replies died with them)
+    done = [fold(f"✅ {i + 1}. {summary(text)}", f"> {text}" + (f"\n\n{said[i]}" if i in said else ""))
+            for i, (_, _, text) in enumerate(read_tasks(p))]
     publish(c, wt, ["## Tasks", *done] if done else [])
 
 
@@ -1664,7 +1677,8 @@ def publish(c, wt, done, reply=""):
         url = gh(c.repo, "pr", "create", "--draft", "--base", c.base, "--head", branch, "--title", title,
                  "--body-file", "-", input=body([fold("📋 Plan", plan)] if plan else []))
         for m, mw, u in new:   # opened before the home's PR existed: now they can name it
-            gh(m.repo, "pr", "edit", u, "--body-file", "-", input=part(m, mw, url))
+            # REST, never `gh pr edit` (see unlabel())
+            api("PATCH", f"/repos/{m.repo}/pulls/{u.rsplit('/', 1)[1]}", token(m.repo), {"body": part(m, mw, url)})
     # The review and the checks are advisory: the PR opens either way, so the work is
     # always on GitHub rather than stranded in a local worktree. A bad verdict only flags.
     step(c.repo, "pr", url=url)
@@ -2049,14 +2063,14 @@ def wrong_label(job):
     kind, n = "pr" if job["label"] == TRIGGER else "issue", str(job["n"])
     log(f"{job['repo']}#{n} {job['label']} on the wrong kind of item: removing it")
     gh(job["repo"], kind, "comment", n, "--body-file", "-", input=WRONG_LABEL[job["label"]])
-    gh(job["repo"], kind, "edit", n, "--remove-label", job["label"], check=False)
+    unlabel(job["repo"], n, job["label"])
 
 
 def pr_cleanup(c, job):
     """Whatever triggered the review, gone: a label or a request still there means queued or
     running. Never fails the job over it."""
     if job.get("label"):
-        gh(c.repo, "pr", "edit", str(c.n), "--remove-label", REVIEW_LABEL, check=False)
+        unlabel(c.repo, c.n, REVIEW_LABEL)
     if job.get("requested"):
         # the review is the App's, not AGENT_USER's, so GitHub would show the request pending forever
         try:

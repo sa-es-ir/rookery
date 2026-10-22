@@ -383,6 +383,8 @@ User=rookery
 WorkingDirectory=/opt/rookery
 ExecStart=/usr/bin/python3 -u /opt/rookery/agent.py
 Restart=always
+# an agent process killed for memory fails its own call, not the whole orchestrator
+OOMPolicy=continue
 Environment=PATH=/home/rookery/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
