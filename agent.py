@@ -1347,6 +1347,9 @@ conflict open.
 FOLLOW_EMPTY = (f"Mention `@{AGENT_USER}` with what to change or what to answer. For example: "
                 f"`@{AGENT_USER} pull the latest from the base branch and resolve the conflicts`.")
 NO_PR = "This issue has no open pull request, so there is nothing to follow up on. Open a new issue for further work."
+INTERRUPTED = ("Agent error: Rookery restarted while this job was running, so the job stopped. "
+               "The tasks that finished are committed. Comment `approve` to continue at the next task, "
+               "or mention @{} again to repeat the follow-up.").format(AGENT_USER)
 
 # what pin() reads from base: a PR that changes any of it steers Rookery once merged
 STEERING = (".rookery", ".claude", "CLAUDE.md")
@@ -2600,7 +2603,18 @@ def main():
 
     # a job still "running" in the log died with the previous process
     with closing(db()) as con, con:
+        dead = con.execute("SELECT repo, n, act FROM jobs WHERE status = 'running'").fetchall()
         con.execute("UPDATE jobs SET status = 'interrupted', ended = ? WHERE status = 'running'", (time.time(),))
+    # its phase label outlived it: `rookery:implementing` takes no `approve`, so the issue would sit
+    # there for good. rookery:error does, and resumes at the first unticked task
+    for repo, n, act in dead:
+        if act in ("implement", "follow-up") and repo in REPOS:
+            try:
+                c = ctx(repo, n)
+                comment(c, INTERRUPTED)
+                set_phase(c, "rookery:error")
+            except Exception as e:
+                log(f"{repo}#{n} interrupted, could not say so: {e}")
     shutil.rmtree(WORKSPACE / "plugins", ignore_errors=True)   # and so did its per-job plugin dirs
     # a key taken out of .env after the admin page stored its provider: those jobs fail at the call
     with closing(db()) as con:

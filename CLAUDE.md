@@ -229,7 +229,8 @@ issue is the same as `rookery:trigger`.
 **Run log.** `handle()` opens a `jobs` row per plan/reply/implement/pr-review/memory (`begin()`), and the
 pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost/sid, tick,
 commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
-ok/failed/cancelled; a restart marks leftovers `interrupted`. `active[repo]` is the job a
+ok/failed/cancelled; a restart marks leftovers `interrupted`, and an interrupted implement or
+follow-up gets `INTERRUPTED` and `rookery:error`, since its stale phase label would take no `approve`. `active[repo]` is the job a
 worker is running — one per repo.
 
 **Cancel.** `sh(track=repo)` registers the process in `active[repo]` under `alock`;
