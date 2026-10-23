@@ -16,7 +16,9 @@ The notes do not contain data about one issue or one pull request. The maximum s
 1. A plan, reply, implementation or pull request review finishes. It can finish with or without an error. A run that you cancel does not change the notes.
 2. Rookery makes a short record of the run: the tools that the agent used and the errors that it got. The record does not contain file contents.
 3. A small model (haiku) reads the current notes and the record, and writes the updated notes.
-4. Rookery checks the reply. If the reply is correct, Rookery writes the notes. If not, Rookery keeps the old notes.
+4. Rookery checks the reply. If the reply is not correct, Rookery keeps the old notes.
+5. If the notes are longer than 8,000 characters, the model writes them again, shorter. This is one more Claude call. If the notes are still too long, Rookery removes the lines after the limit. The length of the notes does not cause an error.
+6. Rookery writes the notes.
 
 This step is one more Claude call. It counts in the daily limits of the repository. If it fails, Rookery does not write a comment and does not set a label. The run log in the portal shows it as a "repo notes" run.
 

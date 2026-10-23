@@ -1260,6 +1260,11 @@ for bad in ["no marker at all", "STATUS: memory-updated", "<notes>x</notes>\nSTA
     replies.append(bad)
     agent.handle(memjob)
     assert notes_f.read_text(encoding="utf-8") == first_notes, f"kept after: {bad[:30]}"
+# over the cap, and the rewrite's reply is off shape: the job fails, the old notes stay
+for bad in ["<notes>short</notes>\nSTATUS: memory-unchanged", "STATUS: memory-updated"]:
+    replies += ["<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated", bad]
+    agent.handle(memjob)
+    assert notes_f.read_text(encoding="utf-8") == first_notes, f"kept after rewrite: {bad[:30]}"
 # over the cap: one rewrite call, and its shorter notes are written
 calls_before = len(argv)
 replies += ["<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated",
@@ -1268,21 +1273,22 @@ agent.handle(memjob)
 assert len(argv) == calls_before + 2, "an over-cap reply gets one rewrite call"
 rewritten = "- Rewritten: `npm test`."
 assert notes_f.read_text(encoding="utf-8") == rewritten, "the rewrite's notes are written"
-assert "8,001" in argv[-1][2] and "x" * 8001 in argv[-1][2], "the rewrite sees the over-cap notes"
-# still over the cap after the rewrite: truncate it, never fail the job
+assert "8,001" in argv[-1][2] and "<current-notes>\n" + "x" * 8001 in argv[-1][2], "the rewrite sees the over-cap notes"
+# still over the cap after the rewrite: cut at the last line break under the cap, never fail the job
+cut = "z" * 7990
 replies += ["<notes>" + "y" * 8001 + "</notes>\nSTATUS: memory-updated",
-            "<notes>" + "z" * 8002 + "</notes>\nSTATUS: memory-updated"]
+            "<notes>" + cut + "\n" + "w" * 20 + "</notes>\nSTATUS: memory-updated"]
 agent.handle(memjob)
-assert notes_f.read_text(encoding="utf-8") == "z" * agent.MEMORY_CAP, "the rewrite is truncated, not failed"
+assert notes_f.read_text(encoding="utf-8") == cut, "the rewrite is cut at a line break, not failed"
 replies.append("<notes>stale</notes>\nSTATUS: memory-unchanged")
 agent.handle(memjob)
-assert notes_f.read_text(encoding="utf-8") == "z" * agent.MEMORY_CAP, "unchanged writes nothing"
-assert "z" * agent.MEMORY_CAP in argv[-1][2], "the next call sees the current notes"
+assert notes_f.read_text(encoding="utf-8") == cut, "unchanged writes nothing"
+assert cut in argv[-1][2], "the next call sees the current notes"
 with agent.closing(agent.db()) as con:
     mem = con.execute("SELECT id, status FROM jobs WHERE act = 'memory' ORDER BY id").fetchall()
     rem = con.execute("SELECT detail FROM steps WHERE what = 'remembered'").fetchall()
-assert [s for _, s in mem] == ["ok", "failed", "failed", "failed", "ok", "ok", "ok"], mem
-assert [json.loads(d)["chars"] for d, in rem] == [len(first_notes), len(rewritten), agent.MEMORY_CAP], rem
+assert [s for _, s in mem] == ["ok"] + ["failed"] * 5 + ["ok", "ok", "ok"], mem
+assert [json.loads(d)["chars"] for d, in rem] == [len(first_notes), len(rewritten), len(cut)], rem
 assert all(json.loads(d)["source"] == learned for d, in rem), rem
 calls_before = len(argv)
 agent.handle(skipped_job)   # the skipped review: no claude call, so no memory run at all
