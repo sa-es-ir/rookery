@@ -1098,16 +1098,21 @@ with agent.closing(agent.db()) as con, con:
 out6 = agent.wt_root("o/r") / "plans-6"
 out6.mkdir(parents=True)
 (out6 / "tasks.md").write_text("- [ ] one\n- [ ] two\n", encoding="utf-8")
-seen_d, saved_pub = [], agent.publish
+seen_d, saved_pub, pr = [], agent.publish, []
 def fake_claude(c, prompt, key="plan", **k):
     seen_d.append(f"{out6.absolute()}/decisions.md" in prompt)
+    if key == "task-1":   # a verify task the box cannot run: no edits, not a failure
+        return "task-unverified", "Build ok; tests need Windows."
     (wt / f"{key}.txt").write_text("code", encoding="utf-8")
     return "task-done", "did it"
-agent.claude, agent.publish = fake_claude, lambda c, wt_, done: seen_d.append(len(done))
+agent.claude, agent.publish = fake_claude, lambda c, wt_, done: pr.extend(done)
 agent.implement(agent.ctx("o/r", 6))
-assert seen_d == [True, True, 3], seen_d   # the Tasks heading and two tasks
+assert seen_d == [True, True] and len(pr) == 4, pr   # Not verified, the Tasks heading and two tasks
+assert pr[0] == "## ⚠️ Not verified here\n\n**Task 2.** Build ok; tests need Windows.", pr[0]
+assert "⚠️ 2. two" in pr[3]
 assert (out6 / "tasks.md").read_text(encoding="utf-8") == "- [x] one\n- [x] two\n"
-assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt", "task-1.txt"]
+assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt"]
+assert git("log", "-1", "--format=%s").stdout.decode().strip() == "#6 task 2: two", "an empty commit still marks it"
 with agent.closing(agent.db()) as con, con:
     con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
 agent.publish = saved_pub

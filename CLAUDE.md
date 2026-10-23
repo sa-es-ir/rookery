@@ -171,7 +171,10 @@ posts that run's sections as a comment on the open PR, since `gh pr create` refu
 
 `implement()` is the heart: loop the first unticked task in `tasks.md` → **a fresh Claude
 session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick the checkbox →
-`git commit` → next. Fresh sessions keep context and cost flat regardless of issue size;
+`git commit` (`--allow-empty`, a verify task may change nothing) → next. `task-unverified`
+(done, but a check it asks for cannot run on the box — e.g. a Windows-only test host) ticks
+and commits the same, and its reply leads the PR body as `## ⚠️ Not verified here`; it is not
+an error. PLAN tells the planner to ask only for checks the box can run. Fresh sessions keep context and cost flat regardless of issue size;
 `decisions.md` is the only memory that crosses between tasks. A failure raises with everything
 before it already committed, so commenting `approve` again resumes at that same task.
 
