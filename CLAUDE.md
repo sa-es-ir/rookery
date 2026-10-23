@@ -62,8 +62,10 @@ submits a `memory` job to the repo's queue → `remember()`: `digest()` reads th
 `sid` each `claude` step logs) and keeps tool calls, failed calls' first lines and each last
 reply — never file contents or successful output — up to `DIGEST_CAP`; one `MEMORY_SLOT` call
 (haiku, `--max-turns 1`, `--tools ""`, empty temp cwd, no plugin, `REMEMBER` prompt) returns the
-notes between `<notes>` tags; the orchestrator checks the `STATUS` and `MEMORY_CAP` and writes
-the file. A failed check keeps the old notes; a memory job never comments or sets a label.
+notes between `<notes>` tags; the orchestrator checks the `STATUS` and writes the file. Notes over
+`MEMORY_CAP` get `MEMORY_REWRITES` `REWRITE` calls (same slot, `key="memory-rewrite"`), then are cut
+at the last line break under the cap: length never fails the job. A failed check keeps the old
+notes; a memory job never comments or sets a label.
 `pin()` reads the file into `active[repo]["memory"]`, logs its size and sha in the `base` step,
 and `claude()` appends it (`MEMORY_NOTE`) between `CLAUDE.md` and the slot instructions; if the
 three would pass 64 KB, the notes are left out for that job, never failing it. `MEMORY=0`
@@ -191,7 +193,10 @@ posts that run's sections as a comment on the open PR, since `gh pr create` refu
 
 `implement()` is the heart: loop the first unticked task in `tasks.md` → **a fresh Claude
 session per task** (`key=f"task-{i}"`) → require `STATUS: task-done` → tick the checkbox →
-`git commit` → next. Fresh sessions keep context and cost flat regardless of issue size;
+`git commit` (`--allow-empty`, a verify task may change nothing) → next. `task-unverified`
+(done, but a check it asks for cannot run on the box — e.g. a Windows-only test host) ticks
+and commits the same, and its reply leads the PR body as `## ⚠️ Not verified here`; it is not
+an error. PLAN tells the planner to ask only for checks the box can run. Fresh sessions keep context and cost flat regardless of issue size;
 `decisions.md` is the only memory that crosses between tasks. A failure raises with everything
 before it already committed, so commenting `approve` again resumes at that same task.
 
@@ -368,9 +373,9 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   pointer read-only for the same reason. A new path that runs `claude` goes through
   `claude()`, and one that reads what it wrote reads as `RUN_AS` (`digest()`).
 - **The orchestrator writes repo notes; the model never does.** `remember()` writes
-  `memory_file()` from a checked reply (`STATUS` marker, `<notes>` tags, `MEMORY_CAP`), and
-  the memory call has no tools and an empty cwd. A memory job never comments or labels:
-  its failure must not look like a failed run. The notes are advisory to the agent
+  `memory_file()` from a checked reply (`STATUS` marker, `<notes>` tags, `MEMORY_CAP` by a
+  rewrite, then a cut), and the memory call has no tools and an empty cwd. A memory job never
+  comments or labels: its failure must not look like a failed run. The notes are advisory to the agent
   (`MEMORY_NOTE`: code and `CLAUDE.md` win), and any agent on the box can edit any
   repo's file (an accepted limit).
 - **The portal never approves.** No approve endpoint, no approve button; `APPROVE` stays a

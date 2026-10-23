@@ -1319,16 +1319,21 @@ with agent.closing(agent.db()) as con, con:
 out6 = agent.wt_root("o/r") / "plans-6"
 out6.mkdir(parents=True)
 (out6 / "tasks.md").write_text("- [ ] one\n- [ ] two\n", encoding="utf-8")
-seen_d, saved_pub = [], agent.publish
+seen_d, saved_pub, pr = [], agent.publish, []
 def fake_claude(c, prompt, key="plan", **k):
     seen_d.append(f"{out6.absolute()}/decisions.md" in prompt)
+    if key == "task-1":   # a verify task the box cannot run: no edits, not a failure
+        return "task-unverified", "Build ok; tests need Windows."
     (wt / f"{key}.txt").write_text("code", encoding="utf-8")
     return "task-done", "did it"
-agent.claude, agent.publish = fake_claude, lambda c, wt_, done: seen_d.append(len(done))
+agent.claude, agent.publish = fake_claude, lambda c, wt_, done: pr.extend(done)
 agent.implement(agent.ctx("o/r", 6))
-assert seen_d == [True, True, 3], seen_d   # the Tasks heading and two tasks
+assert seen_d == [True, True] and len(pr) == 4, pr   # Not verified, the Tasks heading and two tasks
+assert pr[0] == "## ⚠️ Not verified here\n\n**Task 2.** Build ok; tests need Windows.", pr[0]
+assert "⚠️ 2. two" in pr[3]
 assert (out6 / "tasks.md").read_text(encoding="utf-8") == "- [x] one\n- [x] two\n"
-assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt", "task-1.txt"]
+assert git("show", "--name-only", "--format=", "HEAD~1", "HEAD").stdout.decode().split() == ["task-0.txt"]
+assert git("log", "-1", "--format=%s").stdout.decode().strip() == "#6 task 2: two", "an empty commit still marks it"
 with agent.closing(agent.db()) as con, con:
     con.execute("DELETE FROM settings WHERE key = 'repo:o/r'")
 agent.publish = saved_pub
@@ -1467,29 +1472,50 @@ def fake_sh(*a, **k):
 real_sh_, agent.sh = agent.sh, fake_sh
 agent.comment = agent.set_phase = nope   # a side channel: never a comment or a label
 memjob = {"kind": "memory", "repo": "o/r", "n": 30, "job": learned}
-replies.append("<notes>\n- Tests: `npm test`, needs `-x`.\n</notes>\nSTATUS: memory-updated")
+first_notes = "- Tests: `npm test`, needs `-x`."
+replies.append(f"<notes>\n{first_notes}\n</notes>\nSTATUS: memory-updated")
 agent.handle(memjob)
-assert notes_f.read_text(encoding="utf-8") == "- Tests: `npm test`, needs `-x`."
+assert notes_f.read_text(encoding="utf-8") == first_notes
 cmd, cwd, prompt_ = argv[0]
 assert cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--max-turns") + 1] == "1", cmd
 assert cmd[cmd.index("--tools") + 1] == "" and "--agent" not in cmd and "Bash(rtk proxy:*)" in cmd
 assert not [x for x in cmd if x.startswith(("--plugin-dir", "--append-system-prompt"))], "nothing steers it"
 assert "npm test" in prompt_ and "<current-notes>\n\n</current-notes>" in prompt_
 assert "At most 8000\ncharacters" in prompt_, "the cap is in the prompt"
-for bad in ["no marker at all", "STATUS: memory-updated", "<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated",
-            "<notes>x</notes>\nSTATUS: plan-ready"]:
+for bad in ["no marker at all", "STATUS: memory-updated", "<notes>x</notes>\nSTATUS: plan-ready"]:
     replies.append(bad)
     agent.handle(memjob)
-    assert notes_f.read_text(encoding="utf-8") == "- Tests: `npm test`, needs `-x`.", f"kept after: {bad[:30]}"
+    assert notes_f.read_text(encoding="utf-8") == first_notes, f"kept after: {bad[:30]}"
+# over the cap, and the rewrite's reply is off shape: the job fails, the old notes stay
+for bad in ["<notes>short</notes>\nSTATUS: memory-unchanged", "STATUS: memory-updated"]:
+    replies += ["<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated", bad]
+    agent.handle(memjob)
+    assert notes_f.read_text(encoding="utf-8") == first_notes, f"kept after rewrite: {bad[:30]}"
+# over the cap: one rewrite call, and its shorter notes are written
+calls_before = len(argv)
+replies += ["<notes>" + "x" * 8001 + "</notes>\nSTATUS: memory-updated",
+            "<notes>\n- Rewritten: `npm test`.\n</notes>\nSTATUS: memory-updated"]
+agent.handle(memjob)
+assert len(argv) == calls_before + 2, "an over-cap reply gets one rewrite call"
+rewritten = "- Rewritten: `npm test`."
+assert notes_f.read_text(encoding="utf-8") == rewritten, "the rewrite's notes are written"
+assert "8,001" in argv[-1][2] and "<current-notes>\n" + "x" * 8001 in argv[-1][2], "the rewrite sees the over-cap notes"
+# still over the cap after the rewrite: cut at the last line break under the cap, never fail the job
+cut = "z" * 7990
+replies += ["<notes>" + "y" * 8001 + "</notes>\nSTATUS: memory-updated",
+            "<notes>" + cut + "\n" + "w" * 20 + "</notes>\nSTATUS: memory-updated"]
+agent.handle(memjob)
+assert notes_f.read_text(encoding="utf-8") == cut, "the rewrite is cut at a line break, not failed"
 replies.append("<notes>stale</notes>\nSTATUS: memory-unchanged")
 agent.handle(memjob)
-assert notes_f.read_text(encoding="utf-8").startswith("- Tests"), "unchanged writes nothing"
-assert "- Tests: `npm test`" in argv[-1][2], "the next call sees the current notes"
+assert notes_f.read_text(encoding="utf-8") == cut, "unchanged writes nothing"
+assert cut in argv[-1][2], "the next call sees the current notes"
 with agent.closing(agent.db()) as con:
     mem = con.execute("SELECT id, status FROM jobs WHERE act = 'memory' ORDER BY id").fetchall()
     rem = con.execute("SELECT detail FROM steps WHERE what = 'remembered'").fetchall()
-assert [s for _, s in mem] == ["ok", "failed", "failed", "failed", "failed", "ok"], mem
-assert len(rem) == 1 and json.loads(rem[0][0])["source"] == learned and json.loads(rem[0][0])["chars"] == len(notes_f.read_text(encoding="utf-8"))
+assert [s for _, s in mem] == ["ok"] + ["failed"] * 5 + ["ok", "ok", "ok"], mem
+assert [json.loads(d)["chars"] for d, in rem] == [len(first_notes), len(rewritten), len(cut)], rem
+assert all(json.loads(d)["source"] == learned for d, in rem), rem
 calls_before = len(argv)
 agent.handle(skipped_job)   # the skipped review: no claude call, so no memory run at all
 with agent.closing(agent.db()) as con:
