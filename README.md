@@ -17,9 +17,7 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
-<p align="center">
-  <img src="rookery-poster-flow.gif" alt="The Rookery loop: label, plan, approve, tasks, checks, review, draft PR" width="700">
-</p>
+https://github.com/user-attachments/assets/0000497f-d035-46c1-91c9-bb340bd65935
 
 ---
 
