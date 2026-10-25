@@ -17,7 +17,13 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
-https://github.com/user-attachments/assets/0000497f-d035-46c1-91c9-bb340bd65935
+<p align="center">
+  <a href="https://youtu.be/oyhMn-B0spI"><img src="rookery-demo.webp" alt="The Rookery loop at 6x speed: label, plan, approve, tasks, checks, review, draft PR" width="700"></a>
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/oyhMn-B0spI">▶ Watch the full demo on YouTube</a>
+</p>
 
 ---
 
