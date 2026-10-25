@@ -1804,6 +1804,11 @@ agent._pulse[0] = 0
 assert body(req("GET", "/api/pulse"))["merged"] == 7, "a failed search keeps the last count"
 agent.api, agent.token = real_api, real_token
 
+# healthz: a bare ok for uptime monitors, GET only
+code, _, hb = web.route("GET", "/healthz", {})
+assert code == 200 and hb == b"ok", "healthz is a bare ok"
+assert web.route("POST", "/healthz", {})[0] == 404, "healthz is GET-only"
+
 # follow-up: a mention on the issue once its draft PR is open — an answer, or a change pushed and reviewed
 agent.sh, agent.WORKSPACE, agent.REPOS = real_sh, Path(tempfile.mkdtemp()), {"o/r": "main"}
 g = lambda cwd, *a: subprocess.run(("git",) + a, cwd=cwd, capture_output=True, check=True, text=True).stdout.strip()
