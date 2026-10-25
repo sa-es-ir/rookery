@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="rookery.png" alt="Rookery" width="180">
+  <img src="rookery-circle.png" alt="Rookery" width="180">
 </p>
 
 <h1 align="center">Rookery</h1>
@@ -28,13 +28,6 @@
   <a href="docs/self-hosting.md"><b>Self-host</b></a>
 </p>
 
-<p align="center">
-  <a href="https://youtu.be/oyhMn-B0spI"><img src="rookery-demo.webp" alt="The Rookery loop at 6x speed: label, plan, approve, tasks, checks, review, draft PR" width="760"></a>
-  <br>
-  <sub>The whole loop at 6× speed. <a href="https://youtu.be/oyhMn-B0spI">▶ Watch the full demo on YouTube</a></sub>
-</p>
-
----
 
 ## ✨ Why Rookery
 
