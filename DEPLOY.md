@@ -458,6 +458,7 @@ curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/                    # 20
 curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/portal.html         # 200
 curl.exe -s -o NUL -w "%{http_code}\n" -X POST -d '{}' https://HOSTNAME/    # 401 = HMAC rejected it: correct
 curl.exe -s -m 5 http://SERVER_IP:8787/                                     # must fail: 8787 is loopback only
+curl.exe -s -o NUL -w "%{http_code}\n" https://HOSTNAME/healthz             # 200 ok — use for uptime monitors
 ```
 
 | Result | Meaning |
