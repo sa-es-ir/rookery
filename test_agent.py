@@ -6,7 +6,7 @@ import os
 os.environ.update(WEBHOOK_SECRET="s3cr3t", REPOS_ONLY="", PROVIDER="claude", OWN="o")  # before import: .env only fills unset keys
 import agent  # noqa: E402
 
-real_sh, real_handle = agent.sh, agent.handle
+real_sh, real_handle, real_worktree = agent.sh, agent.handle, agent.worktree
 
 # approval is a regex, not a judgement call
 assert agent.APPROVE.match("approve")
@@ -437,15 +437,19 @@ for who in ("bob", agent.ME):
 wrong = drain()
 assert wrong == [{"kind": "wrong-label", "repo": "o/r", "n": 12, "label": agent.TRIGGER},
                  {"kind": "wrong-label", "repo": "o/r", "n": 1, "label": agent.REVIEW_LABEL}], wrong
-ghs, saved_gh = [], agent.gh
+ghs, saved_gh, saved_api, saved_token = [], agent.gh, agent.api, agent.token
 agent.gh = lambda repo, *a, input=None, check=True: ghs.append((a, input, check)) or ""
+# the label goes by REST, never `gh pr edit` (gh 2.45 asks for classic Projects there); a failure
+# is logged, never raised
+agent.token = lambda repo: "t"
+agent.api = lambda m, path, bearer, data=None: ghs.append((m, path)) or (_ for _ in ()).throw(OSError("404"))
 for j in wrong:
     agent.handle(j)
-agent.gh = saved_gh
+agent.gh, agent.api, agent.token = saved_gh, saved_api, saved_token
 assert ghs == [(("pr", "comment", "12", "--body-file", "-"), agent.WRONG_LABEL[agent.TRIGGER], True),
-               (("pr", "edit", "12", "--remove-label", agent.TRIGGER), None, False),
+               ("DELETE", "/repos/o/r/issues/12/labels/rookery%3Atrigger"),
                (("issue", "comment", "1", "--body-file", "-"), agent.WRONG_LABEL[agent.REVIEW_LABEL], True),
-               (("issue", "edit", "1", "--remove-label", agent.REVIEW_LABEL), None, False)], ghs
+               ("DELETE", "/repos/o/r/issues/1/labels/rookery%3Apr-review")], ghs
 assert "add `rookery:pr-review` or mention `@rookery-agent`" in agent.WRONG_LABEL[agent.TRIGGER]
 
 # caps:runs and dollars per repo per UTC day, in SQLite, so a restart keeps them
@@ -917,6 +921,8 @@ assert "## 🤖 Reviewer agent\n\n### 🟢 Looks good\n\n🔎 **1 finding** · �
     "the reviewer's JSON is rendered like a PR review, one heading level down"
 assert body_.endswith(" · steps: sec, docs"), body_[-80:]
 assert "<details><summary>📋 Plan</summary>\n\n# Plan\n\nDo it.\n\n</details>" in body_, "the plan leads the PR, folded"
+assert "## Tasks\n\n<details><summary>✅ 1. one</summary>\n\n> one\n\n</details>" in body_, \
+    "a task an earlier run ticked (one a restart cut short) is listed too, without its reply"
 assert phases[-1] == "rookery:changes-wanted" and "Changes wanted by sec" in said[-1], "an edit in a check is flagged"
 # approve again: the committed write step is skipped, the check runs again
 calls.clear()
@@ -1064,6 +1070,221 @@ assert args[:2] == ("pr", "create") and "--draft" not in args and args[args.inde
 assert pr_body.startswith(agent.CONFIG_WARNING) and "@alice" in pr_body and "- deletes `.rookery/agents/docs.md`" in pr_body
 agent.sh, agent.gh = real_sh, real_gh
 
+# cross-repo: the home lists companions in `with`; one plan, one approve, a draft PR per repo that changed
+x_saved = agent.worktree, agent.comment, agent.set_phase, agent.can_write, agent.labels_of, agent.REPOS
+agent.WORKSPACE, agent.worktree = Path(tempfile.mkdtemp()), real_worktree
+g = lambda cwd, *a: subprocess.run(("git",) + a, cwd=cwd, capture_output=True, check=True, text=True).stdout.strip()
+def remote(name):
+    """o/<name>: a bare origin, a maintainer's clone that merges to main, and Rookery's clone."""
+    origin_, up_, clone_ = agent.WORKSPACE / f"{name}.git", agent.WORKSPACE / f"{name}-up", agent.clone_dir(f"o/{name}")
+    g(agent.WORKSPACE, "init", "-q", "--bare", "-b", "main", str(origin_))
+    for d_ in (up_, clone_):
+        g(agent.WORKSPACE, "clone", "-q", str(origin_), str(d_))
+        g(d_, "config", "user.email", "t@t"), g(d_, "config", "user.name", "t")
+    land(up_, {"app.txt": name + "\n"})
+    return up_
+def land(up_, files):
+    for name, text in files.items():
+        (up_ / name).parent.mkdir(parents=True, exist_ok=True)
+        (up_ / name).unlink() if text is None else (up_ / name).write_text(text, encoding="utf-8")
+    g(up_, "add", "-A"), g(up_, "commit", "-q", "--allow-empty", "-m", "x"), g(up_, "push", "-q", "origin", "HEAD:main")
+bup, fup = remote("back"), remote("front")
+agent.REPOS = {"o/back": "main", "o/front": "main", "o/shop": "main", "x/web": "main"}
+hc = agent.Ctx("o/back", 12, agent.clone_dir("o/back"), "main")
+def with_error(wf):
+    land(bup, {".rookery/workflow.json": wf if isinstance(wf, str) else json.dumps(wf)})
+    agent.begin(hc, "plan", "t")
+    try:
+        agent.pin(hc)
+    except RuntimeError as e:
+        return str(e)
+    finally:
+        agent.finish("o/back", "failed")
+assert "another owner" in with_error({"with": ["x/web"]})
+assert "is the repo itself" in with_error({"with": ["o/back"]})
+assert "not a repo Rookery is installed on" in with_error({"with": ["o/nope"]})
+assert "not a repo Rookery is installed on" in with_error({"with": ["o/.rookery"]})
+for bad in (["o/a", "o/b", "o/c", "o/d"], "o/front", ["o/front", "o/front"], ["front"], [1]):
+    assert "`with` is a list of at most 3 different repos" in with_error({"with": bad}), bad
+agent.REPOS["o/front"] = ""
+assert "still cloning o/front" in with_error({"with": ["o/front"]}), "never a run without a companion"
+agent.REPOS["o/front"] = "main"
+assert agent.workflow("{}", "x", agent.workflow('{"with": ["o/front"]}', "y"))["with"] == [], "never the owner layer's"
+# a companion's skills and agents join the plugin; a name the home already has stays the home's
+land(fup, {"CLAUDE.md": "Frontend rule.\n", ".rookery/agents/stylist.md": "---\nname: stylist\nmodel: haiku\n---\ncss\n",
+           ".rookery/agents/reviewer.md": "---\nname: reviewer\n---\nthe frontend's reviewer\n",
+           ".rookery/skills/ui-kit/SKILL.md": "---\nname: ui-kit\n---\nfront ui\n",
+           ".claude/skills/ui-kit/SKILL.md": "---\nname: ui-kit\n---\nits own second source\n",
+           ".claude/skills/verify/SKILL.md": "---\nname: verify\n---\nfront verify\n",
+           ".rookery/agents/bad.md": "---\nname: bad\nhooks: {}\n---\n"})
+assert with_error({"with": ["o/front"]}).startswith("agents/bad.md in o/front: frontmatter `hooks`"), \
+    "a companion is held to the same allowlist"
+land(fup, {".rookery/agents/bad.md": None})
+land(bup, {"CLAUDE.md": "Backend rule.\n", ".claude/skills/verify/SKILL.md": "---\nname: verify\n---\nback verify\n",
+           ".rookery/workflow.json": json.dumps({"with": ["o/front"], "after": [{"agent": "stylist", "mode": "check"}]})})
+agent.begin(hc, "plan", "t")
+agent.pin(hc)
+a = agent.active["o/back"]
+assert a["agent_sources"]["stylist"] == "with:o/front", "a home step may name a companion's agent"
+assert a["agent_sources"]["reviewer"] == "built-in" and \
+    (a["plugin"] / "agents" / "reviewer.md").read_text(encoding="utf-8") == (agent.HERE / "agents" / "reviewer.md").read_text(encoding="utf-8")
+assert a["sources"]["ui-kit"] == "with:o/front" and a["sources"]["verify"] == ".claude/skills"
+assert (a["plugin"] / "skills" / "ui-kit" / "SKILL.md").read_text(encoding="utf-8").endswith("front ui\n")
+assert (a["plugin"] / "skills" / "verify" / "SKILL.md").read_text(encoding="utf-8").endswith("back verify\n")
+assert a["skipped"] == ["reviewer (o/front)", "verify (o/front)"], a["skipped"]
+with agent.closing(agent.db()) as con:
+    based = json.loads(con.execute("SELECT detail FROM steps WHERE job = ? AND what = 'base'", (a["job"],)).fetchone()[0])
+assert based["with"] == ["o/front@" + g(fup, "rev-parse", "HEAD")] and based["skipped"] == a["skipped"], based
+assert agent.mates(hc) == [agent.Ctx("o/front", 12, agent.clone_dir("o/front"), "main")]
+
+# named(): the owner's repos an issue names that this job does not mount — a regex, never the model
+assert agent.named(hc, "Needs o/shop and https://github.com/o/shop-ui/pull/3, also o/ops#4 and O/Ops.\n"
+                       "Not facebook/react#1, o/back, o/front, o/.rookery, shop, src/o/x or me@o/y.\n"
+                       "> o/quoted\n\n```\no/fenced\n```\n") == ["o/shop", "o/shop-ui", "o/ops"]
+assert agent.named(hc, "see github.com/O/SHOP.") == ["o/shop"], "spelled as REPOS spells it"
+
+# plan(): companions mounted, the notice before the plan call, nothing written in a companion
+said, phases, ghs, pushed, prompts, argv, comments = [], [], [], [], [], [], ""
+agent.comment = lambda c, b: said.append(b) or ghs.append(("comment",))
+agent.set_phase = lambda c, p: phases.append(p)
+def fake_gh(repo, *a, input=None, check=True):
+    ghs.append((repo, a, input))
+    if a[:2] == ("issue", "view"):
+        return comments if "comments" in a else json.dumps({"title": "Add discount"})
+    if a[:2] == ("pr", "create"):
+        return f"https://github.com/{repo}/pull/{sum(1 for x in ghs if x[1:2] and x[1][:2] == ('pr', 'create'))}"
+    return ""
+agent.gh = fake_gh
+fwt = lambda n: agent.wt_root("o/front") / f"back-issue-{n}"
+bwt = lambda n: agent.wt_root("o/back") / f"issue-{n}"
+out12 = lambda: agent.wt_root("o/back") / "plans-12"
+replies = {}
+def fake_sh(*a, **k):
+    if a[:2] == ("git", "push"):
+        return pushed.append((a[2], a[3])) or ""
+    if a[0] != "claude":
+        return real_sh(*a, **k)
+    argv.append(a), prompts.append(k["input"])
+    kind = next(x for x in replies if k["input"].startswith(x))
+    return json.dumps({"result": replies[kind](k["cwd"])})
+def planned(cwd):
+    noticed.append(len(said))
+    (fwt(12) / "app.txt").write_text("planner was here\n", encoding="utf-8")
+    (Path(cwd) / "stray.txt").write_text("x", encoding="utf-8")
+    (out12() / "tasks.md").write_text("- [ ] change both\n- [ ] backend only\n", encoding="utf-8")
+    (out12() / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    return "Plan.\n\n## Not in this plan\n\n- o/shop: a page\n\nSTATUS: plan-ready"
+replies["You are planning"], noticed = planned, []
+agent.sh, comments = fake_sh, "earlier\n<!-- rookery:with o/admin -->"
+agent.plan(hc, "Add discount", "Show it on o/front and o/shop. o/admin too.", resume=False)
+assert fwt(12).exists() and g(fwt(12), "rev-parse", "--abbrev-ref", "HEAD") == "feature/back-issue-12", \
+    "never feature/issue-12: the companion has its own issue 12"
+assert (fwt(12) / "app.txt").read_text(encoding="utf-8") == "front\n" and not g(fwt(12), "status", "--porcelain"), \
+    "planning changes no companion"
+assert not (bwt(12) / "stray.txt").exists()
+assert len(said) == 2 and said[0].startswith("This issue names `o/shop`, but Rookery can change only `o/back`"), said
+assert '`"with": ["o/front", "o/shop"]`' in said[0] and "installations/new" not in said[0], said[0]
+assert said[0].endswith("<!-- rookery:with o/shop -->") and "o/admin" not in said[0], "o/admin was noticed before"
+assert noticed == [1], "the notice went out before the plan call"
+assert "The issue also names `o/shop`, `o/admin`. Rookery cannot change them" in prompts[0], "both, noticed or not"
+assert f"- `o/front` at `{fwt(12).absolute()}`, base `main`." in prompts[0] and agent.WITH_PLAN in prompts[0]
+# prod (Mantis#88): "Change a repo only when the work needs it" alone, the planner left out the
+# companion's button and modal the issue described, without asking
+assert "plan that part in\nits repo too" in prompts[0] and "when\nyou cannot tell, ask" in prompts[0]
+assert f"--add-dir={fwt(12).absolute()}" in argv[0]
+sysp = next(x for x in argv[0] if x.startswith("--append-system-prompt="))
+assert sysp.index("Backend rule.") < sysp.index("Contents of CLAUDE.md in o/front") < sysp.index("Frontend rule."), sysp
+said.clear(), argv.clear(), prompts.clear()
+agent.REPOS.pop("o/shop")   # the same owner, no App on it: installing it is the first step
+comments = ""
+agent.notice(hc, ["o/shop"])
+assert "install the Rookery App on `o/shop` (https://github.com/apps/rookery-gha/installations/new), then add it" in said[0], said
+said.clear()
+agent.finish("o/back", "ok")
+
+# implement(): a commit per repo that changed, the companion's under the home's full name
+can = {"bob"}
+agent.can_write = lambda repo, user: user in can or repo == "o/back"
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
+def task(cwd):
+    (Path(cwd) / "app.txt").write_text(f"back change {len(prompts)}\n", encoding="utf-8")
+    if "change both" in prompts[-1]:
+        (fwt(12) / "app.txt").write_text("front changed\n", encoding="utf-8")
+    return "Did it.\nSTATUS: task-done"
+def check_(cwd):
+    (fwt(int(Path(cwd).name.split("-")[1])) / "app.txt").write_text("a check edited this\n", encoding="utf-8")
+    return 'STATUS: check-ok\n<review>{"summary": "Looks styled.", "findings": []}</review>'
+replies.update({"You are implementing": task, "Check the finished": check_,
+                "Review the finished": lambda cwd: 'STATUS: review-ok\n<review>{"summary": "Fine.", "findings": []}</review>'})
+said.clear(), ghs.clear()
+agent.handle({"kind": "continue", "repo": "o/back", "n": 12, "body": "approve", "by": "carol"})
+assert not argv and phases[-1] == "rookery:awaiting-approval", "a home-only writer cannot approve; the phase stays"
+assert said == ["`approve` needs write access on `o/front` too: this issue can change that repo (`with` in "
+                "`.rookery/workflow.json`). Ask someone with write access on every one of them."], said
+patches, perm_api = [], agent.api
+agent.api = lambda m, path, bearer, data=None: patches.append((m, path, data)) if m == "PATCH" else perm_api(m, path, bearer)
+agent.handle({"kind": "continue", "repo": "o/back", "n": 12, "body": "approve", "by": "bob"})
+agent.api = perm_api
+assert g(bwt(12), "log", "--format=%s", "origin/main..HEAD").splitlines() == ["#12 task 2: backend only", "#12 task 1: change both"]
+assert g(fwt(12), "log", "--format=%s", "origin/main..HEAD").splitlines() == ["o/back#12 task 1: change both"], \
+    "the companion commits only what changed in it, under the home's full name"
+assert (fwt(12) / "app.txt").read_text(encoding="utf-8") == "front changed\n", "the check's edit is reverted"
+assert all(f"--add-dir={fwt(12).absolute()}" in x for x in argv) and all("Its change is" in p for p in prompts)
+assert not any(agent.WITH_PLAN in p for p in prompts), "the scope rule is planning's: a task changes only what its task says"
+assert pushed == [("https://github.com/o/front.git", "feature/back-issue-12:feature/back-issue-12"),
+                  ("https://github.com/o/back.git", "feature/issue-12:feature/issue-12")], "the companion first"
+assert not agent.unpushed(agent.clone_dir("o/front"), "feature/back-issue-12"), "its tracking ref is recorded"
+creates = [(r, a_, i) for r, a_, i in [x for x in ghs if len(x) == 3] if a_[:2] == ("pr", "create")]
+(fr, fa, fbody), (br, ba, bbody) = creates
+assert fr == "o/front" and "--draft" in fa and fa[fa.index("--head") + 1] == "feature/back-issue-12"
+assert fbody.startswith("Part of o/back#12. Merge it together with the pull request for o/back#12.") and "Closes" not in fbody
+assert "- o/back#12 task 1: change both" in fbody
+assert br == "o/back" and "## Companion PRs\n\nMerge these together with this one.\n\n- `o/front`: https://github.com/o/front/pull/1" in bbody
+assert "o/front:app.txt" in bbody and "Closes #12" in bbody, "a check's companion edit is named with its repo"
+assert not [a_ for _, a_, _ in [x for x in ghs if len(x) == 3] if a_[:2] == ("pr", "edit")], "never `gh pr edit`"
+assert patches == [("PATCH", "/repos/o/front/pulls/1",
+                    {"body": fbody.replace("the pull request for o/back#12", "https://github.com/o/back/pull/2")})], patches
+assert said[-1].startswith("Draft PR: https://github.com/o/back/pull/2\nAnd in `o/front`: https://github.com/o/front/pull/1")
+assert phases[-1] == "rookery:changes-wanted"
+with agent.closing(agent.db()) as con:
+    logged = [(w, json.loads(d)) for w, d in con.execute(
+        "SELECT what, detail FROM steps WHERE what IN ('commit', 'push', 'pr') AND job = (SELECT MAX(id) FROM jobs WHERE act = 'implement')")]
+assert [(w, d.get("repo")) for w, d in logged] == [("commit", None), ("commit", "o/front"), ("commit", None),
+                                                   ("push", "o/front"), ("push", None), ("pr", "o/front"), ("pr", None)], logged
+
+# a companion with nothing for this issue: no push, no PR, no section
+hc13 = hc._replace(n=13)
+(agent.wt_root("o/back") / "plans-13").mkdir()
+(agent.wt_root("o/back") / "plans-13" / "tasks.md").write_text("- [ ] backend only\n", encoding="utf-8")
+pushed.clear(), ghs.clear(), said.clear()
+agent.labels_of = lambda repo, n: {"rookery:awaiting-approval"}
+agent.handle({"kind": "continue", "repo": "o/back", "n": 13, "body": "approve", "by": "bob"})
+assert fwt(13).exists() and pushed == [("https://github.com/o/back.git", "feature/issue-13:feature/issue-13")], pushed
+assert [x[0] for x in ghs if len(x) == 3 and x[1][:2] == ("pr", "create")] == ["o/back"]
+assert "Companion PRs" not in next(x[2] for x in ghs if len(x) == 3 and x[1][:2] == ("pr", "create"))
+drain()   # the memory jobs: tested elsewhere
+
+# a follow-up brings each companion to its branch's head; one never pushed starts from base
+agent.sh = real_sh
+agent.begin(hc, "follow-up")
+agent.pin(hc)
+head12 = g(fwt(12), "rev-parse", "HEAD")
+assert agent.at_head(agent.mates(hc)[0], hc) == fwt(12) and g(fwt(12), "rev-parse", "HEAD") == head12, "never reset"
+hc14 = hc._replace(n=14)
+assert agent.at_head(agent.mates(hc14)[0], hc14) == fwt(14) and \
+    g(fwt(14), "rev-parse", "HEAD") == g(agent.clone_dir("o/front"), "rev-parse", "origin/main")
+agent.finish("o/back", "ok")
+
+# retention: the home's PR closed takes the companions' worktrees too, each behind its own unpushed() check
+(fwt(13) / "app.txt").write_text("local only\n", encoding="utf-8")
+g(fwt(13), "commit", "-qam", "never pushed")
+agent.sh = real_sh
+agent.drop_worktree("o/back", 13)
+assert not bwt(13).exists() and fwt(13).exists(), "unpushed work in a companion is kept"
+agent.drop_worktree("o/back", 12)
+assert not bwt(12).exists() and not fwt(12).exists() and not out12().exists()
+(agent.worktree, agent.comment, agent.set_phase, agent.can_write, agent.labels_of, agent.REPOS), agent.gh = x_saved, real_gh
+
 # run log: each job's steps land in rookery.db, so "failed at task 2 of 3" is readable
 real_pin, agent.pin = agent.pin, lambda c: None   # pin() is tested above
 agent.sh, agent.WORKSPACE = real_sh, Path(tempfile.mkdtemp())
@@ -1159,15 +1380,15 @@ assert ran == [("pr-review", "pr-review", True, Path("pr-8"), True)] and made ==
 assert (("pr", "review", "8", "--comment", "--body-file", "-"),
         "## 🔴 Changes needed\n\n🔎 **1 finding** · 🔴 1 high\n\nBreaks x.\n\n| # | Severity | Where | Finding |\n|---|---|---|---|\n"
         "| 1 | 🔴 high |  | bug in x.py |\n\n<sub>rk:pr-reviewer</sub>\n") in ghs, ghs
-assert (("pr", "edit", "8", "--remove-label", agent.REVIEW_LABEL), None) in ghs, "the label means queued or running"
 assert apis == [("POST", "/repos/o/r/issues/comments/55/reactions", {"content": "eyes"}),
+                ("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None),   # queued or running
                 ("DELETE", "/repos/o/r/pulls/8/requested_reviewers", {"reviewers": ["rookery-agent"]})], apis
 assert drain()[-1]["kind"] == "memory", "a finished review teaches the repo's notes"
 # the same head again, with no note: no claude call, one comment, the trigger still cleaned up
 ghs.clear(), apis.clear(), made.clear(), ran.clear()
 agent.handle({**job_, "note": "", "comment": None, "requested": None})
 assert not ran and not made, "nothing new to look at"
-assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8")] and apis[-1:] == [("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None)], (ghs, apis)
 assert ghs[1][1].startswith("Already reviewed at `abc1234`."), ghs[1][1]
 skipped_job = drain()[-1]   # its memory job finds no claude call to learn from: see the memory tests
 # a note, or a new head, reviews again
@@ -1180,9 +1401,9 @@ drain()
 ghs.clear(), apis.clear(), made.clear(), ran.clear()
 prv["isCrossRepository"] = True
 agent.handle({**job_, "comment": None, "requested": None})
-assert apis == [("POST", "/repos/o/r/issues/8/reactions", {"content": "eyes"})], "no comment: 👀 on the PR"
+assert apis == [("POST", "/repos/o/r/issues/8/reactions", {"content": "eyes"}), ("DELETE", "/repos/o/r/issues/8/labels/rookery%3Apr-review", None)], "no comment: 👀 on the PR"
 assert not ran and not made, "a fork is refused before anything runs"
-assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8"), ("pr", "edit", "8")], ghs
+assert [a[:3] for a, _ in ghs] == [("pr", "view", "8"), ("pr", "comment", "8")], ghs
 assert "from forks" in ghs[1][1]
 with agent.closing(agent.db()) as con:
     assert [r[0] for r in con.execute("SELECT status FROM jobs WHERE act = 'pr-review' ORDER BY id")] == \
@@ -1206,7 +1427,7 @@ assert said[0][2].startswith("Agent error: no API key for **acme**. Add a key at
 assert f"add `{agent.TRIGGER}` again" in said[0][2]
 said.clear()
 agent.handle({"kind": "pr-review", "repo": "acme/r", "n": 8, "note": "", "comment": None, "label": True, "requested": None})
-assert not calls and [s[:3] for s in said] == [("pr", "comment", "8"), ("pr", "edit", "8")], "a PR: no label, no gh issue"
+assert not calls and [s[:3] for s in said] == [("pr", "comment", "8")], "a PR: no phase label, no gh issue"
 assert "portal.html#keys" in said[0][3] and f"add `{agent.REVIEW_LABEL}` again" in said[0][3]
 for j in drain():   # the memory jobs find no claude call to learn from
     agent.handle(j)
@@ -1458,16 +1679,34 @@ real_steer, dirs = agent.steer, []
 def fake_steer(repo, path, base, plug):
     dirs.append(plug)
     wf = {**agent.WORKFLOW, "task": {**agent.WORKFLOW["task"], "skills": ["tdd"]},
-          "after": [{**agent.STEP, "agent": "sec", "mode": "check"}]}
-    owf = {**agent.WORKFLOW, "review": {**agent.WORKFLOW["review"], "instructions": "Owner's."}, "after": []}
+          "after": [{**agent.STEP, "agent": "sec", "mode": "check"}], "with": ["o/front"]}
+    owf = {**agent.WORKFLOW, "review": {**agent.WORKFLOW["review"], "instructions": "Owner's."}, "after": [],
+           "with": ["o/owners"]}
     return {"sha": "abc", "claude_md": "é", "workflow": wf, "sources": {"tdd": "catalog"},
             "skills": {"tdd": "red, green"}, "agents": {"planmaker": {"model": "opus"}, "reviewer": {}, "pr-reviewer": {},
                                                         "sec": {"model": "haiku", "description": "holes"}},
             "agent_sources": {"planmaker": "built-in", "reviewer": "built-in", "pr-reviewer": "built-in",
                               "sec": ".rookery/agents"},
-            "org": {"repo": "o/.rookery", "sha": "def"}, "org_workflow": owf}
+            "org": {"repo": "o/.rookery", "sha": "def"}, "org_workflow": owf, "skipped": ["sec (o/front)"]}
 agent.steer = fake_steer
 real_files, agent.config_files = agent.config_files, lambda repo: {"workflow.json": "{}\n"}
+# the shelf of companions: same owner, in REPOS and in this session's list, minus home and `with`
+saved_repos = dict(agent.REPOS)
+agent.REPOS.update({"o/front": "main", "o/admin": "main", "o/hidden": "main", "o/.rookery": "main", "x/web": "main"})
+with agent.closing(agent.db()) as con, con:
+    alice_had = con.execute("SELECT id, repos FROM sessions WHERE login = 'alice'").fetchall()
+    con.execute("UPDATE sessions SET repos = ? WHERE login = 'alice'",
+                (json.dumps(["o/r", "o/front", "o/admin", "o/gone", "o/.rookery", "x/web"]),))
+w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
+assert w["with"] == ["o/front"] and w["max_with"] == 3 and w["skipped"] == ["sec (o/front)"], w
+assert w["repos"] == ["o/admin"], "not home, not listed, not another owner's, not one it cannot see or REPOS lacks"
+assert "with" not in w["under"], "the owner layer's `with` is never the repo's"
+assert w["install"].endswith("/installations/new")
+erin = web.new_session("erin", ["o/r", "o/hidden"])
+assert body(req("GET", "/api/repos/o/r/workflow", sid=erin))["repos"] == ["o/hidden"], "another session, its own shelf"
+agent.REPOS = saved_repos
+with agent.closing(agent.db()) as con, con:
+    con.executemany("UPDATE sessions SET repos = ? WHERE id = ?", [(r, i) for i, r in alice_had])
 w = body(req("GET", "/api/repos/o/r/workflow", sid=sid))
 assert w["sha"] == "abc" and w["claude_md"] == 2 and w["error"] is None, w
 assert [(k, v["agent"], v["model"], v["from"]) for k, v in w["slots"].items()] == [

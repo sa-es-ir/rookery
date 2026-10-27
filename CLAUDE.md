@@ -154,7 +154,29 @@ The `base` step logs `org` as `<owner>/.rookery@<sha>`. No owner-level `CLAUDE.m
 fetched base in a throwaway `GIT_INDEX_FILE` (the clone's checkout and worktrees untouched),
 `steer(sha=commit)` validates that commit exactly as a job would, and only then is it pushed
 to `rookery/config-<hex>` by URL and a PR opened. `config_files()` is the editor's starting
-point, returned by the workflow GET even when the config does not validate. The GET also returns `under` (the owner's or built-in layer) so the portal's drag-and-drop builder can write only the keys that differ from it; the builder edits the same `workflow.json` draft as the editor, never anything else.
+point, returned by the workflow GET even when the config does not validate. The GET also returns `under` (the owner's or built-in layer, minus `with`) so the portal's drag-and-drop builder can write only the keys that differ from it; the builder edits the same `workflow.json` draft as the editor, never anything else. It also returns `with` and `repos` (the builder's Repos shelf: same-owner repos in `REPOS` ∩ `visible(s)`, minus home, `with` and `.rookery`), so a repo the user cannot see never shows.
+
+**Cross-repo (`with`).** `.rookery/workflow.json`'s `with` (repo's own file only, never the
+owner layer; ≤ `MAX_WITH = 3`, same owner, in `REPOS`, cloned — `steer()` checks) lists
+companions. The issue's repo is the home: its labels, comments, caps, provider, session and
+memory run everything. `pin()` reads each companion's base (`a["with"]`: repo, base, sha,
+`CLAUDE.md`); `mates(c)` turns it into companion `Ctx`s with the home's `n`. Each gets a
+worktree `wt_root(companion)/<home-name>-issue-<n>` on `feature/<home-name>-issue-<n>`
+(`tag()`, never `issue-<n>`: that is the companion's own issue), made by `plan()` and
+`implement()` (`worktree(m, c)`), brought to its PR head by `at_head(m, c)` in `follow_up()`.
+`claude()` adds each as `--add-dir`, its `CLAUDE.md` after the home's, and `WITH_REPOS`
+(+ `WITH_PLAN`) to the prompt — never for `pr-review`. Companion skills/agents only add:
+a name the home's assembly has stays the home's (`skipped`, logged), first in `with` wins.
+`commit_all()` commits each changed companion as `<home>#<n> …` (never `#<n>`), the home as
+before; `revert_all()` reverts every worktree after a check, the review and an answer
+(paths `<repo>:<path>`); `plan()` reverts companions whole. `publish()` pushes companions
+with commits first, opens their draft PRs (`Part of <home>#<n>`, never `Closes`), lists them
+under `## Companion PRs` in the home's, then edits new ones to name the home PR. Base merge
+in a follow-up is home only. `drop_worktree()` finds companions on disk in every same-owner
+repo, each behind `unpushed()`. An issue or reply naming `<owner>/<name>` that `with` lacks
+(`named()`, a regex on `unquoted()`): `notice()` posts `NOT_LISTED` once per repo (hidden
+`<!-- rookery:with … -->` marker) before the plan call, and the prompt gets `NOT_MOUNTED`.
+`step()`'s params are positional-only: companion steps carry `repo=`.
 
 **`after` steps.** `workflow.json`'s `after` is up to `MAX_STEPS = 5` steps, each an `agent`,
 a `mode` (`check` or `write`, `MODES`), `skills` and `instructions`; `claude(slot=)` takes the
@@ -185,7 +207,7 @@ plain machine account with no token on the box; `mention()` ignores quoted lines
 the rest of the comment is the note), the `REVIEW_LABEL` label, or a review request for
 `AGENT_USER`; with `review_prs` on, also `opened` (`auto`, no `may()`: a writer turned it on),
 never on `ME`'s PRs or a fork's. Any other PR comment is ignored, never a `continue` job. `TRIGGER` on a PR or `REVIEW_LABEL`
-on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`gh pr …` on a PR),
+on an issue is a `wrong-label` job: a `WRONG_LABEL` comment and the label removed (`unlabel()`, REST: Ubuntu's gh 2.45 `gh pr edit` fails on classic Projects),
 no run log, no `claude` call, no `may()`. `review_pr()` 👀s the
 comment, refuses forks and closed PRs, fetches `refs/pull/<n>/head` into a
 detached `pr-<n>` worktree (`pr_worktree()`, always removed after), runs the `pr-review` slot
@@ -212,7 +234,8 @@ issue is the same as `rookery:trigger`.
 **Run log.** `handle()` opens a `jobs` row per plan/reply/implement/pr-review/memory (`begin()`), and the
 pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost/sid, tick,
 commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
-ok/failed/cancelled; a restart marks leftovers `interrupted`. `active[repo]` is the job a
+ok/failed/cancelled; a restart marks leftovers `interrupted`, and an interrupted implement or
+follow-up gets `INTERRUPTED` and `rookery:error`, since its stale phase label would take no `approve`. `active[repo]` is the job a
 worker is running — one per repo.
 
 **Cancel.** `sh(track=repo)` registers the process in `active[repo]` under `alock`;
@@ -320,7 +343,10 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   comment minus quoted lines and fenced code, as `mention()` reads it), and only from a commenter with
   write, maintain or admin on _that_ repo (`can_write()`, the collaborator-permission API with
   the repo's installation token; a failed lookup denies). Replies need the same. `ME` (the App's
-  bot login) is filtered out so the bot can't approve itself.
+  bot login) is filtered out so the bot can't approve itself. With `with`, approve and a
+  follow-up also need `can_write()` on every companion (`refused()`, after `pin()`: a comment,
+  phase unchanged); replies need the home only. Never a `PHASES` label or a comment on a
+  companion's issue or PR beyond its own PR body/comments.
 - **Caps are checked before every `claude` call** (`check_caps()`): `RUN_CAP` calls and
   `USD_CAP` dollars per repo per UTC day (defaults 30 and $20), plus the operator's `PAUSED`
   file next to `agent.py`. Every call — failed ones too — is recorded with its

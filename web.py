@@ -227,8 +227,16 @@ def workflow(s, repo):
                       for k, v in agent.WORKFLOW.items()},
             "after": [{**v, "model": model(v["agent"]), "from": origin(wf["after"], owf["after"], [])}
                       for v in wf["after"]],
-            # what the repo's workflow.json falls back to, key by key: the builder's starting point
-            "under": owf,
+            # what the repo's workflow.json falls back to, key by key: the builder's starting point.
+            # Never `with`: that is the repo's own file only (agent.workflow())
+            "under": {k: v for k, v in owf.items() if k != "with"},
+            "with": wf["with"], "max_with": agent.MAX_WITH,
+            # the builder's shelf of companions: the owner's other repos that this session sees too,
+            # so a repo the user cannot see never shows, even when the App has it
+            "repos": [r for r in visible(s) if r.split("/")[0] == repo.split("/")[0]
+                      and r != repo and r not in wf["with"] and r.split("/")[1] != agent.ORG],
+            "install": f"https://github.com/apps/{agent.ME.removesuffix('[bot]')}/installations/new",
+            "skipped": got["skipped"],
             "agents": {n: {"description": m.get("description", ""), "source": got["agent_sources"][n],
                            "model": m.get("model")} for n, m in got["agents"].items()},
             "skills": {n: {"source": got["sources"][n], "description": d} for n, d in got["skills"].items()}}
