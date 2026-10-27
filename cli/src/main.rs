@@ -1,6 +1,7 @@
 //! `rookery`: Rookery's flow — plan, approve, a fresh claude session per task, the orchestrator
 //! ticks and commits, an advisory review — on a local git repo. No GitHub, no server.
 mod claude;
+mod input;
 mod logo;
 mod steer;
 mod text;
@@ -67,11 +68,23 @@ fn version(s: &str) -> Option<[u64; 3]> {
     Some([it.next()??, it.next()??, it.next()??])
 }
 
+/// Colour on a terminal, unless NO_COLOR is set.
+pub fn colour() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+}
+
+/// `s` in the SGR colour `code` (`1` bold, `2` dim, `31` red …), or plain when `colour()` is off.
+pub fn paint(code: &str, s: &str) -> String {
+    if colour() { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() }
+}
+
 fn doctor(base: Option<String>) -> Result<(), String> {
     let mut failed = 0;
     let mut say = |ok: Option<bool>, what: &str, detail: String| {
         failed += (ok == Some(false)) as u32;
-        println!("{:<5} {what:<9} {detail}", match ok { Some(true) => "ok", Some(false) => "FAIL", None => "warn" });
+        let (mark, code) = match ok { Some(true) => ("✓ ok", "32"), Some(false) => ("✗ FAIL", "1;31"), None => ("! warn", "33") };
+        println!("{} {} {detail}", paint(code, &format!("{mark:<6}")), paint("1", &format!("{what:<9}")));
     };
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     match git_text(&here, &["--version"]) {
@@ -139,7 +152,11 @@ fn doctor(base: Option<String>) -> Result<(), String> {
         }
     }
     let _ = std::fs::remove_dir_all(&job.scratch);
-    if failed > 0 { Err(format!("{failed} check(s) failed")) } else { Ok(()) }
+    if failed > 0 {
+        return Err(format!("{failed} check(s) failed"));
+    }
+    println!("\n{}", paint("32", "All checks passed."));
+    Ok(())
 }
 
 fn run(cmd: Cmd) -> Result<(), String> {
@@ -149,7 +166,6 @@ fn run(cmd: Cmd) -> Result<(), String> {
 }
 
 const GUIDE: &str = "\
-How it works
   1. Describe a change. rookery writes a plan and a task list, and asks when something is unclear.
   2. Answer its questions, or approve the plan. Nothing is edited before you approve.
   3. Each task runs in a fresh Claude session in its own worktree; rookery commits each one.
@@ -158,11 +174,10 @@ How it works
 /// The logo with the name beside it, all at once, when stdout is a colour terminal wide enough:
 /// 28 characters wide, from 70 columns; none below that, piped or under NO_COLOR.
 fn banner() -> bool {
-    use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+    if !colour() {
         return false;
     }
-    if !matches!(terminal_size::terminal_size(), Some((terminal_size::Width(w), _)) if w >= 70) {
+    if !matches!(crossterm::terminal::size(), Ok((w, _)) if w >= 70) {
         return false;
     }
     let art = logo::LOGO;
@@ -184,18 +199,26 @@ fn guide() {
     if !banner() {
         println!("rookery {}: {}\n", env!("CARGO_PKG_VERSION"), Cli::command().get_about().unwrap());
     }
-    println!("{GUIDE}\n");
+    println!("{}\n{GUIDE}\n", paint("1", "How it works"));
     let here = std::env::current_dir().unwrap_or_default();
     match repo(&here).and_then(|r| base_of(&r.root, None).map(|(b, _)| (r, b))) {
-        Ok((r, b)) => println!("Repo     {} (base {b})", r.root.display()),
-        Err(e) => println!("Repo     none: {e}. Start rookery inside a git repo."),
+        Ok((r, b)) => println!("{}     {} {}", paint("1", "Repo"), paint("36", &r.root.display().to_string()), paint("2", &format!("(base {b})"))),
+        Err(e) => println!("{}     {}", paint("1", "Repo"), paint("33", &format!("none: {e}. Start rookery inside a git repo."))),
     }
-    println!("\nCommands  (type them here, or run `rookery <command>` from a shell)");
-    for c in Cli::command().get_subcommands() {
-        println!("  {:<9} {}", c.get_name(), c.get_about().map(|a| a.to_string()).unwrap_or_default());
+    println!("\n{}  {}", paint("1", "Commands"), paint("2", "(type them here, or run `rookery <command>` from a shell)"));
+    for (name, about) in commands() {
+        println!("  {} {about}", paint("38;2;168;204;104", &format!("{name:<9}"))); // the logo's light green
     }
-    println!("  {:<9} Show a command's options: help <command>", "help");
-    println!("  {:<9} Leave rookery (or Ctrl-D, Ctrl-Z then Enter on Windows)\n", "exit");
+    println!();
+}
+
+/// What can be typed at the prompt, as (name, what it does): clap's commands, then help and exit.
+fn commands() -> Vec<(String, String)> {
+    let mut all: Vec<_> = Cli::command().get_subcommands()
+        .map(|c| (c.get_name().to_string(), c.get_about().map(|a| a.to_string()).unwrap_or_default())).collect();
+    all.push(("help".into(), "Show a command's options: help <command>".into()));
+    all.push(("exit".into(), "Leave rookery (or Ctrl-D)".into()));
+    all
 }
 
 /// A typed line -> args: whitespace splits, a quote at the start of a word groups to its match.
@@ -216,14 +239,29 @@ fn words(line: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// `rookery` alone: the guide, then one command per line until exit or end of input.
+/// `rookery` alone: the guide, then one command per line until exit or end of input. On a
+/// terminal each line is typed in the box (`input`); piped, it is read plainly after `rookery> `.
 fn prompt() {
+    use std::io::IsTerminal;
     guide();
-    let mut lines = std::io::stdin().lock().lines();
+    let boxed = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let cmds = commands();
+    let placeholder = format!("Type a command, e.g. \"{}\"", cmds[0].0);
+    let (mut lines, mut history) = (std::io::stdin().lock().lines(), Vec::<String>::new());
     loop {
-        print!("rookery> ");
-        let _ = std::io::stdout().flush();
-        let Some(Ok(line)) = lines.next() else { println!(); return };
+        let line = if boxed {
+            match input::line(&history, &placeholder, &cmds) {
+                Ok(Some(l)) => l,
+                Ok(None) => return,
+                Err(e) => { eprintln!("rookery: {e}"); return }
+            }
+        } else {
+            print!("rookery> ");
+            let _ = std::io::stdout().flush();
+            let Some(Ok(l)) = lines.next() else { println!(); return };
+            l
+        };
+        if history.last() != Some(&line) { history.push(line.clone()) }
         let mut args = match words(&line) {
             Ok(a) => a,
             Err(e) => { eprintln!("rookery: {e}"); continue }
