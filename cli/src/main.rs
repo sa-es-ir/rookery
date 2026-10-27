@@ -1,11 +1,13 @@
 //! `rookery`: Rookery's flow — plan, approve, a fresh claude session per task, the orchestrator
 //! ticks and commits, an advisory review — on a local git repo. No GitHub, no server.
 mod claude;
+mod logo;
 mod steer;
 mod text;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::json;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use steer::{git_text, steer};
@@ -14,10 +16,11 @@ use steer::{git_text, steer};
 const MIN_CLAUDE: [u64; 3] = [2, 1, 110];
 
 #[derive(Parser)]
-#[command(name = "rookery", version, about = "Plan, approve, and let Claude Code implement it task by task, in a local git repo.")]
+#[command(name = "rookery", version, about = "Plan, approve, and let Claude Code implement it task by task, in a local git repo.",
+          long_about = "Plan, approve, and let Claude Code implement it task by task, in a local git repo.\n\nRun `rookery` with no command to type commands at a prompt.")]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -139,15 +142,137 @@ fn doctor(base: Option<String>) -> Result<(), String> {
     if failed > 0 { Err(format!("{failed} check(s) failed")) } else { Ok(()) }
 }
 
-fn main() -> ExitCode {
-    let r = match Cli::parse().cmd {
+fn run(cmd: Cmd) -> Result<(), String> {
+    match cmd {
         Cmd::Doctor { base } => doctor(base),
+    }
+}
+
+const GUIDE: &str = "\
+How it works
+  1. Describe a change. rookery writes a plan and a task list, and asks when something is unclear.
+  2. Answer its questions, or approve the plan. Nothing is edited before you approve.
+  3. Each task runs in a fresh Claude session in its own worktree; rookery commits each one.
+  4. An advisory review runs at the end. Nothing is pushed: the branch is yours.";
+
+/// The logo with the name beside it, all at once, when stdout is a colour terminal wide enough:
+/// 28 characters wide, from 70 columns; none below that, piped or under NO_COLOR.
+fn banner() -> bool {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+        return false;
+    }
+    if !matches!(terminal_size::terminal_size(), Some((terminal_size::Width(w), _)) if w >= 70) {
+        return false;
+    }
+    let art = logo::LOGO;
+    let mid = art.len() / 2;
+    println!();
+    for (i, line) in art.iter().enumerate() {
+        match i {
+            _ if i + 1 == mid => println!("  {line}  \x1b[1mrookery\x1b[0m {}", env!("CARGO_PKG_VERSION")),
+            _ if i == mid => println!("  {line}  \x1b[2mplan · approve · task by task\x1b[0m"),
+            _ => println!("  {line}"),
+        }
+    }
+    println!();
+    true
+}
+
+/// The top of the prompt: what rookery does, where it is, and the commands that exist now.
+fn guide() {
+    if !banner() {
+        println!("rookery {}: {}\n", env!("CARGO_PKG_VERSION"), Cli::command().get_about().unwrap());
+    }
+    println!("{GUIDE}\n");
+    let here = std::env::current_dir().unwrap_or_default();
+    match repo(&here).and_then(|r| base_of(&r.root, None).map(|(b, _)| (r, b))) {
+        Ok((r, b)) => println!("Repo     {} (base {b})", r.root.display()),
+        Err(e) => println!("Repo     none: {e}. Start rookery inside a git repo."),
+    }
+    println!("\nCommands  (type them here, or run `rookery <command>` from a shell)");
+    for c in Cli::command().get_subcommands() {
+        println!("  {:<9} {}", c.get_name(), c.get_about().map(|a| a.to_string()).unwrap_or_default());
+    }
+    println!("  {:<9} Show a command's options: help <command>", "help");
+    println!("  {:<9} Leave rookery (or Ctrl-D, Ctrl-Z then Enter on Windows)\n", "exit");
+}
+
+/// A typed line -> args: whitespace splits, a quote at the start of a word groups to its match.
+/// No escapes: a prompt line, not a shell. A quote inside a word (`don't`) is a letter.
+fn words(line: &str) -> Result<Vec<String>, String> {
+    let (mut out, mut cur, mut quote, mut any) = (vec![], String::new(), None, false);
+    for ch in line.chars() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') if !any => (quote, any) = (Some(ch), true),
+            (None, c) if c.is_whitespace() => if any { out.push(std::mem::take(&mut cur)); any = false },
+            (None, c) => (cur.push(c), any = true).1,
+        }
+    }
+    if quote.is_some() { return Err("a quote is not closed".into()) }
+    if any { out.push(cur) }
+    Ok(out)
+}
+
+/// `rookery` alone: the guide, then one command per line until exit or end of input.
+fn prompt() {
+    guide();
+    let mut lines = std::io::stdin().lock().lines();
+    loop {
+        print!("rookery> ");
+        let _ = std::io::stdout().flush();
+        let Some(Ok(line)) = lines.next() else { println!(); return };
+        let mut args = match words(&line) {
+            Ok(a) => a,
+            Err(e) => { eprintln!("rookery: {e}"); continue }
+        };
+        if args.first().is_some_and(|a| a == "rookery") { args.remove(0); }
+        match args.first().map(String::as_str) {
+            None => continue,
+            Some("exit" | "quit") => return,
+            _ => {}
+        }
+        match Cli::try_parse_from(std::iter::once("rookery".to_string()).chain(args)) {
+            Ok(Cli { cmd: Some(cmd) }) => if let Err(e) = run(cmd) { eprintln!("rookery: {e}") },
+            Ok(Cli { cmd: None }) => {}
+            Err(e) => { let _ = e.print(); }
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let Some(cmd) = Cli::parse().cmd else {
+        prompt();
+        return ExitCode::SUCCESS;
     };
-    match r {
+    match run(cmd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("rookery: {e}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn words_split_like_a_prompt() {
+        assert_eq!(super::words(r#"reply 3 "use sqlite" don't 'a b'"#).unwrap(), ["reply", "3", "use sqlite", "don't", "a b"]);
+        assert_eq!(super::words(r#"new """#).unwrap(), ["new", ""]);
+        assert!(super::words(r#"new "open"#).is_err());
+        assert!(super::words("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn logo_lines_are_even() {
+        let esc = regex::Regex::new("\x1b\\[[0-9;]*m").unwrap();
+        assert_eq!(super::logo::LOGO.len(), 14);
+        for l in super::logo::LOGO {
+            assert_eq!(esc.replace_all(l, "").chars().count(), 28, "{l:?}");
+            assert!(l.ends_with("\x1b[0m"));
         }
     }
 }
