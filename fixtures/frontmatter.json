@@ -1,0 +1,91 @@
+[
+ {
+  "why": "an indented top level is still top",
+  "kind": "skill",
+  "text": "---\n  name: x\n  hooks:\n    Stop: []\n---\n",
+  "error": "hooks"
+ },
+ {
+  "why": "mcpServers",
+  "kind": "agent",
+  "text": "---\nname: x\nmcpServers: {}\n---\n",
+  "error": "mcpServers"
+ },
+ {
+  "why": "permissionMode",
+  "kind": "agent",
+  "text": "---\nname: x\npermissionMode: bypassPermissions\n---\n",
+  "error": "permissionMode"
+ },
+ {
+  "why": "model",
+  "kind": "agent",
+  "text": "---\nname: x\nmodel: gpt-5\n---\n",
+  "error": "model"
+ },
+ {
+  "why": "allowed keys",
+  "kind": "skill",
+  "text": "---\nname: x\nargument-hint: [name]\ndisable-model-invocation: true\n---\n",
+  "meta": {
+   "name": "x",
+   "argument-hint": "[name]",
+   "disable-model-invocation": "true"
+  }
+ },
+ {
+  "why": "context",
+  "kind": "skill",
+  "text": "---\nname: x\ncontext: fork\n---\n",
+  "error": "context"
+ },
+ {
+  "why": "name must match the filename",
+  "kind": "agent",
+  "text": "---\nname: y\n---\n",
+  "error": "filename"
+ },
+ {
+  "why": "folded and list lines belong to the key above",
+  "kind": "agent",
+  "text": "---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n",
+  "meta": {
+   "name": "x",
+   "description": "hooks: not a key",
+   "skills": "- a"
+  }
+ },
+ {
+  "why": "CRLF, quotes stripped",
+  "kind": "agent",
+  "text": "---\r\nname: x\r\ndescription: 'quoted'\r\nmodel: opus\r\n---\r\nbody\r\n",
+  "meta": {
+   "name": "x",
+   "description": "quoted",
+   "model": "opus"
+  }
+ },
+ {
+  "why": "a BOM",
+  "kind": "skill",
+  "text": "﻿---\nname: x\n---\n",
+  "meta": {
+   "name": "x"
+  }
+ },
+ {
+  "why": "none: nothing to check",
+  "kind": "skill",
+  "text": "no frontmatter at all\n",
+  "meta": {}
+ },
+ {
+  "why": "comments and blank lines",
+  "kind": "skill",
+  "text": "---\nname: x\n# a comment\n\ndescription: d\n---\n",
+  "meta": {
+   "name": "x",
+   "description": "d"
+  }
+ }
+]

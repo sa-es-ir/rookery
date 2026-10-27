@@ -1,0 +1,239 @@
+[
+ {
+  "why": "no file: the built-in",
+  "given": "",
+  "expect": {
+   "plan": {
+    "agent": "planmaker",
+    "skills": [],
+    "instructions": ""
+   },
+   "task": {
+    "agent": null,
+    "skills": [],
+    "instructions": ""
+   },
+   "review": {
+    "agent": "reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "pr-review": {
+    "agent": "pr-reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "after": []
+  }
+ },
+ {
+  "why": "empty: the built-in",
+  "given": "{}",
+  "expect": {
+   "plan": {
+    "agent": "planmaker",
+    "skills": [],
+    "instructions": ""
+   },
+   "task": {
+    "agent": null,
+    "skills": [],
+    "instructions": ""
+   },
+   "review": {
+    "agent": "reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "pr-review": {
+    "agent": "pr-reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "after": []
+  }
+ },
+ {
+  "why": "a slot key overrides",
+  "given": "{\"plan\": {\"skills\": [\"repo-recon\"], \"instructions\": \"One migration per task.\"}}",
+  "expect": {
+   "plan": {
+    "agent": "planmaker",
+    "skills": [
+     "repo-recon"
+    ],
+    "instructions": "One migration per task."
+   },
+   "task": {
+    "agent": null,
+    "skills": [],
+    "instructions": ""
+   },
+   "review": {
+    "agent": "reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "pr-review": {
+    "agent": "pr-reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "after": []
+  }
+ },
+ {
+  "why": "after steps",
+  "given": "{\"after\": [{\"agent\": \"sec\", \"mode\": \"check\", \"skills\": [\"verify\"]}, {\"agent\": \"docs\", \"mode\": \"write\"}]}",
+  "expect": {
+   "plan": {
+    "agent": "planmaker",
+    "skills": [],
+    "instructions": ""
+   },
+   "task": {
+    "agent": null,
+    "skills": [],
+    "instructions": ""
+   },
+   "review": {
+    "agent": "reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "pr-review": {
+    "agent": "pr-reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "after": [
+    {
+     "agent": "sec",
+     "mode": "check",
+     "skills": [
+      "verify"
+     ],
+     "instructions": ""
+    },
+    {
+     "agent": "docs",
+     "mode": "write",
+     "skills": [],
+     "instructions": ""
+    }
+   ]
+  }
+ },
+ {
+  "why": "agent set, agent cleared",
+  "given": "{\"task\": {\"agent\": \"coder\"}, \"review\": {\"agent\": null}}",
+  "expect": {
+   "plan": {
+    "agent": "planmaker",
+    "skills": [],
+    "instructions": ""
+   },
+   "task": {
+    "agent": "coder",
+    "skills": [],
+    "instructions": ""
+   },
+   "review": {
+    "agent": null,
+    "skills": [],
+    "instructions": ""
+   },
+   "pr-review": {
+    "agent": "pr-reviewer",
+    "skills": [],
+    "instructions": ""
+   },
+   "after": []
+  }
+ },
+ {
+  "why": "not valid JSON",
+  "given": "{",
+  "error": "not valid JSON"
+ },
+ {
+  "why": "top level",
+  "given": "{\"before\": []}",
+  "error": "top level"
+ },
+ {
+  "why": "top level",
+  "given": "[]",
+  "error": "top level"
+ },
+ {
+  "why": "at most 5 steps",
+  "given": "{\"after\": [{\"agent\": \"a0\", \"mode\": \"check\"}, {\"agent\": \"a1\", \"mode\": \"check\"}, {\"agent\": \"a2\", \"mode\": \"check\"}, {\"agent\": \"a3\", \"mode\": \"check\"}, {\"agent\": \"a4\", \"mode\": \"check\"}, {\"agent\": \"a5\", \"mode\": \"check\"}]}",
+  "error": "at most 5 steps"
+ },
+ {
+  "why": "at most 5 steps",
+  "given": "{\"after\": {}}",
+  "error": "at most 5 steps"
+ },
+ {
+  "why": "needs an `agent` and a `mode`",
+  "given": "{\"after\": [{\"agent\": \"reviewer\"}]}",
+  "error": "needs an `agent` and a `mode`"
+ },
+ {
+  "why": "needs an `agent` and a `mode`",
+  "given": "{\"after\": [{\"agent\": \"reviewer\", \"mode\": [\"check\"]}]}",
+  "error": "needs an `agent` and a `mode`"
+ },
+ {
+  "why": "needs an `agent` and a `mode`",
+  "given": "{\"after\": [{\"mode\": \"write\"}]}",
+  "error": "needs an `agent` and a `mode`"
+ },
+ {
+  "why": "needs an `agent` and a `mode`",
+  "given": "{\"after\": [{\"agent\": \"reviewer\", \"mode\": \"fix\"}]}",
+  "error": "needs an `agent` and a `mode`"
+ },
+ {
+  "why": "`after[0]` is an object with only",
+  "given": "{\"after\": [{\"agent\": \"reviewer\", \"mode\": \"check\", \"x\": 1}]}",
+  "error": "`after[0]` is an object with only"
+ },
+ {
+  "why": "names an agent twice",
+  "given": "{\"after\": [{\"agent\": \"reviewer\", \"mode\": \"check\"}, {\"agent\": \"reviewer\", \"mode\": \"write\"}]}",
+  "error": "names an agent twice"
+ },
+ {
+  "why": "a list of names",
+  "given": "{\"task\": {\"skills\": \"verify\"}}",
+  "error": "a list of names"
+ },
+ {
+  "why": "a list of names",
+  "given": "{\"task\": {\"instructions\": 3}}",
+  "error": "a list of names"
+ },
+ {
+  "why": "must match",
+  "given": "{\"task\": {\"skills\": [\"../../etc\"]}}",
+  "error": "must match"
+ },
+ {
+  "why": "must match",
+  "given": "{\"plan\": {\"agent\": \"\"}}",
+  "error": "must match"
+ },
+ {
+  "why": "must match",
+  "given": "{\"plan\": {\"agent\": \"Planner\"}}",
+  "error": "must match"
+ },
+ {
+  "why": "`plan` is an object with only",
+  "given": "{\"plan\": {\"model\": \"opus\"}}",
+  "error": "`plan` is an object with only"
+ }
+]

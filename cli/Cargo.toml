@@ -1,0 +1,16 @@
+[package]
+name = "rookery-cli"   # `rookery` on crates.io is a 2023 placeholder; the binary keeps the name
+version = "0.1.0"
+edition = "2024"
+description = "Rookery on your own machine: plan, approve, and let Claude Code implement it task by task."
+publish = false        # until the licence question is settled (ai-plans/local-cli.md)
+
+[[bin]]
+name = "rookery"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }   # slots in file order, as json.loads keeps them
+uuid = { version = "1", features = ["v5"] }

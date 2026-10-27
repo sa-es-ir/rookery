@@ -1,0 +1,58 @@
+[
+ {
+  "why": "a field; its value is never re-read",
+  "template": "Hello {name}.",
+  "args": {
+   "name": "x {y} z"
+  },
+  "out": "Hello x {y} z."
+ },
+ {
+  "why": "doubled braces are literal",
+  "template": "{{\"summary\": \"{s}\"}} and }}{{",
+  "args": {
+   "s": "ok"
+  },
+  "out": "{\"summary\": \"ok\"} and }{"
+ },
+ {
+  "why": "a thousands separator",
+  "template": "{n:,} of {cap:,}, plain {n}",
+  "args": {
+   "n": 1234567,
+   "cap": 8000
+  },
+  "out": "1,234,567 of 8,000, plain 1234567"
+ },
+ {
+  "why": "under a thousand",
+  "template": "{n:,}",
+  "args": {
+   "n": 999
+  },
+  "out": "999"
+ },
+ {
+  "why": "repeated and empty",
+  "template": "{a}{a}{b}",
+  "args": {
+   "a": "1",
+   "b": ""
+  },
+  "out": "11"
+ },
+ {
+  "why": "nothing to fill",
+  "template": "no fields at all\n",
+  "args": {},
+  "out": "no fields at all\n"
+ },
+ {
+  "why": "non-ASCII around a field",
+  "template": "ünï {c} — ✓",
+  "args": {
+   "c": "é"
+  },
+  "out": "ünï é — ✓"
+ }
+]

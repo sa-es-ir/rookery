@@ -15,7 +15,9 @@ python agent.py owner/repo 12 @rookery-agent check the migration   # dry run: re
 ```
 
 There is no build, no lint, no dependency install — stdlib only, plus the `gh`, `claude`
-and `openssl` CLIs on PATH. The dry-run forms go through the same `handle()` as the webhook; only the
+and `openssl` CLIs on PATH. The exception is the local CLI in `cli/` (Rust, being built — see
+`ai-plans/local-cli.md`): `cargo test --manifest-path cli/Cargo.toml` runs the same
+`fixtures/` as `test_agent.py`, so run both after changing `prompts/` or `fixtures/`. The dry-run forms go through the same `handle()` as the webhook; only the
 transport differs, so use them instead of standing up smee to test a change.
 
 `.env` is gitignored and required at import time (`agent.py` reads
@@ -421,9 +423,15 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 
 ## Style
 
-Stdlib only; adding a dependency changes what this project is. Prompts are module-level
-`.format()` templates (`PLAN`, `REPLY`, `TASK`) — they are the interface to Claude, so treat
-their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
+Stdlib only; adding a dependency changes what this project is. Prompts are `.format()`
+templates (`PLAN`, `REPLY`, `TASK`) — they are the interface to Claude, so treat their wording
+as code. Every text a `claude` call is built from lives in `prompts/<name>.md` (LF, byte for
+byte: no trailing newline is added), and the defaults and verdict tables replies are held to in
+`prompts/defaults.json`; `agent.py` reads them at import into the same module-level names, and
+the local CLI (`cli/`) compiles them in. GitHub-side texts (comments, PR bodies) stay in
+`agent.py`. `fixtures/*.json` are golden cases (`MARKER`, tasks, `unquoted()`, `workflow()`,
+frontmatter, `render_review()`) that `test_agent.py` and the CLI's tests both run: change a
+behaviour there, and both sides must follow. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
 Phases 1–5 (GitHub App, onboarding

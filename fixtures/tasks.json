@@ -1,0 +1,42 @@
+[
+ {
+  "why": "x or space, - or *, at line start only; tick rewrites one byte",
+  "text": "# Tasks\n\n- [x] scaffold the module\n- [ ] wire the handler\n* [ ] add the test\n\nNot a task: - [ ] inline mention, and `- [ ] ` in prose.\n",
+  "tasks": [
+   [
+    true,
+    "scaffold the module"
+   ],
+   [
+    false,
+    "wire the handler"
+   ],
+   [
+    false,
+    "add the test"
+   ]
+  ],
+  "tick": 1,
+  "ticked": "# Tasks\n\n- [x] scaffold the module\n- [x] wire the handler\n* [ ] add the test\n\nNot a task: - [ ] inline mention, and `- [ ] ` in prose.\n"
+ },
+ {
+  "why": "upper-case X is done, indented is a task, the text is trimmed",
+  "text": "  - [X] a\n\t- [ ] b\n-[ ] not one\n- [ ]   spaced  \n",
+  "tasks": [
+   [
+    true,
+    "a"
+   ],
+   [
+    false,
+    "b"
+   ],
+   [
+    false,
+    "spaced"
+   ]
+  ],
+  "tick": 1,
+  "ticked": "  - [X] a\n\t- [x] b\n-[ ] not one\n- [ ]   spaced  \n"
+ }
+]
