@@ -1555,6 +1555,11 @@ def plan(c, title, body, resume):
     keep_plans_only(c, wt, keep=(d + "/",) if d == pdir(c.n) else ())
     for _, mw in mate_wts(c):   # planning changes no companion
         keep_plans_only(c, mw, keep=())
+    if status == "plan-ready" and not read_tasks(plans(c, wt)[0]):
+        # nothing to approve: an approve would open a PR with no commits, which gh refuses
+        status, msg = "questions", (msg.replace("Reply `approve` to implement.", "").rstrip()
+                                    + "\n\nThe plan has no tasks, so there is nothing to approve. "
+                                      "Reply to change the plan, or close the issue.")
     comment(c, msg)
     set_phase(c, "rookery:awaiting-input" if status == "questions" else "rookery:awaiting-approval")
 
@@ -1566,6 +1571,8 @@ def implement(c):
     for m in mates(c):   # `with` as of this job: a companion merged since the plan is mounted too
         worktree(m, c)
     p, d = plans(c, wt)
+    if not read_tasks(p):   # before any claude call: the review and push would end in no PR
+        raise RuntimeError("the plan has no tasks, so there is nothing to implement — reply to change it")
     for _ in range(MAX_TASKS + 1):
         tasks = read_tasks(p)
         if len(tasks) > MAX_TASKS:

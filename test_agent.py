@@ -939,6 +939,20 @@ for mode, status in [("check", "step-done"), ("write", "check-ok"), ("write", "f
         raise AssertionError(f"{mode} accepted {status}")
     except RuntimeError as e:
         assert "step z" in str(e), e
+# a plan with no tasks has nothing to approve: it asks instead, and implement() refuses before any call
+(wt / agent.pdir(3) / "tasks.md").write_text("Nothing to do: misfiled.\n", encoding="utf-8")
+calls.clear(), phases.clear(), said.clear()
+agent.claude = lambda c, p, key="plan", resume=False, slot="task", **k: \
+    calls.append(key) or ("plan-ready", "Misfiled.\n\nReply `approve` to implement.")
+agent.plan(pc, "t", "b", resume=False)
+assert phases[-1] == "rookery:awaiting-input" and "`approve`" not in said[-1] and "no tasks" in said[-1], (phases, said)
+calls.clear()
+try:
+    agent.implement(pc)
+    raise AssertionError("implemented a plan with no tasks")
+except RuntimeError as e:
+    assert "no tasks" in str(e) and not calls, (e, calls)
+git(wt, "checkout", "--", agent.pdir(3) + "/tasks.md")
 agent.claude, agent.gh, agent.sh = real_claude, real_gh, real_sh
 agent.finish("o/r", "ok")
 
@@ -2028,6 +2042,11 @@ agent.api = lambda *a: 1 / 0
 agent._pulse[0] = 0
 assert body(req("GET", "/api/pulse"))["merged"] == 7, "a failed search keeps the last count"
 agent.api, agent.token = real_api, real_token
+
+# healthz: a bare ok for uptime monitors, GET only
+code, _, hb = web.route("GET", "/healthz", {})
+assert code == 200 and hb == b"ok", "healthz is a bare ok"
+assert web.route("POST", "/healthz", {})[0] == 404, "healthz is GET-only"
 
 # follow-up: a mention on the issue once its draft PR is open — an answer, or a change pushed and reviewed
 agent.sh, agent.WORKSPACE, agent.REPOS = real_sh, Path(tempfile.mkdtemp()), {"o/r": "main"}

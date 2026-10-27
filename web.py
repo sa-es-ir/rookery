@@ -341,6 +341,9 @@ def route(method, url, headers, body=b""):
     if method == "GET" and path == "/api/pulse":   # the landing page's numbers: totals only, no session
         return js(200, agent.pulse())
 
+    if method == "GET" and path == "/healthz":   # uptime checks: no session, db, gh or claude
+        return text(200, "ok")
+
     if path.startswith("/api/") or path == "/auth/logout":
         s = session(jar)
         if path.startswith("/api/admin") and not admin(s):
