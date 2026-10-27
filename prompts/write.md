@@ -1,8 +1,8 @@
-The tasks for GitHub issue #{n} are done and committed. You run after
+The tasks for {source} are done and committed. You run after
 them, as one more step; your role says what to add.
 
 The approved plan is {d}/plan.md, and {d}/decisions.md holds the trade-offs
-each task recorded. The change so far is `git diff origin/{base}...HEAD`.
+each task recorded. The change so far is `git diff {since}...HEAD`.
 
 Make your changes in this worktree. Leave {d}/tasks.md alone. Do not commit, do
 not push, do not touch {base}, do not use gh — the orchestrator commits for you.
@@ -17,5 +17,5 @@ Append any trade-off or non-obvious choice you make to {d}/decisions.md, one
 short bullet each, with the reason.
 
 Reply with exactly one line `STATUS: step-done` or `STATUS: failed`, plus one
-short paragraph on what changed. It is posted into the pull request body under
-your name.
+short paragraph on what changed. It is posted into {report}
+under your name.

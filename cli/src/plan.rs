@@ -66,6 +66,10 @@ pub fn may_reply(st: &Value, again: &str) -> Result<(), String> {
             "#{n} is still planning. Either another rookery is planning it now, or its last plan call was \
              stopped before it ended (Ctrl-C, a closed terminal).\n\nIf one is running, wait for it. If not, \
              start the item again:\n  {again}")),
+        "error" if st["approved"] == true => Err(format!(
+            "#{n}'s plan is approved, so a reply cannot change it. Its last run failed:\n  {}\n\n\
+             Fix the cause if it is yours, then run it again from where it stopped:\n  rookery approve {n}",
+            st["error"].as_str().unwrap_or("(no detail was recorded)"))),
         "error" => Err(format!(
             "#{n} failed, so it takes no reply. What happened:\n  {}\n\nFix the cause if it is yours, then start the item again:\n  {again}",
             st["error"].as_str().unwrap_or("(no detail was recorded)"))),
@@ -73,23 +77,23 @@ pub fn may_reply(st: &Value, again: &str) -> Result<(), String> {
     }
 }
 
-fn item(r: &Repo, n: u64) -> PathBuf {
+pub fn item(r: &Repo, n: u64) -> PathBuf {
     r.state.join("items").join(n.to_string())
 }
 
-fn load(r: &Repo, n: u64) -> Result<Value, String> {
+pub fn load(r: &Repo, n: u64) -> Result<Value, String> {
     let t = fs::read_to_string(item(r, n).join("state.json")).map_err(|_| format!("there is no item #{n} in this repo"))?;
     serde_json::from_str(&t).map_err(|e| format!("items/{n}/state.json: {e}"))
 }
 
-fn save(r: &Repo, st: &Value) -> Result<(), String> {
+pub fn save(r: &Repo, st: &Value) -> Result<(), String> {
     let n = st["n"].as_u64().unwrap();
     fs::write(item(r, n).join("state.json"), serde_json::to_string_pretty(st).unwrap() + "\n").map_err(|e| e.to_string())
 }
 
 /// The item's worktree, made from its base commit the first time. Made again on its branch if
 /// someone removed the directory; `-b`, never `-B`: an existing branch is never reset.
-fn worktree(r: &Repo, st: &Value) -> Result<PathBuf, String> {
+pub fn worktree(r: &Repo, st: &Value) -> Result<PathBuf, String> {
     let wt = PathBuf::from(st["worktree"].as_str().unwrap());
     if !wt.exists() {
         git(&r.root, &["worktree", "prune"])?;
@@ -132,7 +136,19 @@ pub fn keep_plans_only(wt: &Path) -> Result<Vec<String>, String> {
     Ok(reverted)
 }
 
-fn set_phase(r: &Repo, job: &Job, st: &mut Value, phase: &str) -> Result<(), String> {
+/// The phase in its colour: red failed, yellow waits on the user, green otherwise.
+pub fn phase_paint(phase: &str) -> String {
+    paint(match phase { "error" => "1;31", "awaiting-input" | "changes-wanted" => "1;33", _ => "1;32" }, phase)
+}
+
+/// An agent's markdown on the terminal, its headings bold.
+pub fn print_md(text: &str) {
+    for line in text.lines() {
+        println!("{}", if line.starts_with('#') { paint("1", line) } else { line.to_string() });
+    }
+}
+
+pub fn set_phase(r: &Repo, job: &Job, st: &mut Value, phase: &str) -> Result<(), String> {
     st["phase"] = json!(phase);
     if phase != "error" {
         st.as_object_mut().unwrap().remove("error");
@@ -253,17 +269,15 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
             job.step("error", json!({"error": e}));
             st["error"] = json!(e);
             let _ = set_phase(r, &job, &mut st, "error");
-            println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), paint("1;31", "error"), paint("2", &cost));
+            println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), phase_paint("error"), paint("2", &cost));
             println!("{}\n{e}\n", paint("1", "What happened"));
             println!("{}\n#{n} takes no more replies. Fix the cause above if it is yours, then start the item again:\n  {}",
                      paint("1", "What you can do"), again(&st, &item(r, n)));
             return Err(format!("#{n} failed"));
         }
     };
-    println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), paint(if phase == "awaiting-input" { "1;33" } else { "1;32" }, phase), paint("2", &cost));
-    for line in msg.lines() {
-        println!("{}", if line.starts_with('#') { paint("1", line) } else { line.to_string() });
-    }
+    println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), phase_paint(phase), paint("2", &cost));
+    print_md(&msg);
     if phase == "awaiting-input" {
         println!("\n{} rookery reply {n} \"your answers\"", paint("1", "next:"));
         return Ok(());
@@ -315,6 +329,9 @@ mod tests {
         let e = may_reply(&st("error"), &again).unwrap_err();
         assert!(e.contains("no network") && e.ends_with(&again), "{e}");
         assert!(may_reply(&st("planning"), &again).unwrap_err().ends_with(&again));
+        let mut failed_run = st("error");
+        failed_run["approved"] = json!(true);
+        assert!(may_reply(&failed_run, &again).unwrap_err().ends_with("rookery approve 4"), "a failed approve resumes, never starts over");
         let with_body = json!({"title": "t", "body": "b", "base": "dev"});
         assert_eq!(super::again(&with_body, Path::new("d")), format!("rookery new \"t\" -f \"{}\" --base dev", Path::new("d").join("issue.md").display()));
     }

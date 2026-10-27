@@ -162,7 +162,7 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
     m.ok_or_else(|| format!("no STATUS marker in agent reply:\n{}", tail(&text, 1500)))
 }
 
-fn tail(s: &str, n: usize) -> &str {
+pub fn tail(s: &str, n: usize) -> &str {
     let mut at = s.len().saturating_sub(n);
     while !s.is_char_boundary(at) {
         at += 1;

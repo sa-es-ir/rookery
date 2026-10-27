@@ -1258,6 +1258,13 @@ def notice(c, repos):
         step(c.repo, "named", repo=r)
 
 
+def framing(c):
+    """What the task, review and step prompts call the work, its diff and where their words go.
+    The local CLI says "task #<n>", "<base>", "a branch to review and merge", "the run's report"."""
+    return {"source": f"GitHub issue #{c.n}", "since": f"origin/{c.base}",
+            "handoff": "a draft pull request", "report": "the pull request body"}
+
+
 def plan(c, title, body, resume):
     set_phase(c, "rookery:planning")
     wt = worktree(c)
@@ -1307,7 +1314,7 @@ def implement(c):
         i, at, text = todo
         log(f"#{c.n} task {i + 1}/{len(tasks)}: {text}")
         step(c.repo, "task", i=i + 1, of=len(tasks), text=text)
-        status, msg = claude(c, TASK.format(n=c.n, d=d, task=text, base=c.base),
+        status, msg = claude(c, TASK.format(n=c.n, d=d, task=text, base=c.base, **framing(c)),
                              key=f"task-{i}")
         if status not in ("task-done", "task-unverified"):
             raise RuntimeError(f"task {i + 1} ({text}) reported {status}:\n\n{msg}")
@@ -1378,7 +1385,7 @@ def publish(c, wt, done, reply=""):
     set_phase(c, "rookery:reviewing")
     p, d = plans(c, wt)
     with frozen(p / "tasks.md"):
-        verdict, review = claude(c, REVIEW.format(n=c.n, d=d, base=c.base), key="review", slot="review", per_job=True)
+        verdict, review = claude(c, REVIEW.format(n=c.n, d=d, base=c.base, **framing(c)), key="review", slot="review", per_job=True)
     revert_all(c, wt)   # read-only too; a write step on a later run would commit its edits
     s = (active[c.repo].get("workflow") or WORKFLOW)["review"]
     review = render_review(verdict, review, " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]]),
@@ -1478,7 +1485,7 @@ def after_steps(c, wt, after):
             continue
         step(c.repo, "step", agent=name, mode=mode)
         with frozen(p / "tasks.md"):   # neither mode adds tasks
-            status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=d, base=c.base),
+            status, msg = claude(c, (CHECK if mode == "check" else WRITE).format(n=c.n, d=d, base=c.base, **framing(c)),
                                  key=f"step-{name}", slot=s, per_job=True)
         # enforced, not asked: whatever a check leaves in the worktree is reverted, and flagged
         reverted = revert_all(c, wt) if mode == "check" else []

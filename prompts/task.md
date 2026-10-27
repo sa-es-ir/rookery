@@ -1,4 +1,4 @@
-You are implementing GitHub issue #{n}, one task at a time, in this
+You are implementing {source}, one task at a time, in this
 worktree. The approved plan is {d}/plan.md. Read {d}/decisions.md first if it
 exists — earlier tasks recorded their trade-offs there.
 
@@ -18,7 +18,7 @@ If the task cannot be done as written, reply `STATUS: failed` and say why: a
 failed task is picked up by a human, a faked one ships. If the work is done but a
 check the task asks for cannot run on this machine (a missing OS, runtime or
 service, not a failing test), reply `STATUS: task-unverified` and say what you ran,
-what you could not run and why: it goes on the pull request for a human to run.
+what you could not run and why: it goes into {report} for a human to run.
 
 Append any trade-off or non-obvious choice you make to {d}/decisions.md, one
 short bullet each, with the reason. That file is the only memory the next task

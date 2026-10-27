@@ -1,9 +1,9 @@
-Review the finished work for GitHub issue #{n} before it goes to a
-human as a draft pull request.
+Review the finished work for {source} before it goes to a
+human as {handoff}.
 
 The approved plan is {d}/plan.md, the task list is {d}/tasks.md, and
 {d}/decisions.md holds the trade-offs each task recorded. The change itself is
-`git diff origin/{base}...HEAD`.
+`git diff {since}...HEAD`.
 
 Read only: do not edit, do not commit, do not use gh.
 
@@ -27,7 +27,7 @@ missing), `medium` (it can break, or a path that can break has no test) or
 `low` (worth a look). Put the worst first, ten at most. When one mistake is in
 several places, make it one finding and list every place in `where`,
 comma-separated, so the fix covers them all. Sound work has an empty
-`findings` list. Rookery turns this JSON into the review section of the pull
-request body, for the person about to read the diff. It posts nothing outside the tags,
+`findings` list. Rookery turns this JSON into the review section of
+{report}, for the person about to read the diff. It posts nothing outside the tags,
 but the STATUS line still goes outside them, alone on its line: the reply
 fails without it.

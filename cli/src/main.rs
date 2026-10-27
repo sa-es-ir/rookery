@@ -1,9 +1,11 @@
 //! `rookery`: Rookery's flow — plan, approve, a fresh claude session per task, the orchestrator
 //! ticks and commits, an advisory review — on a local git repo. No GitHub, no server.
+mod approve;
 mod claude;
 mod input;
 mod logo;
 mod plan;
+mod review;
 mod steer;
 mod text;
 
@@ -53,6 +55,22 @@ enum Cmd {
         /// Let the agent use your own MCP servers (never the repo's .mcp.json)
         #[arg(long)]
         mcp: bool,
+    },
+    /// Run an item's tasks, one fresh session each, then its after steps and the review; nothing is pushed
+    Approve {
+        /// The item's number
+        n: u64,
+        /// Stop before a call once the run has spent this many dollars [default: max_usd in ~/.rookery/config.json, else no cap]
+        #[arg(long)]
+        max_usd: Option<f64>,
+        /// Let the agent use your own MCP servers (never the repo's .mcp.json)
+        #[arg(long)]
+        mcp: bool,
+    },
+    /// Show an item: its phase, branch, commits, tasks and the review
+    Show {
+        /// The item's number
+        n: u64,
     },
     /// Check git, claude and this repo's steering, then make one small claude call (about $0.01)
     Doctor {
@@ -200,6 +218,8 @@ fn run(cmd: Cmd) -> Result<(), String> {
             plan::new(&title, &body, base, mcp)
         }
         Cmd::Reply { n, text, mcp } => plan::reply(n, &text, mcp),
+        Cmd::Approve { n, max_usd, mcp } => approve::approve(n, max_usd, mcp),
+        Cmd::Show { n } => approve::show(n),
     }
 }
 

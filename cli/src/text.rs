@@ -115,6 +115,24 @@ pub fn read_tasks(text: &str) -> Vec<(usize, bool, String)> {
         .collect()
 }
 
+/// agent.py's tick(): the checkbox at `at` (from read_tasks()) becomes `x`. One byte, so the
+/// task text around it is never disturbed. The orchestrator ticks, never the agent.
+pub fn tick(text: &str, at: usize) -> String {
+    format!("{}x{}", &text[..at], &text[at + 1..])
+}
+
+/// agent.py's summary(): a task's first sentence, plain, cut to summary_cap: the line a reader scans.
+pub fn summary(text: &str) -> String {
+    let t = text.replace('`', "");
+    let s = t.char_indices().find(|&(i, c)| c == '.' && t[i + 1..].starts_with(char::is_whitespace)).map_or(&t[..], |(i, _)| &t[..=i]);
+    let max = cap("summary_cap") as usize;
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max - 1).collect();
+    cut.rsplit_once(' ').map_or(&cut[..], |(a, _)| a).to_string() + "…"
+}
+
 /// Python's str.splitlines(): every line break it knows, no trailing empty line.
 pub fn splitlines(s: &str) -> Vec<&str> {
     let mut out = vec![];
@@ -160,8 +178,17 @@ mod tests {
     #[test]
     fn task_fixtures() {
         for f in fixture("tasks.json") {
-            let got: Vec<Value> = read_tasks(f["text"].as_str().unwrap()).into_iter().map(|(_, d, t)| serde_json::json!([d, t])).collect();
+            let text = f["text"].as_str().unwrap();
+            let got: Vec<Value> = read_tasks(text).into_iter().map(|(_, d, t)| serde_json::json!([d, t])).collect();
             assert_eq!(Value::from(got), f["tasks"], "{}", f["why"]);
+            let mut text = tick(text, read_tasks(text)[f["tick"].as_u64().unwrap() as usize].0);
+            assert_eq!(text, f["ticked"].as_str().unwrap(), "ticking must not disturb the text");
+            // every tick strictly reduces the open count, so the loop terminates
+            while let Some((at, _, _)) = read_tasks(&text).into_iter().find(|t| !t.1) {
+                let open = read_tasks(&text).iter().filter(|t| !t.1).count();
+                text = tick(&text, at);
+                assert_eq!(read_tasks(&text).iter().filter(|t| !t.1).count(), open - 1);
+            }
         }
     }
 
@@ -186,6 +213,15 @@ mod tests {
             fmt(&t, &args);
         }
         assert!(cap("max_tasks") > 0 && names("models").contains(&"opus".to_string()));
+    }
+
+    #[test]
+    fn summary_like_python() {
+        // agent.summary() on the same input
+        assert_eq!(summary("Add `x` to a.py. Then run it."), "Add x to a.py.");
+        assert_eq!(summary("v1.2 stays. Next"), "v1.2 stays.");
+        let long = "word ".repeat(30);
+        assert_eq!(summary(&long), "word ".repeat(19).trim_end().to_string() + "…");
     }
 
     #[test]
