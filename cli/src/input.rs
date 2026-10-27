@@ -1,15 +1,15 @@
 //! The prompt box: a one-line editor inside a rounded border, with a dim placeholder while it is
-//! empty, the commands that match what is typed so far under it, then a hint line. Drawn in raw
+//! empty, the `/` commands that match what is typed so far under it, then a hint line. Drawn in raw
 //! mode; `prompt()` uses it only on a terminal.
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, queue, terminal};
 use std::io::{self, Write};
 
-const HINT: &str = "tab completes · help <command> for its options · ↑↓ history · ctrl+d to exit";
+const HINT: &str = "/ for commands · tab completes · ↑↓ history · ctrl+d to exit";
 
 /// One typed line, or None for Ctrl-D, or Ctrl-C on an empty line. On Enter the box is erased
 /// and the line stays as `> line`, so what the command prints follows it. `commands` are
-/// (name, what it does), listed while the first word is still being typed.
+/// (`/name`, what it does), listed once a `/` starts the line, while its first word is typed.
 pub fn line(history: &[String], placeholder: &str, commands: &[(String, String)]) -> io::Result<Option<String>> {
     terminal::enable_raw_mode()?;
     let r = edit(history, placeholder, commands);
@@ -87,11 +87,11 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)]) ->
     }
 }
 
-/// The commands named by what is typed so far: all of them while the box is empty, none once
-/// the first word is finished.
+/// The commands named by what is typed so far: all of them after a lone `/`, none before a `/`
+/// or once the first word is finished. The guide above the box already lists them.
 fn matching<'a>(buf: &[char], commands: &'a [(String, String)]) -> impl Iterator<Item = &'a (String, String)> + use<'a> {
     let typed: String = buf.iter().collect();
-    let word = (!typed.contains(char::is_whitespace)).then_some(typed);
+    let word = (typed.starts_with('/') && !typed.contains(char::is_whitespace)).then_some(typed);
     commands.iter().filter(move |(name, _)| word.as_ref().is_some_and(|w| name.starts_with(w.as_str())))
 }
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn frame_fits_and_keeps_the_cursor_in_view() {
         let long: Vec<char> = "x".repeat(200).chars().collect();
-        let cmds = [("doctor".to_string(), "Check things".to_string()), ("help".to_string(), "Show options".to_string())];
+        let cmds = [("/doctor".to_string(), "Check things".to_string()), ("/help".to_string(), "Show options".to_string())];
         for (buf, at) in [(&[][..], 0), (&long[..5], 5), (&long[..], 200), (&long[..], 0)] {
             let (text, col, below) = super::frame(buf, at, "Try \"doctor\"", &cmds, 40, false);
             let lines: Vec<_> = text.split("\r\n").collect();
@@ -142,9 +142,10 @@ mod tests {
             assert!((4..39 - 2).contains(&(col as usize)), "{col}");
         }
         let menu = |typed: &str| super::matching(&typed.chars().collect::<Vec<_>>(), &cmds).map(|c| c.0.as_str()).collect::<Vec<_>>();
-        assert_eq!(menu(""), ["doctor", "help"]);
-        assert_eq!(menu("he"), ["help"]);
-        assert!(menu("doctor ").is_empty() && menu("x").is_empty());
+        assert!(menu("").is_empty(), "an empty box lists nothing: the guide above does");
+        assert_eq!(menu("/"), ["/doctor", "/help"]);
+        assert_eq!(menu("/he"), ["/help"]);
+        assert!(menu("/doctor ").is_empty() && menu("he").is_empty() && menu("/x").is_empty());
         assert!(super::frame(&[], 0, "Try", &cmds, 40, false).0.contains("│ > Try "));
     }
 }

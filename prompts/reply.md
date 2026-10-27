@@ -1,4 +1,4 @@
-A developer replied on issue #{n}:
+A developer replied on {source}:
 
 {body}
 

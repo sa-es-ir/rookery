@@ -106,6 +106,15 @@ fn unfence(s: &str) -> Option<&str> {
     Some(body.strip_suffix('\n').unwrap_or(body))
 }
 
+static TASK_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?mi)^[ \t]*[-*] \[( |x)(\] .+)$").unwrap());
+
+/// agent.py's read_tasks() on tasks.md's text -> [(byte offset of the checkbox char, done?, text)].
+pub fn read_tasks(text: &str) -> Vec<(usize, bool, String)> {
+    TASK_LINE.captures_iter(text)
+        .map(|c| (c.get(1).unwrap().start(), &c[1] != " ", c[2][2..].trim().to_string()))
+        .collect()
+}
+
 /// Python's str.splitlines(): every line break it knows, no trailing empty line.
 pub fn splitlines(s: &str) -> Vec<&str> {
     let mut out = vec![];
@@ -145,6 +154,14 @@ mod tests {
                 None => assert!(got.is_none(), "{}", f["why"]),
                 Some(s) => assert_eq!(got, Some((s.into(), f["reply"].as_str().unwrap().into())), "{}", f["why"]),
             }
+        }
+    }
+
+    #[test]
+    fn task_fixtures() {
+        for f in fixture("tasks.json") {
+            let got: Vec<Value> = read_tasks(f["text"].as_str().unwrap()).into_iter().map(|(_, d, t)| serde_json::json!([d, t])).collect();
+            assert_eq!(Value::from(got), f["tasks"], "{}", f["why"]);
         }
     }
 

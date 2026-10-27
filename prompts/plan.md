@@ -1,4 +1,4 @@
-You are planning work for GitHub issue #{n} in {repo}.
+You are planning work for {source} in {repo}.
 
 Title: {title}
 
@@ -11,7 +11,7 @@ Write two files, and change nothing else — no code, no commits:
   `- [ ] ` markdown checkbox on its own line, ordered, each independently
   implementable by someone who has read plan.md and nothing else.
 
-The tasks run on a Linux server with no GUI and no services the repo does not
+The tasks run on {box} with no GUI and no services the repo does not
 start itself. A task that verifies the work asks only for what can run there (a
 build, the tests that can run); name anything that cannot, such as a
 Windows-only test host, in plan.md as a check for the human reviewer.

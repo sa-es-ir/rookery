@@ -1264,8 +1264,10 @@ def plan(c, title, body, resume):
     for m in mates(c):   # mounted for every issue: the planner decides whether the issue needs it
         worktree(m, c)
     d = plans(c, wt)[1]
-    prompt = (REPLY.format(n=c.n, body=body, d=d) if resume
-              else PLAN.format(n=c.n, repo=c.repo, title=title, body=body, d=d, max=MAX_TASKS))
+    source = f"GitHub issue #{c.n}"   # the local CLI says "task #<n>" and "this machine"
+    prompt = (REPLY.format(source=source, body=body, d=d) if resume
+              else PLAN.format(source=source, repo=c.repo, title=title, body=body, d=d, max=MAX_TASKS,
+                               box="a Linux server"))
     if missing := named(c, f"{title or ''}\n{body}"):
         notice(c, missing)
         many = len(missing) > 1

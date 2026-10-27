@@ -3,6 +3,7 @@
 mod claude;
 mod input;
 mod logo;
+mod plan;
 mod steer;
 mod text;
 
@@ -26,6 +27,33 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Describe a change; rookery plans it in its own worktree and asks, or shows the tasks
+    New {
+        /// What to change, in a few words
+        title: String,
+        /// More detail: the issue's body
+        #[arg(short = 'm', long = "message", conflicts_with = "file")]
+        body: Option<String>,
+        /// Read the body from a markdown file
+        #[arg(short = 'f', long)]
+        file: Option<PathBuf>,
+        /// The branch to start from and read CLAUDE.md and .rookery/ from [default: the checked-out branch]
+        #[arg(long)]
+        base: Option<String>,
+        /// Let the agent use your own MCP servers (never the repo's .mcp.json)
+        #[arg(long)]
+        mcp: bool,
+    },
+    /// Answer an item's questions, or change its plan; rookery plans again in the same session
+    Reply {
+        /// The item's number
+        n: u64,
+        /// Your answer
+        text: String,
+        /// Let the agent use your own MCP servers (never the repo's .mcp.json)
+        #[arg(long)]
+        mcp: bool,
+    },
     /// Check git, claude and this repo's steering, then make one small claude call (about $0.01)
     Doctor {
         /// The branch to read CLAUDE.md and .rookery/ from [default: the checked-out branch]
@@ -43,14 +71,16 @@ pub struct Repo {
 }
 
 pub fn repo(dir: &Path) -> Result<Repo, String> {
-    let root = PathBuf::from(git_text(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| "this is not a git repo".to_string())?);
-    let common = git_text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    // git says C:/x on Windows, and a join there adds \: native separators, so paths read as one
+    let native = |s: String| PathBuf::from(if cfg!(windows) { s.replace('/', "\\") } else { s });
+    let root = native(git_text(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| "this is not a git repo".to_string())?);
+    let common = native(git_text(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
     let key = claude::sid(&root.to_string_lossy())[..8].to_string();
-    Ok(Repo { state: PathBuf::from(common).join("rookery"), root, key })
+    Ok(Repo { state: common.join("rookery"), root, key })
 }
 
 /// `--base`, else the checked-out branch -> (branch, its commit).
-fn base_of(root: &Path, base: Option<String>) -> Result<(String, String), String> {
+pub fn base_of(root: &Path, base: Option<String>) -> Result<(String, String), String> {
     let base = match base {
         Some(b) => b,
         None => match git_text(root, &["rev-parse", "--abbrev-ref", "HEAD"])? {
@@ -162,14 +192,22 @@ fn doctor(base: Option<String>) -> Result<(), String> {
 fn run(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Doctor { base } => doctor(base),
+        Cmd::New { title, body, file, base, mcp } => {
+            let body = match file {
+                Some(f) => std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?,
+                None => body.unwrap_or_default(),
+            };
+            plan::new(&title, &body, base, mcp)
+        }
+        Cmd::Reply { n, text, mcp } => plan::reply(n, &text, mcp),
     }
 }
 
 const GUIDE: &str = "\
-  1. Describe a change. rookery writes a plan and a task list, and asks when something is unclear.
-  2. Answer its questions, or approve the plan. Nothing is edited before you approve.
-  3. Each task runs in a fresh Claude session in its own worktree; rookery commits each one.
-  4. An advisory review runs at the end. Nothing is pushed: the branch is yours.";
+1. Describe a change. rookery writes a plan and a task list, and asks when something is unclear.
+2. Answer its questions, or approve the plan. Nothing is edited before you approve.
+3. Each task runs in a fresh Claude session in its own worktree; rookery commits each one.
+4. An advisory review runs at the end. Nothing is pushed: the branch is yours.";
 
 /// The logo with the name beside it, all at once, when stdout is a colour terminal wide enough:
 /// 28 characters wide, from 70 columns; none below that, piped or under NO_COLOR.
@@ -199,25 +237,29 @@ fn guide() {
     if !banner() {
         println!("rookery {}: {}\n", env!("CARGO_PKG_VERSION"), Cli::command().get_about().unwrap());
     }
-    println!("{}\n{GUIDE}\n", paint("1", "How it works"));
+    println!("{}", paint("1", "How it works"));
+    for l in GUIDE.lines() {
+        println!("  {l}");
+    }
+    println!();
     let here = std::env::current_dir().unwrap_or_default();
     match repo(&here).and_then(|r| base_of(&r.root, None).map(|(b, _)| (r, b))) {
         Ok((r, b)) => println!("{}     {} {}", paint("1", "Repo"), paint("36", &r.root.display().to_string()), paint("2", &format!("(base {b})"))),
         Err(e) => println!("{}     {}", paint("1", "Repo"), paint("33", &format!("none: {e}. Start rookery inside a git repo."))),
     }
-    println!("\n{}  {}", paint("1", "Commands"), paint("2", "(type them here, or run `rookery <command>` from a shell)"));
+    println!("\n{}  {}", paint("1", "Commands"), paint("2", "(type /<command> here, or run `rookery <command>` from a shell)"));
     for (name, about) in commands() {
         println!("  {} {about}", paint("38;2;168;204;104", &format!("{name:<9}"))); // the logo's light green
     }
     println!();
 }
 
-/// What can be typed at the prompt, as (name, what it does): clap's commands, then help and exit.
+/// What can be typed at the prompt, as (/name, what it does): clap's commands, then help and exit.
 fn commands() -> Vec<(String, String)> {
     let mut all: Vec<_> = Cli::command().get_subcommands()
-        .map(|c| (c.get_name().to_string(), c.get_about().map(|a| a.to_string()).unwrap_or_default())).collect();
-    all.push(("help".into(), "Show a command's options: help <command>".into()));
-    all.push(("exit".into(), "Leave rookery (or Ctrl-D)".into()));
+        .map(|c| (format!("/{}", c.get_name()), c.get_about().map(|a| a.to_string()).unwrap_or_default())).collect();
+    all.push(("/help".into(), "Show a command's options: /help <command>".into()));
+    all.push(("/exit".into(), "Leave rookery (or Ctrl-D)".into()));
     all
 }
 
@@ -246,7 +288,7 @@ fn prompt() {
     guide();
     let boxed = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmds = commands();
-    let placeholder = format!("Type a command, e.g. \"{}\"", cmds[0].0);
+    let placeholder = format!("Type / for commands, e.g. {} \"what to change\"", cmds[0].0);
     let (mut lines, mut history) = (std::io::stdin().lock().lines(), Vec::<String>::new());
     loop {
         let line = if boxed {
@@ -267,6 +309,8 @@ fn prompt() {
             Err(e) => { eprintln!("rookery: {e}"); continue }
         };
         if args.first().is_some_and(|a| a == "rookery") { args.remove(0); }
+        // `/new` as the menu shows it; `new` works too, as from a shell
+        if let Some(a) = args.first_mut().filter(|a| a.starts_with('/')) { a.remove(0); }
         match args.first().map(String::as_str) {
             None => continue,
             Some("exit" | "quit") => return,
