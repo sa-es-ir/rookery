@@ -106,5 +106,54 @@
       "--tools",
       ""
     ]
+  },
+  "providers": {
+    "claude": {},
+    "anthropic": {
+      "url": "https://api.anthropic.com",
+      "key": "CLAUDE_API_KEY"
+    },
+    "deepseek": {
+      "url": "https://api.deepseek.com/anthropic",
+      "key": "DEEPSEEK_API_KEY",
+      "models": {
+        "opus": "deepseek-v4-pro",
+        "sonnet": "deepseek-flash",
+        "haiku": "deepseek-flash"
+      },
+      "price": {
+        "deepseek-v4-pro": [
+          1.32,
+          0.044,
+          3.96
+        ],
+        "deepseek-flash": [
+          0.3,
+          0.006,
+          1.2
+        ]
+      }
+    },
+    "glm": {
+      "url": "https://api.z.ai/api/anthropic",
+      "key": "ZAI_API_KEY",
+      "models": {
+        "opus": "glm-5.3",
+        "sonnet": "glm-5.3-flash",
+        "haiku": "glm-5.3-flash"
+      },
+      "price": {
+        "glm-5.3": [
+          1.4,
+          0.26,
+          4.4
+        ],
+        "glm-5.3-flash": [
+          0.15,
+          0.03,
+          0.5
+        ]
+      }
+    }
   }
 }

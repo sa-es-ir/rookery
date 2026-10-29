@@ -164,8 +164,17 @@ pub fn new(title: &str, body: &str, base: Option<String>, mcp: bool) -> Result<(
     }
     let r = repo(&std::env::current_dir().map_err(|e| e.to_string())?)?;
     let (base, sha) = base_of(&r.root, base)?;
-    let dirty: Vec<String> = git_text(&r.root, &["status", "--porcelain"])?.lines()
-        .filter_map(|l| l.get(3..)).map(String::from).collect();
+    // raw, never git_text(): its trim takes the first line's leading space, and with it a letter
+    // of that path (" M Directory.Packages.props" -> "irectory.Packages.props")
+    let out = git(&r.root, &["status", "--porcelain", "-z"])?;
+    let out = String::from_utf8_lossy(&out);
+    let (mut fields, mut dirty) = (out.split('\0').filter(|f| !f.is_empty()), Vec::<String>::new());
+    while let Some(f) = fields.next() {
+        if f.starts_with(['R', 'C']) {
+            fields.next(); // a rename's old side
+        }
+        dirty.extend(f.get(3..).map(String::from));
+    }
     if !dirty.is_empty() {
         let more = if dirty.len() > 10 { format!(" and {} more", dirty.len() - 10) } else { String::new() };
         eprintln!("{} {} uncommitted change(s) here: {}{more}. The agent starts from {base}'s last commit and does not see them.",

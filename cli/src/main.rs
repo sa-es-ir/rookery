@@ -2,6 +2,7 @@
 //! ticks and commits, an advisory review — on a local git repo. No GitHub, no server.
 mod approve;
 mod claude;
+mod config;
 mod input;
 mod logo;
 mod plan;
@@ -11,7 +12,7 @@ mod text;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::json;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use steer::{git_text, steer};
@@ -31,8 +32,9 @@ struct Cli {
 enum Cmd {
     /// Describe a change; rookery plans it in its own worktree and asks, or shows the tasks
     New {
-        /// What to change, in a few words
-        title: String,
+        /// What to change, in a few words (the rest of the line; no quotes needed)
+        #[arg(required = true, num_args = 1..)]
+        title: Vec<String>,
         /// More detail: the issue's body
         #[arg(short = 'm', long = "message", conflicts_with = "file")]
         body: Option<String>,
@@ -50,8 +52,9 @@ enum Cmd {
     Reply {
         /// The item's number
         n: u64,
-        /// Your answer
-        text: String,
+        /// Your answer (the rest of the line; no quotes needed)
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
         /// Let the agent use your own MCP servers (never the repo's .mcp.json)
         #[arg(long)]
         mcp: bool,
@@ -71,6 +74,14 @@ enum Cmd {
     Show {
         /// The item's number
         n: u64,
+    },
+    /// Pick the provider every claude call runs on (your Claude login, or an API key), and add its key
+    Config {
+        /// claude, anthropic, deepseek or glm [default: choose from a list]
+        provider: Option<String>,
+        /// Remove this provider's saved key (calls go back to your Claude login if it was in use)
+        #[arg(long)]
+        forget: bool,
     },
     /// Check git, claude and this repo's steering, then make one small claude call (about $0.01)
     Doctor {
@@ -152,8 +163,14 @@ fn doctor(base: Option<String>) -> Result<(), String> {
         }
         Err(e) => say(Some(false), "claude", e.clone()),
     }
-    if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
-        say(None, "env", "ANTHROPIC_API_KEY is set: claude uses it, not your /login".into());
+    match config::active() {
+        Ok((n, k)) => {
+            say(Some(true), "provider", config::describe(&n, k.as_deref()));
+            if k.is_none() && std::env::var_os("ANTHROPIC_API_KEY").is_some() {
+                say(None, "env", "ANTHROPIC_API_KEY is set: claude uses it, not your /login".into());
+            }
+        }
+        Err(e) => say(Some(false), "provider", e),
     }
 
     let mut job = claude::Job { scratch: std::env::temp_dir().join(format!("rookery-doctor-{}", std::process::id())), ..Default::default() };
@@ -215,11 +232,12 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 Some(f) => std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?,
                 None => body.unwrap_or_default(),
             };
-            plan::new(&title, &body, base, mcp)
+            plan::new(&title.join(" "), &body, base, mcp)
         }
-        Cmd::Reply { n, text, mcp } => plan::reply(n, &text, mcp),
+        Cmd::Reply { n, text, mcp } => plan::reply(n, &text.join(" "), mcp),
         Cmd::Approve { n, max_usd, mcp } => approve::approve(n, max_usd, mcp),
         Cmd::Show { n } => approve::show(n),
+        Cmd::Config { provider, forget } => config::config(provider, forget),
     }
 }
 
@@ -279,6 +297,7 @@ fn commands() -> Vec<(String, String)> {
     let mut all: Vec<_> = Cli::command().get_subcommands()
         .map(|c| (format!("/{}", c.get_name()), c.get_about().map(|a| a.to_string()).unwrap_or_default())).collect();
     all.push(("/help".into(), "Show a command's options: /help <command>".into()));
+    all.push(("/clear".into(), "Clear the screen and this prompt's history, and start fresh".into()));
     all.push(("/exit".into(), "Leave rookery (or Ctrl-D)".into()));
     all
 }
@@ -308,8 +327,8 @@ fn prompt() {
     guide();
     let boxed = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmds = commands();
-    let placeholder = format!("Type / for commands, e.g. {} \"what to change\"", cmds[0].0);
-    let (mut lines, mut history) = (std::io::stdin().lock().lines(), Vec::<String>::new());
+    let placeholder = format!("Type / for commands, e.g. {} what to change", cmds[0].0);
+    let mut history = Vec::<String>::new();
     loop {
         let line = if boxed {
             match input::line(&history, &placeholder, &cmds) {
@@ -320,8 +339,10 @@ fn prompt() {
         } else {
             print!("rookery> ");
             let _ = std::io::stdout().flush();
-            let Some(Ok(l)) = lines.next() else { println!(); return };
-            l
+            // a line at a time, never a held lock: a command may read the next line itself (config's key)
+            let mut l = String::new();
+            if !matches!(std::io::stdin().read_line(&mut l), Ok(n) if n > 0) { println!(); return }
+            l.trim_end_matches(['\r', '\n']).to_string()
         };
         if history.last() != Some(&line) { history.push(line.clone()) }
         let mut args = match words(&line) {
@@ -334,6 +355,15 @@ fn prompt() {
         match args.first().map(String::as_str) {
             None => continue,
             Some("exit" | "quit") => return,
+            Some("clear") => {
+                history.clear();
+                if boxed {
+                    use crossterm::{cursor, terminal::{Clear, ClearType}};
+                    let _ = crossterm::execute!(std::io::stdout(), Clear(ClearType::All), Clear(ClearType::Purge), cursor::MoveTo(0, 0));
+                }
+                guide();
+                continue;
+            }
             _ => {}
         }
         match Cli::try_parse_from(std::iter::once("rookery".to_string()).chain(args)) {
@@ -366,6 +396,17 @@ mod tests {
         assert_eq!(super::words(r#"new """#).unwrap(), ["new", ""]);
         assert!(super::words(r#"new "open"#).is_err());
         assert!(super::words("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn title_and_reply_take_the_rest_of_the_line() {
+        use clap::Parser;
+        let parse = |l: &str| super::Cli::try_parse_from(std::iter::once("rookery".to_string()).chain(super::words(l).unwrap()));
+        let Some(super::Cmd::New { title, base, .. }) = parse("new fix the login bug --base dev").unwrap().cmd else { panic!() };
+        assert_eq!((title.join(" "), base.as_deref()), ("fix the login bug".into(), Some("dev")));
+        let Some(super::Cmd::Reply { n, text, .. }) = parse(r#"reply 3 use sqlite, don't "a  b""#).unwrap().cmd else { panic!() };
+        assert_eq!((n, text.join(" ")), (3, "use sqlite, don't a  b".into()));
+        assert!(parse("new").is_err());
     }
 
     #[test]

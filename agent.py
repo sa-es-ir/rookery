@@ -47,6 +47,10 @@ for line in (HERE / ".env").read_text(encoding="utf-8").splitlines() if (HERE / 
 # startup, kept current by installation events; "" until onboard() has run.
 REPOS = {}
 WORKSPACE = Path(os.environ.get("WORKSPACE", HERE / "work"))
+# shared with the local CLI (cli/): every text a claude call is built from, and the defaults
+# and verdict tables replies are held to. One copy, so wording changes once for both.
+DEFAULTS = json.loads((HERE / "prompts" / "defaults.json").read_text(encoding="utf-8"))
+
 # the `claude` CLI must use the claude.ai login; a stale key in the env fails it.
 # Another backend's key reaches it only through provider_env().
 os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -55,18 +59,10 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 # what the CLI's aliases (agents' `model: opus`, tasks' `--model sonnet`, memory's haiku)
 # resolve to there, and USD per million tokens (input, cache hit, output) at peak, so
 # USD_CAP can trip early, never late. The CLI itself prices any model as Claude (S-b).
-PROVIDERS = {
-    "claude": {},
-    # Claude by API key: the aliases are Claude models already, and total_cost_usd is its price.
-    # Not ANTHROPIC_API_KEY: that one is popped above, so it never beats the /login.
-    "anthropic": {"url": "https://api.anthropic.com", "key": "CLAUDE_API_KEY"},
-    "deepseek": {"url": "https://api.deepseek.com/anthropic", "key": "DEEPSEEK_API_KEY",
-                 "models": {"opus": "deepseek-v4-pro", "sonnet": "deepseek-flash", "haiku": "deepseek-flash"},
-                 "price": {"deepseek-v4-pro": (1.32, 0.044, 3.96), "deepseek-flash": (0.30, 0.006, 1.20)}},
-    "glm": {"url": "https://api.z.ai/api/anthropic", "key": "ZAI_API_KEY",
-            "models": {"opus": "glm-5.3", "sonnet": "glm-5.3-flash", "haiku": "glm-5.3-flash"},
-            "price": {"glm-5.3": (1.40, 0.26, 4.40), "glm-5.3-flash": (0.15, 0.03, 0.50)}},
-}
+# `anthropic` is Claude by API key: the aliases are Claude models already, and total_cost_usd is
+# its price. Its key is CLAUDE_API_KEY, not ANTHROPIC_API_KEY: that one is popped above, so it
+# never beats the /login. In prompts/defaults.json: the local CLI (`rookery config`) uses the same.
+PROVIDERS = DEFAULTS["providers"]
 PROVIDER = os.environ.get("PROVIDER", "claude")   # the default until the admin page stores one
 # owners the operator's subscription (`claude`) may run for; unset, the ADMINS logins
 OWN = {x.strip().lower() for x in (os.environ.get("OWN") or os.environ.get("ADMINS", "")).split(",") if x.strip()}
@@ -120,10 +116,6 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", f"http://127.0.0.1:{PORT}").rstrip("/"
 # threadName is the repo on a worker thread, so parallel repos' `#n` lines stay apart
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(threadName)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.info
-
-# shared with the local CLI (cli/): every text a claude call is built from, and the defaults
-# and verdict tables replies are held to. One copy, so wording changes once for both.
-DEFAULTS = json.loads((HERE / "prompts" / "defaults.json").read_text(encoding="utf-8"))
 
 
 def prompt(name):
@@ -627,7 +619,7 @@ def cost_of(out, name):
     usd = 0.0
     for m, u in (d.get("modelUsage") or {}).items():
         if m not in price:
-            raise RuntimeError(f"no {name} price for model {m!r}: add it to PROVIDERS in agent.py")
+            raise RuntimeError(f"no {name} price for model {m!r}: add it to providers in prompts/defaults.json")
         i, hit, o = price[m]
         # a cache write is billed as a plain input token there
         usd += ((u.get("inputTokens", 0) + u.get("cacheCreationInputTokens", 0)) * i

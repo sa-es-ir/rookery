@@ -275,7 +275,7 @@ lists providers, overrides, owners and users, `POST /api/admin/provider` sets th
 one owner's override. For anyone else, signed in or not, every `/api/admin*` is a 404.
 
 **Providers.** `provider_for(repo)` → `(name, key id, key)` picks the backend behind every
-`claude` call from `PROVIDERS`: the owner's own selected key (`key:<owner>` in `settings` → a
+`claude` call from `PROVIDERS` (`providers` in `prompts/defaults.json`, shared with the CLI's `rookery config`): the owner's own selected key (`key:<owner>` in `settings` → a
 `keys` row), else `fallback()`: the owner's `provider:<owner>` row, else — only for an owner in
 `OWN` — the stored `provider` default, else `PROVIDER` (`.env`, default `claude`, the CLI's own
 `/login`); else it raises `NoKey`. Per owner, never per actor. `claude()` reads it **once** and

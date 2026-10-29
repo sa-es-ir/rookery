@@ -77,12 +77,9 @@ fn commit(job: &Job, wt: &Path, subject: &str, detail: Value) -> Result<String, 
 
 /// ~/.rookery/config.json's `max_usd`, when there is one.
 fn config_max_usd() -> Result<Option<f64>, String> {
-    let p = steer::rookery_home().join("config.json");
-    let Ok(t) = fs::read_to_string(&p) else { return Ok(None) };
-    let v: Value = serde_json::from_str(&t).map_err(|e| format!("{}: {e}", p.display()))?;
-    match &v["max_usd"] {
-        Value::Null => Ok(None),
-        m => m.as_f64().map(Some).ok_or_else(|| format!("{}: `max_usd` is a number of dollars", p.display())),
+    match crate::config::load()?.get("max_usd") {
+        None | Some(Value::Null) => Ok(None),
+        Some(m) => m.as_f64().map(Some).ok_or_else(|| format!("{}: `max_usd` is a number of dollars", crate::config::path().display())),
     }
 }
 

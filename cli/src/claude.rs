@@ -1,9 +1,10 @@
-//! One `claude` call, as agent.py's claude() makes it, minus the server's parts (sudo, providers,
-//! daily caps). The harness is the user's own `claude`, logged in however they log in.
+//! One `claude` call, as agent.py's claude() makes it, minus the server's parts (sudo, owner keys,
+//! daily caps). The harness is the user's own `claude`: on its own login, or on the provider and key
+//! `rookery config` set (config.rs).
 use crate::text::{fmt, marker, prompt};
 use serde_json::{Value, json};
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -86,7 +87,10 @@ pub fn argv(job: &Job, prompt_: &str, key: &str, resume: bool, slot: &Value, per
     if !offer.is_empty() {
         p += &format!("\n\n{}", fmt(&prompt("offer-skills"), &[("names", offer.join(", "))]));
     }
-    let mut cmd: Vec<String> = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions",
+    // streamed, so the model's reasoning shows while it works: a summary, never the raw thinking,
+    // billed the same either way (display changes what comes back, not what is spent)
+    let mut cmd: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--thinking-display", "summarized",
+                                "--permission-mode", "bypassPermissions",
                                 // never the target repo's settings: its hooks would run, its skills and
                                 // CLAUDE.md come from the worktree. The user's own settings are theirs.
                                 "--setting-sources", "user"].map(String::from).into();
@@ -127,6 +131,9 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
         return Err(format!("This run hit its --max-usd of ${:.2} (spent ${:.2}). Nothing more ran; \
                             run it again with a higher --max-usd to go on.", job.max_usd, job.spent));
     }
+    // read once per call and used for its env, its price and its step, as agent.py's claude() does
+    let (provider, api_key) = crate::config::active()?;
+    let env = crate::config::env(&provider, api_key.as_deref());
     let (mut cmd, p, sid, system) = argv(job, prompt_, key, resume, slot, per_job);
     if let Some(s) = system {
         // a file, never argv: Windows caps a whole command line at 32,767 characters, CLAUDE.md
@@ -138,15 +145,25 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
         cmd.splice(at..at, ["--append-system-prompt-file".into(), f.display().to_string()]);
     }
     let started = Instant::now();
-    let mut out = run(&cmd, &p, cwd);
+    let mut out = run(&cmd, &p, cwd, &env);
+    if out.as_ref().is_err_and(|e| e.contains("--thinking-display")) {
+        // a claude older than the flag: the same call, without the summaries
+        let at = cmd.iter().position(|a| a == "--thinking-display").unwrap();
+        cmd.drain(at..at + 2);
+        out = run(&cmd, &p, cwd, &env);
+    }
     if out.as_ref().is_err_and(|e| !resume && e.contains("already in use")) {
         // an earlier run made this session (it crashed, or this is a re-run): pick it up
         let at = cmd.iter().position(|a| a == "--session-id").unwrap();
         cmd[at] = "--resume".into();
-        out = run(&cmd, &p, cwd);
+        out = run(&cmd, &p, cwd, &env);
+    }
+    // a model the provider's price table lacks fails the call: no quiet guess
+    if let Some(e) = out.as_ref().ok().and_then(|v| crate::config::cost(v, &provider).err()) {
+        out = Err(e);
     }
     let (usd, text) = match &out {
-        Ok(v) => (v["total_cost_usd"].as_f64().unwrap_or(0.0), v["result"].as_str().unwrap_or("").to_string()),
+        Ok(v) => (crate::config::cost(v, &provider).unwrap_or(0.0), v["result"].as_str().unwrap_or("").to_string()),
         Err(_) => (0.0, String::new()),
     };
     job.spent += usd;
@@ -157,7 +174,7 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
         None => json!(slot["model"].as_str().unwrap_or("sonnet")),
     };
     job.step("claude", json!({"key": key, "status": status, "usd": usd, "agent": slot["agent"], "skills": slot["skills"],
-                              "model": model, "sid": sid, "secs": started.elapsed().as_secs_f64()}));
+                              "model": model, "sid": sid, "provider": provider, "secs": started.elapsed().as_secs_f64()}));
     out?;
     m.ok_or_else(|| format!("no STATUS marker in agent reply:\n{}", tail(&text, 1500)))
 }
@@ -170,26 +187,130 @@ pub fn tail(s: &str, n: usize) -> &str {
     &s[at..]
 }
 
-/// Run claude with the prompt on stdin -> its JSON. A failed call says what claude said.
-fn run(cmd: &[String], input: &str, cwd: &Path) -> Result<Value, String> {
-    let mut child = Command::new(bin()?).args(cmd).current_dir(cwd)
+/// the most rows one summary takes on a terminal; past it, the rest is `…`
+const THINK_ROWS: usize = 6;
+
+/// A call's reasoning summaries, dim. On a terminal the latest replaces the one before it in place,
+/// and the call's end collapses them all to one line; piped, each prints in full. Nothing shows
+/// when the model or provider omits them.
+#[derive(Default)]
+struct Thinking {
+    rows: u16,
+    count: usize,
+}
+
+impl Thinking {
+    fn live() -> bool {
+        use std::io::IsTerminal;
+        std::io::stdout().is_terminal()
+    }
+
+    fn show(&mut self, event: &Value) {
+        for b in event["message"]["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "thinking") {
+            let t = b["thinking"].as_str().unwrap_or("").replace("**", "");
+            if t.trim().is_empty() {
+                continue;
+            }
+            self.count += 1;
+            if !Self::live() {
+                println!("{}", crate::paint("2", &format!("  ∴ {}", t.trim().replace('\n', "\n    "))));
+                continue;
+            }
+            // every row fits the width, so the rows printed are the rows to erase
+            let w = crossterm::terminal::size().map_or(80, |(w, _)| w as usize).saturating_sub(5).max(20);
+            let mut rows = wrap(&t, w);
+            if rows.len() > THINK_ROWS {
+                rows.truncate(THINK_ROWS - 1);
+                rows.push("…".into());
+            }
+            self.erase();
+            for (i, r) in rows.iter().enumerate() {
+                println!("{}", crate::paint("2", &format!("{} {r}", if i == 0 { "  ∴" } else { "   " })));
+            }
+            self.rows = rows.len() as u16;
+        }
+    }
+
+    fn erase(&mut self) {
+        use crossterm::{cursor, terminal::{Clear, ClearType}};
+        if self.rows > 0 {
+            let _ = crossterm::execute!(std::io::stdout(), cursor::MoveUp(self.rows), cursor::MoveToColumn(0), Clear(ClearType::FromCursorDown));
+            self.rows = 0;
+        }
+    }
+
+    fn done(&mut self, secs: f64) {
+        if Self::live() && self.count > 0 {
+            self.erase();
+            println!("{}", crate::paint("2", &format!("  ∴ thought {}× · {secs:.0} s", self.count)));
+        }
+    }
+}
+
+/// `t`'s non-blank lines word-wrapped to `w` characters, a longer word split.
+/// ponytail: counts chars, so a wide (CJK, emoji) one overflows its row; unicode-width if that bites
+fn wrap(t: &str, w: usize) -> Vec<String> {
+    let mut out = vec![];
+    for para in t.lines().filter(|l| !l.trim().is_empty()) {
+        let mut cur = String::new();
+        for word in para.split_whitespace() {
+            for piece in word.chars().collect::<Vec<_>>().chunks(w) {
+                let n = cur.chars().count();
+                if n > 0 && n + 1 + piece.len() > w {
+                    out.push(std::mem::take(&mut cur));
+                }
+                if !cur.is_empty() {
+                    cur.push(' ');
+                }
+                cur.extend(piece);
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    out
+}
+
+/// Run claude with the prompt on stdin -> its result event (the JSON `--output-format json` would
+/// give), showing the reasoning on the way. A failed call says what claude said. `env` is
+/// config::env(): empty on the login, which leaves the user's env as it is.
+fn run(cmd: &[String], input: &str, cwd: &Path, env: &[(String, String)]) -> Result<Value, String> {
+    let mut c = Command::new(bin()?);
+    if !env.is_empty() {
+        // a bearer token of the user's own would be sent in place of the provider's key
+        c.env_remove("ANTHROPIC_AUTH_TOKEN").envs(env.iter().map(|(k, v)| (k, v)));
+    }
+    let mut child = c.args(cmd).current_dir(cwd)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("could not start claude: {e}"))?;
     let mut stdin = child.stdin.take().unwrap();
     let input = input.to_string();
     // from a thread: a prompt bigger than the pipe's buffer would block us while claude writes
     let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let _ = writer.join();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let json: Option<Value> = serde_json::from_str(stdout.trim()).ok();
-    if !out.status.success() || json.as_ref().is_some_and(|j| j["is_error"] == true) {
-        // with --output-format json, an API error ("Invalid API key") is the result, on stdout
-        let said = json.as_ref().and_then(|j| j["result"].as_str()).map(String::from)
-            .unwrap_or_else(|| String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr }).trim().to_string());
-        return Err(format!("claude failed ({}): {said}", out.status.code().unwrap_or(-1)));
+    // and stderr: a full pipe there would stall claude while stdout is read
+    let mut stderr = child.stderr.take().unwrap();
+    let errs = std::thread::spawn(move || { let mut s = String::new(); let _ = stderr.read_to_string(&mut s); s });
+    let (mut result, mut raw, mut thinking, started) = (None, String::new(), Thinking::default(), Instant::now());
+    for line in BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok) {
+        match serde_json::from_str::<Value>(&line) {
+            Ok(e) if e["type"] == "result" => result = Some(e),
+            Ok(e) if e["type"] == "assistant" => thinking.show(&e),
+            Ok(_) => {}
+            Err(_) => raw += &format!("{line}\n"),
+        }
     }
-    json.ok_or_else(|| format!("claude replied with no JSON: {}", tail(&stdout, 500)))
+    thinking.done(started.elapsed().as_secs_f64());
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let _ = writer.join();
+    let stderr = errs.join().unwrap_or_default();
+    if !status.success() || result.as_ref().is_some_and(|j| j["is_error"] == true) {
+        // an API error ("Invalid API key") is the result event, on stdout
+        let said = result.as_ref().and_then(|j| j["result"].as_str()).map(String::from)
+            .unwrap_or_else(|| if stderr.trim().is_empty() { raw.trim() } else { stderr.trim() }.to_string());
+        return Err(format!("claude failed ({}): {said}", status.code().unwrap_or(-1)));
+    }
+    result.ok_or_else(|| format!("claude replied with no result: {}", tail(&raw, 500)))
 }
 
 #[cfg(test)]
@@ -205,7 +326,7 @@ mod tests {
         job.sources.insert("changelog".into(), "catalog".into());
         let slot = json!({"agent": "planmaker", "skills": ["repo-recon"], "instructions": "One migration per task."});
         let (cmd, p, sid, system) = argv(&job, "p", "plan", false, &slot, false);
-        for flag in ["--strict-mcp-config", "--setting-sources", "--plugin-dir=plug", "--session-id"] {
+        for flag in ["--strict-mcp-config", "--setting-sources", "--plugin-dir=plug", "--session-id", "--thinking-display"] {
             assert!(cmd.contains(&flag.to_string()), "{flag}");
         }
         assert_eq!(&cmd[cmd.iter().position(|a| a == "--disallowed-tools").unwrap() + 1..][..5], DENY);
@@ -223,6 +344,13 @@ mod tests {
         assert_eq!(cmd[cmd.iter().position(|a| a == "--model").unwrap() + 1], "sonnet", "tasks grind on sonnet");
         assert_eq!(sid2, super::sid("abcd1234#7/task-0/run-3"), "per_job: this run's own");
         assert!(system.unwrap().ends_with("Use tabs."));
+    }
+
+    #[test]
+    fn thinking_wraps_to_the_width() {
+        assert_eq!(wrap("Checking the tests now\n\nthen abcdefghij", 10), ["Checking", "the tests", "now", "then", "abcdefghij"]);
+        assert_eq!(wrap("x abcdefghijklm", 5), ["x", "abcde", "fghij", "klm"], "a word past the width is split");
+        assert!(wrap("a b c d e f g h i j k l m n o p q r s t u v w x y z", 20).iter().all(|r| r.chars().count() <= 20));
     }
 
     #[test]
