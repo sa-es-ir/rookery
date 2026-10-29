@@ -1712,8 +1712,11 @@ def review_pr(c, job):
     by = " · ".join(f"rk:{k}" for k in [s["agent"], *s["skills"]])
     try:
         wt = pr_worktree(c, pr["baseRefName"])
-        verdict, text = claude(c, PR_REVIEW.format(n=c.n, repo=c.repo, title=pr["title"], body=pr["body"] or "",
-                                                   note=note, base=pr["baseRefName"], wt=Path(wt).absolute(),
+        # the local CLI's `rookery review` says "the commits on <ref> …", "<base>", "shows"
+        verdict, text = claude(c, PR_REVIEW.format(what=f"pull request #{c.n} in {c.repo}", who="Someone with write access",
+                                                   title=pr["title"], body=pr["body"] or "", note=note,
+                                                   head="the pull request's head", since=f"origin/{pr['baseRefName']}",
+                                                   posts="posts", wt=Path(wt).absolute(),
                                                    diff=pr_diff(wt, pr["baseRefName"])),
                                key="pr-review", slot="pr-review", per_job=True, wt=wt)
         review = render_review(verdict, text, by, wt=wt)   # before the worktree goes: it checks each `where`

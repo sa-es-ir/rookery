@@ -70,6 +70,19 @@ enum Cmd {
         #[arg(long)]
         mcp: bool,
     },
+    /// Review the commits on a branch since it left its base: advisory, read-only, nothing to approve
+    Review {
+        /// <base>..<ref>, <base>...<ref> or <ref>: both forms mean the commits on <ref> since it
+        /// left <base> [default: the checked-out branch, since the base branch it forked from:
+        /// origin's default, main, master, develop, dev or trunk, whichever it left last]
+        range: Option<String>,
+        /// A question for the reviewer; it also reviews again a change it already reviewed
+        #[arg(short = 'm', long)]
+        note: Option<String>,
+        /// Let the agent use your own MCP servers (never the repo's .mcp.json)
+        #[arg(long)]
+        mcp: bool,
+    },
     /// Show an item: its phase, branch, commits, tasks and the review
     Show {
         /// The item's number
@@ -236,6 +249,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
         }
         Cmd::Reply { n, text, mcp } => plan::reply(n, &text.join(" "), mcp),
         Cmd::Approve { n, max_usd, mcp } => approve::approve(n, max_usd, mcp),
+        Cmd::Review { range, note, mcp } => review::review(range, note, mcp),
         Cmd::Show { n } => approve::show(n),
         Cmd::Config { provider, forget } => config::config(provider, forget),
     }

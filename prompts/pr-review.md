@@ -1,12 +1,12 @@
-Review pull request #{n} in {repo}. Someone with write access asked
+Review {what}. {who} asked
 for it.
 
 Title: {title}
 
 {body}
 {note}
-This worktree, {wt}, is the pull request's head, detached. You are already
-in it. The change is `git diff origin/{base}...HEAD`; Rookery ran it for you,
+This worktree, {wt}, is {head}, detached. You are already
+in it. The change is `git diff {since}...HEAD`; Rookery ran it for you,
 below. If it touches agent-plans/, the plan it was built from is in the diff.
 
 {diff}
@@ -35,6 +35,6 @@ that can break has no test) or `low` (worth a look). Put the worst first, ten
 at most. When one mistake is in several places, make it one finding and list
 every place in `where`, comma-separated, so the fix covers them all. A sound
 change has an empty `findings` list. Rookery turns this JSON into the review it
-posts, for the person about to read the diff. It posts nothing outside the tags,
+{posts}, for the person about to read the diff. It {posts} nothing outside the tags,
 but the STATUS line still goes outside them, alone on its line: the reply
 fails without it.

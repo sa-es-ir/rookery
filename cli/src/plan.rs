@@ -2,7 +2,7 @@
 //! items/<n>/state.json (the server's phase labels, without `rookery:`); its plan files sit beside
 //! it, outside the worktree, never committed.
 use crate::claude::{self, Job};
-use crate::steer::{self, git, git_text};
+use crate::steer::{self, git};
 use crate::text::{cap, fmt, prompt, read_tasks};
 use crate::{Repo, base_of, paint, repo};
 use serde_json::{Value, json};
@@ -157,16 +157,11 @@ pub fn set_phase(r: &Repo, job: &Job, st: &mut Value, phase: &str) -> Result<(),
     save(r, st)
 }
 
-/// `rookery new`: a new item from its base commit, then the first plan call.
-pub fn new(title: &str, body: &str, base: Option<String>, mcp: bool) -> Result<(), String> {
-    if title.trim().is_empty() {
-        return Err("give the item a title: rookery new \"what to change\"".into());
-    }
-    let r = repo(&std::env::current_dir().map_err(|e| e.to_string())?)?;
-    let (base, sha) = base_of(&r.root, base)?;
+/// The checkout's uncommitted paths (a rename: its new side).
+pub fn dirty(root: &Path) -> Result<Vec<String>, String> {
     // raw, never git_text(): its trim takes the first line's leading space, and with it a letter
     // of that path (" M Directory.Packages.props" -> "irectory.Packages.props")
-    let out = git(&r.root, &["status", "--porcelain", "-z"])?;
+    let out = git(root, &["status", "--porcelain", "-z"])?;
     let out = String::from_utf8_lossy(&out);
     let (mut fields, mut dirty) = (out.split('\0').filter(|f| !f.is_empty()), Vec::<String>::new());
     while let Some(f) = fields.next() {
@@ -175,6 +170,23 @@ pub fn new(title: &str, body: &str, base: Option<String>, mcp: bool) -> Result<(
         }
         dirty.extend(f.get(3..).map(String::from));
     }
+    Ok(dirty)
+}
+
+/// ~/.rookery/worktrees/<repo-name>-<hash8>: this repo's worktrees, outside .git/ so an IDE shows them.
+pub fn wt_root(r: &Repo) -> PathBuf {
+    let name = r.root.file_name().map_or("repo".into(), |s| s.to_string_lossy().to_string());
+    steer::rookery_home().join("worktrees").join(format!("{name}-{}", r.key))
+}
+
+/// `rookery new`: a new item from its base commit, then the first plan call.
+pub fn new(title: &str, body: &str, base: Option<String>, mcp: bool) -> Result<(), String> {
+    if title.trim().is_empty() {
+        return Err("give the item a title: rookery new \"what to change\"".into());
+    }
+    let r = repo(&std::env::current_dir().map_err(|e| e.to_string())?)?;
+    let (base, sha) = base_of(&r.root, base)?;
+    let dirty = dirty(&r.root)?;
     if !dirty.is_empty() {
         let more = if dirty.len() > 10 { format!(" and {} more", dirty.len() - 10) } else { String::new() };
         eprintln!("{} {} uncommitted change(s) here: {}{more}. The agent starts from {base}'s last commit and does not see them.",
@@ -182,11 +194,10 @@ pub fn new(title: &str, body: &str, base: Option<String>, mcp: bool) -> Result<(
     }
     let n = claim(&r.state)?;
     let slug = slug(title);
-    let name = r.root.file_name().map_or("repo".into(), |s| s.to_string_lossy().to_string());
     let st = json!({
         "n": n, "title": title.trim(), "body": body, "base": base, "sha": sha,
         "branch": if slug.is_empty() { format!("rookery/{n}") } else { format!("rookery/{n}-{slug}") },
-        "worktree": steer::rookery_home().join("worktrees").join(format!("{name}-{}", r.key)).join(n.to_string()),
+        "worktree": wt_root(&r).join(n.to_string()),
         "phase": "planning", "made": claude::now(),
     });
     save(&r, &st)?;
@@ -303,6 +314,7 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::steer::git_text;
 
     #[test]
     fn slugs_are_branch_safe() {
