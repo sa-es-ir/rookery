@@ -20,6 +20,7 @@ const PROMPTS: &[(&str, &str)] = &[
     ("system", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/system.md"))),
     ("remember", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/remember.md"))),
     ("rewrite", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/rewrite.md"))),
+    ("no-marker", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/no-marker.md"))),
 ];
 
 pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
@@ -99,7 +100,7 @@ pub fn marker(text: &str) -> Option<(String, String)> {
 
 /// agent.py's FENCED, ```[\w-]*\n((?:(?!```).)*?)\n?```, fullmatched: the regex crate has no
 /// lookahead, so by hand. The first ``` after the opening line must be the closing one.
-fn unfence(s: &str) -> Option<&str> {
+pub fn unfence(s: &str) -> Option<&str> {
     let (info, body) = s.strip_prefix("```")?.split_once('\n')?;
     if !info.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') || body.find("```")? + 3 != body.len() {
         return None;

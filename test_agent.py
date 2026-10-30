@@ -581,6 +581,19 @@ first = sid(per_job=True)
 agent.active["o/sid"] = {"job": 2, "cancel": None}
 assert sid(per_job=True) not in (first, sid()), "a new job is a new session"
 del agent.active["o/sid"]
+# a reply with no STATUS line is asked for the line once, in its session; the first reply stands
+replies = iter(["<review>{}</review>", "STATUS: review-ok", "<review>{}</review>", "sorry, no"])
+agent.sh = lambda *a, **k: argv.append(a) or prompts.append(k["input"]) or json.dumps(
+    {"result": next(replies), "total_cost_usd": 0.0})
+argv.clear(), prompts.clear()
+assert agent.claude(sc, "p", key="review") == ("review-ok", "<review>{}</review>")
+assert prompts[1] == agent.NO_MARKER and "--resume" in argv[1], argv[1]
+assert argv[0][argv[0].index("--session-id") + 1] == argv[1][argv[1].index("--resume") + 1], "the same session"
+try:
+    agent.claude(sc, "p", key="review")
+    raise AssertionError("expected a second miss to fail")
+except RuntimeError as e:
+    assert "no STATUS marker" in str(e) and "<review>{}</review>" in str(e), e
 agent.check_caps = real_caps
 def boom(*a, **k):
     raise RuntimeError("claude failed (1): overloaded")

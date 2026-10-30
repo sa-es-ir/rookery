@@ -417,7 +417,10 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
   that appends tasks breaks "every tick strictly reduces the open count". `after` steps keep
   the same shape: checks are advisory, and neither mode appends tasks.
 - **`STATUS:` is parsed, never inferred.** `MARKER` requires the marker alone on its line
-  (markdown bold around it is tolerated, nothing else); a missing marker is an error, not a guess. The marker is stripped from the text before it is
+  (markdown bold around it is tolerated, nothing else); a missing marker is an error, not a guess. A
+  reply without one is asked once more for the line alone (`NO_MARKER`, same session, under the caps,
+  logged as `<key>/status`), and that reply is parsed the same way; the first reply stays the reply.
+  The marker is stripped from the text before it is
   posted as a comment.
 - **`MAX_TASKS = 15`**, checked every iteration; the loop is bounded by `range(MAX_TASKS + 1)`
   with a `for/else` that raises on non-convergence. Every tick strictly reduces the open count.

@@ -1075,37 +1075,49 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
     # None = inherit, as before providers: claude runs the exact env it always ran.
     # Through sudo these need the sudoers env_keep line (DEPLOY.md §5b).
     env = {**os.environ, **pe} if (pe := provider_env(prov, secret)) else None
-    wt, out, m, usd = wt or worktree(c), "", None, 0.0
-    try:
+    wt = wt or worktree(c)
+
+    def run(resume, prompt, key):
+        out, text, m, usd = "", "", None, 0.0
         try:
-            out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, env=env, input=prompt,
-                     track=c.repo)
-        except RuntimeError as e:
-            # a previous run already created this session (it crashed, or we are being
-            # re-run): the id is derived from repo#issue/key, so pick that session up.
-            if resume or "already in use" not in str(e):
-                raise
-            log(f"#{c.n} session {sid} exists — resuming it")
-            out = sh(*cmd, "--resume", sid, cwd=wt, env=env, input=prompt, track=c.repo)
-        usd = cost_of(out, prov)   # an unpriced model raises here; the run still counts below
-        text = json.loads(out).get("result", "")
-        m = MARKER.search(text)
-    finally:
-        # a failed call still counts as a run; its cost is lost with its stdout
-        record(c.repo, usd)
-        # sid: digest() finds the session's transcript by it
-        step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
-             usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=prov,
-             **({"key": kid} if kid else {}), sid=sid)
-    log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
+            try:
+                out = sh(*cmd, *(["--resume", sid] if resume else ["--session-id", sid]), cwd=wt, env=env,
+                         input=prompt, track=c.repo)
+            except RuntimeError as e:
+                # a previous run already created this session (it crashed, or we are being
+                # re-run): the id is derived from repo#issue/key, so pick that session up.
+                if resume or "already in use" not in str(e):
+                    raise
+                log(f"#{c.n} session {sid} exists — resuming it")
+                out = sh(*cmd, "--resume", sid, cwd=wt, env=env, input=prompt, track=c.repo)
+            usd = cost_of(out, prov)   # an unpriced model raises here; the run still counts below
+            text = json.loads(out).get("result", "")
+            m = MARKER.search(text)
+        finally:
+            # a failed call still counts as a run; its cost is lost with its stdout
+            record(c.repo, usd)
+            # sid: digest() finds the session's transcript by it; the re-ask is in the same one
+            step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
+                 usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=prov,
+                 **({"key": kid} if kid else {}), **({} if key.endswith("/status") else {"sid": sid}))
+        log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
+        return text, m
+
+    text, m = run(resume, prompt, key)
+    if not m and text:
+        # asked once more, in the same session, for the line alone (prod: deepseek left it out
+        # of a whole review). Still parsed, never inferred; the first reply is the reply.
+        check_caps(c.repo)
+        if m := run(True, NO_MARKER, f"{key}/status")[1]:
+            return m.group(1), unmark(text)
     if not m:
         raise RuntimeError(f"no STATUS marker in agent reply:\n{text[-1500:]}")
     return m.group(1), unmark(text, m)
 
 
-def unmark(text, m):
+def unmark(text, m=None):
     """The reply without its STATUS line, and without a fence around the whole of it."""
-    reply = (text[:m.start()] + text[m.end():]).strip()
+    reply = (text[:m.start()] + text[m.end():] if m else text).strip()
     f = FENCED.fullmatch(reply)
     return f.group(1).strip() if f else reply
 
@@ -1125,6 +1137,7 @@ PR_REVIEW = prompt("pr-review")
 FOLLOW_UP = prompt("follow-up")
 FOLLOW_MERGED = prompt("follow-merged")
 FOLLOW_CONFLICTS = prompt("follow-conflicts")
+NO_MARKER = prompt("no-marker")   # claude(): the one re-ask for a reply with no STATUS line
 FOLLOW_EMPTY = (f"Mention `@{AGENT_USER}` with what to change or what to answer. For example: "
                 f"`@{AGENT_USER} pull the latest from the base branch and resolve the conflicts`.")
 NO_PR = "This issue has no open pull request, so there is nothing to follow up on. Open a new issue for further work."

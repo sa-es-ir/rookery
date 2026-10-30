@@ -1,7 +1,7 @@
 //! One `claude` call, as agent.py's claude() makes it, minus the server's parts (sudo, owner keys,
 //! daily caps). The harness is the user's own `claude`: on its own login, or on the provider and key
 //! `rookery config` set (config.rs).
-use crate::text::{fmt, marker, prompt};
+use crate::text::{fmt, marker, prompt, unfence};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -200,6 +200,26 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
     job.step("claude", json!({"key": key, "status": status, "usd": usd, "agent": slot["agent"], "skills": slot["skills"],
                               "model": model, "sid": sid, "provider": provider, "secs": started.elapsed().as_secs_f64()}));
     out?;
+    if m.is_none() && !text.is_empty() && !(job.max_usd > 0.0 && job.spent >= job.max_usd) {
+        // asked once more, in the same session, for the line alone (the server: deepseek left it
+        // out of a whole review). Still parsed, never inferred; the first reply is the reply.
+        let at = cmd.iter().position(|a| a == "--session-id" || a == "--resume").unwrap();
+        cmd[at] = "--resume".into();
+        let started = Instant::now();
+        let again = run(&cmd, &prompt("no-marker"), cwd, &env);
+        let usd = again.as_ref().ok().and_then(|v| crate::config::cost(v, &provider).ok()).unwrap_or(0.0);
+        job.spent += usd;
+        let line = again.as_ref().ok().and_then(|v| marker(v["result"].as_str().unwrap_or("")));
+        let status = line.as_ref().map_or(if again.is_ok() { "no-marker" } else { "failed" }, |l| l.0.as_str());
+        // no sid: the transcript is the first call's, read once
+        job.step("claude", json!({"key": format!("{key}/status"), "status": status, "usd": usd, "agent": slot["agent"],
+                                  "skills": slot["skills"], "model": model, "provider": provider,
+                                  "secs": started.elapsed().as_secs_f64()}));
+        if let Some((status, _)) = line {
+            let reply = text.trim();
+            return Ok((status, unfence(reply).map_or(reply, str::trim).to_string()));
+        }
+    }
     m.ok_or_else(|| format!("no STATUS marker in agent reply:\n{}", tail(&text, 1500)))
 }
 

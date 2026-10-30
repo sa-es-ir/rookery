@@ -1,6 +1,6 @@
 [package]
 name = "rookery-cli"   # `rookery` on crates.io is a 2023 placeholder; the binary keeps the name
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Rookery on your own machine: plan, approve, and let Claude Code implement it task by task."
 license = "AGPL-3.0-only"
