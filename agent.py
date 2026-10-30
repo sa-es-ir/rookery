@@ -1574,8 +1574,11 @@ def follow_up(c, job, note):
     p, d = plans(c, wt)
     try:
         with frozen(p / "tasks.md"):   # a follow-up adds no tasks, so every tick still reduces the open count
-            status, msg = claude(c, FOLLOW_UP.format(n=c.n, d=d, base=c.base, url=pr["url"], note=note,
-                                                     merge=merge), key="follow-up", per_job=True, wt=wt)
+            status, msg = claude(c, FOLLOW_UP.format(
+                source=f"GitHub issue #{c.n}", handoff=f"its draft pull request\n{pr['url']} is open",
+                who="Someone with write access commented on the issue", since=f"origin/{c.base}",
+                posts="posts that text on the issue", d=d, base=c.base, note=note, merge=merge),
+                key="follow-up", per_job=True, wt=wt)
         if status not in FOLLOW_VERDICTS:
             raise RuntimeError(f"the follow-up replied `STATUS: {status}`; it replies {', '.join(FOLLOW_VERDICTS)}.")
         if status == "failed":

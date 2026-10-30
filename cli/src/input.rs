@@ -5,9 +5,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, queue, terminal};
 use std::io::{self, Write};
 
-const HINT: &str = "/ for commands · tab completes · ↑↓ history · ctrl+d to exit";
+const HINT: &str = "/ for commands · tab completes · ↑↓ history · ctrl+c twice to exit";
+const AGAIN: &str = "press ctrl+c again to exit";
 
-/// One typed line, or None for Ctrl-D, or Ctrl-C on an empty line. On Enter the box is erased
+/// One typed line, or None for Ctrl-D, or Ctrl-C twice in a row on an empty line (the first one
+/// says so in the hint, so a stray one never leaves). On Enter the box is erased
 /// and the line stays as `> line`, so what the command prints follows it. `commands` are
 /// (`/name`, what it does), listed once a `/` starts the line, while its first word is typed.
 pub fn line(history: &[String], placeholder: &str, commands: &[(String, String)]) -> io::Result<Option<String>> {
@@ -30,11 +32,11 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hi
     let mut out = io::stdout();
     let paint = crate::colour();
     let (mut buf, mut at, mut back) = (Vec::<char>::new(), 0, 0);
-    let mut drawn = false;
+    let (mut drawn, mut armed) = (false, false);
     loop {
         let w = terminal::size().map_or(80, |(w, _)| w as usize);
         let shown = if mask { vec!['•'; buf.len()] } else { buf.clone() };
-        let (text, col, below) = frame(&shown, at, placeholder, commands, hint, w, paint);
+        let (text, col, below) = frame(&shown, at, placeholder, commands, if armed { AGAIN } else { hint }, w, paint);
         if drawn {
             queue!(out, cursor::MoveUp(1))?;
         }
@@ -50,8 +52,11 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hi
             continue; // Windows reports the release too
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL) && !k.modifiers.contains(KeyModifiers::ALT); // AltGr is Ctrl+Alt
+        // any key but a second Ctrl-C disarms the exit
+        let was = std::mem::take(&mut armed);
         match k.code {
             KeyCode::Char('c') if ctrl && !buf.is_empty() && !mask => (buf.clear(), at = 0).1,
+            KeyCode::Char('c') if ctrl && !mask && !was => armed = true,
             KeyCode::Char('c' | 'd') if ctrl && (buf.is_empty() || mask) => {
                 queue!(out, cursor::MoveUp(1), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
                 out.flush()?;

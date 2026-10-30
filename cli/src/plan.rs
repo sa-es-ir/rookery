@@ -1,6 +1,7 @@
 //! `rookery new` and `rookery reply`: agent.py's plan() on a local item. The item's state is
 //! items/<n>/state.json (the server's phase labels, without `rookery:`); its plan files sit beside
 //! it, outside the worktree, never committed.
+use crate::cancel;
 use crate::claude::{self, Job};
 use crate::steer::{self, git};
 use crate::text::{cap, fmt, prompt, read_tasks};
@@ -83,7 +84,11 @@ pub fn item(r: &Repo, n: u64) -> PathBuf {
 
 pub fn load(r: &Repo, n: u64) -> Result<Value, String> {
     let t = fs::read_to_string(item(r, n).join("state.json")).map_err(|_| format!("there is no item #{n} in this repo"))?;
-    serde_json::from_str(&t).map_err(|e| format!("items/{n}/state.json: {e}"))
+    let st: Value = serde_json::from_str(&t).map_err(|e| format!("items/{n}/state.json: {e}"))?;
+    if st["phase"] == "dropped" {
+        return Err(format!("#{n} was dropped (rookery drop): its worktree and branch are gone"));
+    }
+    Ok(st)
 }
 
 pub fn save(r: &Repo, st: &Value) -> Result<(), String> {
@@ -232,14 +237,12 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
         log: Some(r.state.join("runs.jsonl")),
         ..Default::default()
     };
+    job.begin(r, if resume { "reply" } else { "plan" });
     let started = std::time::Instant::now();
     let out = (|| {
         // what steers the agent: the base branch as it is now, read once, never the worktree
         let (base, sha) = base_of(&r.root, st["base"].as_str().map(String::from))?;
-        let plug = job.scratch.join("plugin");
-        let s = steer::steer(&r.root, &base, &sha, &steer::rookery_home().join("defaults"), &plug)?;
-        job.step("base", json!({"base": base, "sha": sha, "claude_md": s.claude_md.len(), "sources": s.sources, "agents": s.agent_sources}));
-        (job.base, job.claude_md, job.sources, job.agents, job.plugin) = (base, s.claude_md, s.sources, s.agents, Some(plug));
+        let wf = job.pin(r, &base, &sha)?;
         set_phase(r, &job, &mut st, "planning")?;
         let wt = worktree(r, &st)?;
         let d = item(r, n).display().to_string();
@@ -251,8 +254,8 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
             fmt(&prompt("plan"), &[("source", source), ("repo", repo), ("title", st["title"].as_str().unwrap().into()),
                                    ("body", body.into()), ("d", d), ("max", cap("max_tasks").to_string()), ("box", "this machine".into())])
         };
-        println!("{}", paint("2", &format!("Planning with {} …", s.workflow["plan"]["agent"].as_str().map_or("sonnet".into(), |a| format!("rk:{a}")))));
-        let said = claude::claude(&mut job, &p, "plan", resume, &s.workflow["plan"], false, &wt);
+        println!("{}", paint("2", &format!("Planning with {} …", wf["plan"]["agent"].as_str().map_or("sonnet".into(), |a| format!("rk:{a}")))));
+        let said = claude::claude(&mut job, &p, "plan", resume, &wf["plan"], false, &wt);
         // after every plan call, failed or not: planning writes the plan files and nothing else
         let reverted = keep_plans_only(&wt)?;
         if !reverted.is_empty() {
@@ -286,7 +289,8 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
     let (phase, msg, tasks) = match out {
         Ok(o) => o,
         Err(e) => {
-            job.step("error", json!({"error": e}));
+            let (what, e) = cancel::why(e);
+            job.step(what, json!({"error": e}));
             st["error"] = json!(e);
             let _ = set_phase(r, &job, &mut st, "error");
             println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), phase_paint("error"), paint("2", &cost));

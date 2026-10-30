@@ -130,6 +130,30 @@ _why_, not only _what_. Follow the issue's `rookery:*` label to see where it is:
 
 Full guide: [docs/getting-started.md](docs/getting-started.md).
 
+### Local CLI — preview
+
+The same flow on your own machine, against a local git repo: no GitHub App, no webhook,
+no account. Rookery plans in its own worktree, waits for your approve, then runs each task
+in a fresh Claude session and commits it. Nothing is pushed.
+
+You need `git`, the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in)
+and, until release binaries ship, a [Rust toolchain](https://rustup.rs).
+
+```bash
+cargo install --path cli           # installs the `rookery` binary
+cd ~/code/my-repo
+rookery doctor                     # checks git, claude and the repo (one ~$0.01 call)
+rookery new "add a --json flag"    # plan; it asks, or shows the tasks
+rookery reply 1 "use serde"        # answer its questions
+rookery approve 1                  # run the tasks, the after steps and the review
+rookery ask 1 "rename the flag"    # a question gets an answer; a change is committed and reviewed
+rookery review                     # advisory review of the current branch
+```
+
+Run `rookery` alone for an interactive prompt. `ls`, `show`, `log`, `drop` and `memory`
+manage items, runs and repo notes; Ctrl-C stops a run and keeps what is committed. The CLI
+is a preview: release binaries are not built yet.
+
 ### Self-host
 
 You need Python 3.10+, `git`, `openssl`, the [`gh`](https://cli.github.com) CLI and the
@@ -227,6 +251,7 @@ Details: [docs/safety.md](docs/safety.md).
 - [x] Per-repo workflows, custom agents and skills, owner defaults
 - [x] PR reviews on request, follow-ups, repo memory
 - [x] Multiple model providers and bring-your-own-key
+- [ ] Local CLI — preview (plan, approve, follow-ups, review, memory); next: release binaries
 - [ ] OpenRouter (GPT, Gemini) — after tool-use quality tests
 - [ ] Claude on Bedrock — when an owner asks
 - [ ] A second harness (Codex CLI) — on demand

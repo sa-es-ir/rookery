@@ -4,7 +4,7 @@
 //! range, with pr_diff() and reviewed_at().
 use crate::claude::{self, Job, tail};
 use crate::plan::{dirty, print_md, wt_root};
-use crate::steer::{self, git, git_text};
+use crate::steer::{git, git_text};
 use crate::text::{DEFAULTS, cap, fmt, prompt};
 use crate::{paint, repo};
 use regex::Regex;
@@ -131,6 +131,7 @@ pub fn review(spec: Option<String>, note: Option<String>, mcp: bool) -> Result<(
         log: Some(r.state.join("runs.jsonl")),
         ..Default::default()
     };
+    job.begin(&r, "review");
     job.step("review", json!({"base": base, "ref": head, "head": head_sha, "since": since, "note": note.is_some()}));
     // agent.py's reviewed_at(): kept only once rendered, so a file here is a review that ended ok.
     // Keyed by the merge base, not base's tip: base moving on does not change the diff.
@@ -152,14 +153,11 @@ pub fn review(spec: Option<String>, note: Option<String>, mcp: bool) -> Result<(
     }
     println!("{} {base}...{head}  {}", paint("1", "Review"), paint("2", &format!("({short}, {} commit(s))", commits.lines().count())));
     let started = std::time::Instant::now();
-    // ponytail: a review stopped by Ctrl-C leaves its worktree until the same head is reviewed again; `drop` (step 5) if they pile up
+    // a review that is killed outright (a second Ctrl-C, a crash) leaves its worktree; the same head's next review removes it
     let wt = wt_root(&r).join(format!("review-{}", &head_sha[..12]));
     let out = (|| {
         // what steers the reviewer: the base branch as it is now, never the ref under review
-        let plug = job.scratch.join("plugin");
-        let s = steer::steer(&r.root, &base, &base_sha, &steer::rookery_home().join("defaults"), &plug)?;
-        job.step("base", json!({"base": base, "sha": base_sha, "claude_md": s.claude_md.len(), "sources": s.sources, "agents": s.agent_sources}));
-        (job.base, job.claude_md, job.sources, job.agents, job.plugin) = (base.clone(), s.claude_md, s.sources, s.agents, Some(plug));
+        let wf = job.pin(&r, &base, &base_sha)?;
         drop_wt(&r.root, &wt)?;
         fs::create_dir_all(wt.parent().unwrap()).map_err(|e| e.to_string())?;
         git(&r.root, &["worktree", "add", "--detach", &wt.to_string_lossy(), &head_sha])?;
@@ -172,7 +170,7 @@ pub fn review(spec: Option<String>, note: Option<String>, mcp: bool) -> Result<(
             ("head", format!("{head} at {short}")), ("since", since_.into()), ("posts", "shows".into()),
             ("wt", wt.display().to_string()), ("diff", pr_diff(&wt, since_, cap("diff_cap") as usize)?),
         ]);
-        let rs = &s.workflow["pr-review"];
+        let rs = &wf["pr-review"];
         let (verdict, text) = claude::claude(&mut job, &p, "pr-review", false, rs, true, &wt)?;
         let by = rs["agent"].as_str().into_iter().chain(rs["skills"].as_array().unwrap().iter().filter_map(Value::as_str))
             .map(|k| format!("rk:{k}")).collect::<Vec<_>>().join(" · ");
@@ -182,9 +180,11 @@ pub fn review(spec: Option<String>, note: Option<String>, mcp: bool) -> Result<(
     let _ = drop_wt(&r.root, &wt);
     let _ = fs::remove_dir_all(&job.scratch);
     let cost = paint("2", &format!("${:.2} · {:.0} s", job.spent, started.elapsed().as_secs_f64()));
-    let (verdict, t) = out.inspect_err(|e| {
-        job.step("error", json!({"error": e}));
+    let (verdict, t) = out.map_err(|e| {
+        let (what, e) = crate::cancel::why(e);
+        job.step(what, json!({"error": e}));
         println!("{cost}");
+        e
     })?;
     fs::create_dir_all(saved.parent().unwrap()).map_err(|e| e.to_string())?;
     fs::write(&saved, &t).map_err(|e| e.to_string())?;

@@ -45,6 +45,27 @@ impl Job {
             let _ = writeln!(f, "{line}");
         }
     }
+
+    /// The run's first step, which `rookery log` reads its kind from. It is also the run the
+    /// repo notes learn from once the command ends (memory::after()).
+    pub fn begin(&self, r: &crate::Repo, kind: &str) {
+        self.step("begin", json!({"kind": kind}));
+        crate::memory::ran(r, self.n, self.run);
+    }
+
+    /// agent.py's pin(): what steers the agent, from `base` at `sha`, read once at the run's
+    /// start, never from the worktree; the repo notes with it. Logged as the `base` step.
+    /// -> the workflow.
+    pub fn pin(&mut self, r: &crate::Repo, base: &str, sha: &str) -> Result<Value, String> {
+        let plug = self.scratch.join("plugin");
+        let s = crate::steer::steer(&r.root, base, sha, &crate::steer::rookery_home().join("defaults"), &plug)?;
+        let (memory, said) = crate::memory::load(r, &s);
+        self.step("base", json!({"base": base, "sha": sha, "claude_md": s.claude_md.len(), "sources": s.sources,
+                                 "agents": s.agent_sources, "memory": said}));
+        (self.base, self.claude_md, self.memory, self.sources, self.agents, self.plugin) =
+            (base.into(), s.claude_md, memory, s.sources, s.agents, Some(plug));
+        Ok(s.workflow)
+    }
 }
 
 pub fn now() -> f64 {
@@ -127,6 +148,9 @@ pub fn argv(job: &Job, prompt_: &str, key: &str, resume: bool, slot: &Value, per
 /// -> (STATUS, the reply without it). Checks --max-usd first, logs the call either way.
 pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Value, per_job: bool, cwd: &Path)
               -> Result<(String, String), String> {
+    if crate::cancel::cancelled() {
+        return Err(crate::cancel::CANCELLED.into());
+    }
     if job.max_usd > 0.0 && job.spent >= job.max_usd {
         return Err(format!("This run hit its --max-usd of ${:.2} (spent ${:.2}). Nothing more ran; \
                             run it again with a higher --max-usd to go on.", job.max_usd, job.spent));
@@ -281,9 +305,12 @@ fn run(cmd: &[String], input: &str, cwd: &Path, env: &[(String, String)]) -> Res
         // a bearer token of the user's own would be sent in place of the provider's key
         c.env_remove("ANTHROPIC_AUTH_TOKEN").envs(env.iter().map(|(k, v)| (k, v)));
     }
+    crate::cancel::detach(&mut c);
     let mut child = c.args(cmd).current_dir(cwd)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("could not start claude: {e}"))?;
+    // Ctrl-C kills this call and all it started; dropped once it ends, which takes its orphans
+    let _tree = crate::cancel::guard(&child);
     let mut stdin = child.stdin.take().unwrap();
     let input = input.to_string();
     // from a thread: a prompt bigger than the pipe's buffer would block us while claude writes
@@ -304,6 +331,9 @@ fn run(cmd: &[String], input: &str, cwd: &Path, env: &[(String, String)]) -> Res
     let status = child.wait().map_err(|e| e.to_string())?;
     let _ = writer.join();
     let stderr = errs.join().unwrap_or_default();
+    if crate::cancel::cancelled() {
+        return Err(crate::cancel::CANCELLED.into());
+    }
     if !status.success() || result.as_ref().is_some_and(|j| j["is_error"] == true) {
         // an API error ("Invalid API key") is the result event, on stdout
         let said = result.as_ref().and_then(|j| j["result"].as_str()).map(String::from)

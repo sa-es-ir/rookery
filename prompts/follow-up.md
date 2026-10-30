@@ -1,10 +1,9 @@
-GitHub issue #{n} is implemented, and its draft pull request
-{url} is open. Someone with write access commented on the issue:
+{source} is implemented, and {handoff}. {who}:
 
 {note}
 
 The approved plan is {d}/plan.md, and {d}/decisions.md holds the trade-offs
-recorded so far. The change so far is `git diff origin/{base}...HEAD`.
+recorded so far. The change so far is `git diff {since}...HEAD`.
 {merge}
 If the comment asks a question, answer it and change nothing. If it asks for a
 change, make it in this worktree. Leave {d}/tasks.md alone: the task list is
@@ -26,4 +25,4 @@ End your reply with the marker on a line of its own, with nothing else on
 that line: `STATUS: answered`, `STATUS: changed` or `STATUS: failed`.
 `answered` means you changed nothing, and the text above the marker is the
 answer. `changed` means you made the change, and the text above the marker is
-one short paragraph on what changed. Rookery posts that text on the issue.
+one short paragraph on what changed. Rookery {posts}.

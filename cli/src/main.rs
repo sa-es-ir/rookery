@@ -1,10 +1,13 @@
 //! `rookery`: Rookery's flow — plan, approve, a fresh claude session per task, the orchestrator
 //! ticks and commits, an advisory review — on a local git repo. No GitHub, no server.
 mod approve;
+mod cancel;
 mod claude;
 mod config;
 mod input;
+mod items;
 mod logo;
+mod memory;
 mod plan;
 mod review;
 mod steer;
@@ -70,6 +73,20 @@ enum Cmd {
         #[arg(long)]
         mcp: bool,
     },
+    /// Ask about an implemented item, or ask for a change: an answer changes nothing, a change is committed and reviewed again
+    Ask {
+        /// The item's number
+        n: u64,
+        /// Your question or the change you want (the rest of the line; no quotes needed)
+        #[arg(required = true, num_args = 1..)]
+        note: Vec<String>,
+        /// Stop before a call once the run has spent this many dollars [default: max_usd in ~/.rookery/config.json, else no cap]
+        #[arg(long)]
+        max_usd: Option<f64>,
+        /// Let the agent use your own MCP servers (never the repo's .mcp.json)
+        #[arg(long)]
+        mcp: bool,
+    },
     /// Review the commits on a branch since it left its base: advisory, read-only, nothing to approve
     Review {
         /// <base>..<ref>, <base>...<ref> or <ref>: both forms mean the commits on <ref> since it
@@ -87,6 +104,27 @@ enum Cmd {
     Show {
         /// The item's number
         n: u64,
+    },
+    /// List this repo's items: number, phase, tasks done and title
+    Ls,
+    /// The last runs, one line each; with an item's number, every run of it and its steps
+    Log {
+        /// The item's number
+        n: Option<u64>,
+    },
+    /// Remove an item's worktree and branch; refused while they hold work that is nowhere else
+    Drop {
+        /// The item's number
+        n: u64,
+        /// Drop it even with uncommitted changes, or commits on no other branch and no remote
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the notes rookery keeps about this repo for its agents, or forget them
+    Memory {
+        /// Delete the notes; the next run starts new ones
+        #[arg(long)]
+        clear: bool,
     },
     /// Pick the provider every claude call runs on (your Claude login, or an API key), and add its key
     Config {
@@ -106,6 +144,7 @@ enum Cmd {
 
 /// The repo rookery runs in. Its state lives in the git common dir, so it is never committed,
 /// every worktree shares it, and it goes when the repo goes.
+#[derive(Clone)]
 pub struct Repo {
     pub root: PathBuf,
     pub state: PathBuf,
@@ -237,7 +276,16 @@ fn doctor(base: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// One command; Ctrl-C cancels it, and the repo notes learn from the run it made once it ends.
 fn run(cmd: Cmd) -> Result<(), String> {
+    cancel::during(|| {
+        let out = command(cmd);
+        memory::after();
+        out
+    })
+}
+
+fn command(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Doctor { base } => doctor(base),
         Cmd::New { title, body, file, base, mcp } => {
@@ -250,7 +298,12 @@ fn run(cmd: Cmd) -> Result<(), String> {
         Cmd::Reply { n, text, mcp } => plan::reply(n, &text.join(" "), mcp),
         Cmd::Approve { n, max_usd, mcp } => approve::approve(n, max_usd, mcp),
         Cmd::Review { range, note, mcp } => review::review(range, note, mcp),
+        Cmd::Ask { n, note, max_usd, mcp } => approve::ask(n, &note.join(" "), max_usd, mcp),
         Cmd::Show { n } => approve::show(n),
+        Cmd::Ls => items::ls(),
+        Cmd::Log { n } => items::log(n),
+        Cmd::Drop { n, force } => items::drop_item(n, force),
+        Cmd::Memory { clear } => memory::memory(clear),
         Cmd::Config { provider, forget } => config::config(provider, forget),
     }
 }
@@ -259,7 +312,8 @@ const GUIDE: &str = "\
 1. Describe a change. rookery writes a plan and a task list, and asks when something is unclear.
 2. Answer its questions, or approve the plan. Nothing is edited before you approve.
 3. Each task runs in a fresh Claude session in its own worktree; rookery commits each one.
-4. An advisory review runs at the end. Nothing is pushed: the branch is yours.";
+4. An advisory review runs at the end. Nothing is pushed: the branch is yours.
+5. Ask about the result, or ask for a change. Ctrl-C stops a run; what is committed stays.";
 
 /// The logo with the name beside it, all at once, when stdout is a colour terminal wide enough:
 /// 28 characters wide, from 70 columns; none below that, piped or under NO_COLOR.
@@ -300,19 +354,26 @@ fn guide() {
         Err(e) => println!("{}     {}", paint("1", "Repo"), paint("33", &format!("none: {e}. Start rookery inside a git repo."))),
     }
     println!("\n{}  {}", paint("1", "Commands"), paint("2", "(type /<command> here, or run `rookery <command>` from a shell)"));
-    for (name, about) in commands() {
+    // the flow's commands in full; the rest by name, so the guide stays short as commands grow
+    let (main, rest): (Vec<_>, Vec<_>) = commands().into_iter().partition(|(n, _)| FLOW.contains(&n.as_str()));
+    for (name, about) in main {
         println!("  {} {about}", paint("38;2;168;204;104", &format!("{name:<9}"))); // the logo's light green
     }
+    let rest: Vec<_> = rest.iter().map(|(n, _)| &n[1..]).filter(|n| *n != "help").collect();
+    println!("  {} Every command and its options; also {}", paint("38;2;168;204;104", &format!("{:<9}", "/help")), rest.join(", "));
     println!();
 }
+
+/// The commands the guide lists in full: the flow, in order. The rest are named after /help.
+const FLOW: [&str; 5] = ["/new", "/reply", "/approve", "/ask", "/review"];
 
 /// What can be typed at the prompt, as (/name, what it does): clap's commands, then help and exit.
 fn commands() -> Vec<(String, String)> {
     let mut all: Vec<_> = Cli::command().get_subcommands()
         .map(|c| (format!("/{}", c.get_name()), c.get_about().map(|a| a.to_string()).unwrap_or_default())).collect();
-    all.push(("/help".into(), "Show a command's options: /help <command>".into()));
+    all.push(("/help".into(), "List every command, or show one's options: /help <command>".into()));
     all.push(("/clear".into(), "Clear the screen and this prompt's history, and start fresh".into()));
-    all.push(("/exit".into(), "Leave rookery (or Ctrl-D)".into()));
+    all.push(("/exit".into(), "Leave rookery (or Ctrl-C twice, or Ctrl-D)".into()));
     all
 }
 
@@ -389,6 +450,7 @@ fn prompt() {
 }
 
 fn main() -> ExitCode {
+    cancel::install();
     let Some(cmd) = Cli::parse().cmd else {
         prompt();
         return ExitCode::SUCCESS;
