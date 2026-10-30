@@ -130,17 +130,28 @@ _why_, not only _what_. Follow the issue's `rookery:*` label to see where it is:
 
 Full guide: [docs/getting-started.md](docs/getting-started.md).
 
-### Local CLI — preview
+### Local CLI
 
 The same flow on your own machine, against a local git repo: no GitHub App, no webhook,
 no account. Rookery plans in its own worktree, waits for your approve, then runs each task
 in a fresh Claude session and commits it. Nothing is pushed.
 
-You need `git`, the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in)
-and, until release binaries ship, a [Rust toolchain](https://rustup.rs).
+You need `git` and the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in,
+or an API key through `rookery config`). Install the `rookery` binary:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sa-es-ir/rookery/releases/latest/download/rookery-cli-installer.ps1 | iex"
+```
 
 ```bash
-cargo install --path cli           # installs the `rookery` binary
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sa-es-ir/rookery/releases/latest/download/rookery-cli-installer.sh | sh
+# or, with a Rust toolchain
+cargo install rookery-cli --locked
+```
+
+```bash
 cd ~/code/my-repo
 rookery doctor                     # checks git, claude and the repo (one ~$0.01 call)
 rookery new "add a --json flag"    # plan; it asks, or shows the tasks
@@ -151,8 +162,8 @@ rookery review                     # advisory review of the current branch
 ```
 
 Run `rookery` alone for an interactive prompt. `ls`, `show`, `log`, `drop` and `memory`
-manage items, runs and repo notes; Ctrl-C stops a run and keeps what is committed. The CLI
-is a preview: release binaries are not built yet.
+manage items, runs and repo notes; Ctrl-C stops a run and keeps what is committed.
+Full guide: [docs/cli.md](docs/cli.md).
 
 ### Self-host
 
@@ -251,7 +262,7 @@ Details: [docs/safety.md](docs/safety.md).
 - [x] Per-repo workflows, custom agents and skills, owner defaults
 - [x] PR reviews on request, follow-ups, repo memory
 - [x] Multiple model providers and bring-your-own-key
-- [ ] Local CLI — preview (plan, approve, follow-ups, review, memory); next: release binaries
+- [x] Local CLI (plan, approve, follow-ups, review, memory) for Windows, macOS and Linux
 - [ ] OpenRouter (GPT, Gemini) — after tool-use quality tests
 - [ ] Claude on Bedrock — when an owner asks
 - [ ] A second harness (Codex CLI) — on demand

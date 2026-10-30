@@ -6,24 +6,26 @@ use std::sync::LazyLock;
 
 // the ones a local run sends; the server-only ones (with-*, not-mounted, follow-merged/-conflicts) stay out
 const PROMPTS: &[(&str, &str)] = &[
-    ("plan", include_str!("../../prompts/plan.md")),
-    ("reply", include_str!("../../prompts/reply.md")),
-    ("task", include_str!("../../prompts/task.md")),
-    ("review", include_str!("../../prompts/review.md")),
-    ("check", include_str!("../../prompts/check.md")),
-    ("write", include_str!("../../prompts/write.md")),
-    ("pr-review", include_str!("../../prompts/pr-review.md")),
-    ("follow-up", include_str!("../../prompts/follow-up.md")),
-    ("use-skill", include_str!("../../prompts/use-skill.md")),
-    ("offer-skills", include_str!("../../prompts/offer-skills.md")),
-    ("memory-note", include_str!("../../prompts/memory-note.md")),
-    ("system", include_str!("../../prompts/system.md")),
-    ("remember", include_str!("../../prompts/remember.md")),
-    ("rewrite", include_str!("../../prompts/rewrite.md")),
+    ("plan", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/plan.md"))),
+    ("reply", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/reply.md"))),
+    ("task", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/task.md"))),
+    ("review", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/review.md"))),
+    ("check", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/check.md"))),
+    ("write", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/write.md"))),
+    ("pr-review", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/pr-review.md"))),
+    ("follow-up", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/follow-up.md"))),
+    ("use-skill", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/use-skill.md"))),
+    ("offer-skills", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/offer-skills.md"))),
+    ("memory-note", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/memory-note.md"))),
+    ("system", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/system.md"))),
+    ("remember", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/remember.md"))),
+    ("rewrite", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/rewrite.md"))),
 ];
 
-pub static DEFAULTS: LazyLock<Value> =
-    LazyLock::new(|| serde_json::from_str(include_str!("../../prompts/defaults.json")).expect("prompts/defaults.json"));
+pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/defaults.json")))
+        .expect("prompts/defaults.json")
+});
 
 /// prompts/<name>.md as agent.py reads it: a CRLF checkout reads as LF there too.
 pub fn prompt(name: &str) -> String {

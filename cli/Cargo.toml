@@ -3,7 +3,11 @@ name = "rookery-cli"   # `rookery` on crates.io is a 2023 placeholder; the binar
 version = "0.1.0"
 edition = "2024"
 description = "Rookery on your own machine: plan, approve, and let Claude Code implement it task by task."
-publish = false        # until the licence question is settled (ai-plans/local-cli.md)
+license = "AGPL-3.0-only"
+repository = "https://github.com/sa-es-ir/rookery"
+homepage = "https://rookery.run"
+# embed/ is prompts/, agents/ and skills/, copied in by the release so the packaged crate builds alone (build.rs)
+include = ["src/**", "build.rs", "Cargo.toml", "Cargo.lock", "embed/**"]
 
 [[bin]]
 name = "rookery"
@@ -23,3 +27,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

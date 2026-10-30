@@ -1,0 +1,21 @@
+# Called by release.yml (dist-workspace.toml: publish-jobs = ["./publish-crates"]) after the GitHub
+# release is hosted. The packaged crate has no repo root around it, so cli/build.rs reads the shared
+# prompts/, agents/ and skills/ from cli/embed/ (gitignored, in the crate's `include`).
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: mkdir cli/embed && cp -r prompts agents skills cli/embed/
+      - run: cargo publish --manifest-path cli/Cargo.toml --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
