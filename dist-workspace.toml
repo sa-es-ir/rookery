@@ -17,3 +17,7 @@ install-path = "CARGO_HOME"
 install-updater = false
 # Publish jobs to run in CI
 publish-jobs = ["./publish-crates"]
+
+# macos-14 (dist's default for Apple silicon) is retired on 2026-11-02, with brownouts before it
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
