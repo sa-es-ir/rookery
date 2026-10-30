@@ -1,0 +1,76 @@
+[
+ {
+  "why": "the rest is the comment body",
+  "text": "Some questions\n\nSTATUS: questions\n1. which db?",
+  "status": "questions",
+  "reply": "Some questions\n\n\n1. which db?"
+ },
+ {
+  "why": "inline is not a marker",
+  "text": "the STATUS: plan-ready marker must be on its own line",
+  "status": null
+ },
+ {
+  "why": "haiku bolds it",
+  "text": "fine\n**STATUS: review-ok**\nmore",
+  "status": "review-ok",
+  "reply": "fine\n\nmore"
+ },
+ {
+  "why": "bold label only",
+  "text": "fine\n**STATUS:** review-ok\nmore",
+  "status": "review-ok",
+  "reply": "fine\n\nmore"
+ },
+ {
+  "why": "trailing spaces",
+  "text": "fine\nSTATUS: review-ok  \nmore",
+  "status": "review-ok",
+  "reply": "fine\n\nmore"
+ },
+ {
+  "why": "opus copies the backticks",
+  "text": "fine\n`STATUS: review-ok`\nmore",
+  "status": "review-ok",
+  "reply": "fine\n\nmore"
+ },
+ {
+  "why": "text after a bold marker",
+  "text": "**STATUS: review-ok** but see below",
+  "status": null
+ },
+ {
+  "why": "prod: text after the marker is not one",
+  "text": "STATUS: changed — merged it",
+  "status": null
+ },
+ {
+  "why": "prod: deepseek fenced its whole plan",
+  "text": "```\n**Plan**\n\n- one\n\nSTATUS: plan-ready\n```",
+  "status": "plan-ready",
+  "reply": "**Plan**\n\n- one"
+ },
+ {
+  "why": "two fences are not one wrapper",
+  "text": "```py\na = 1\n```\nSee above.\n```py\nb = 2\n```\nSTATUS: answered",
+  "status": "answered",
+  "reply": "```py\na = 1\n```\nSee above.\n```py\nb = 2\n```"
+ },
+ {
+  "why": "last line",
+  "text": "looks fine\nSTATUS: review-ok",
+  "status": "review-ok",
+  "reply": "looks fine"
+ },
+ {
+  "why": "first line",
+  "text": "STATUS: changes-needed\nbug in foo.py",
+  "status": "changes-needed",
+  "reply": "bug in foo.py"
+ },
+ {
+  "why": "CRLF reply",
+  "text": "first\r\nSTATUS: task-done\r\nlast",
+  "status": null
+ }
+]

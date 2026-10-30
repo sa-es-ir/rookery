@@ -1,0 +1,30 @@
+[
+ {
+  "text": "> ## Plan\n>     Reply `approve` to implement.\n\napprove",
+  "out": "\napprove"
+ },
+ {
+  "text": "> approve\n\nnot yet, use sqlite",
+  "out": "\nnot yet, use sqlite"
+ },
+ {
+  "text": "before\n```\ncode\n```\nafter",
+  "out": "before\n\nafter"
+ },
+ {
+  "text": "~~~\nunclosed fence",
+  "out": ""
+ },
+ {
+  "text": "  > indented quote\nkept",
+  "out": "kept"
+ },
+ {
+  "text": "a\n  ```py\nx\n  ```\nb",
+  "out": "a\n\nb"
+ },
+ {
+  "text": "",
+  "out": ""
+ }
+]

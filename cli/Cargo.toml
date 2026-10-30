@@ -1,0 +1,34 @@
+[package]
+name = "rookery-cli"   # `rookery` on crates.io is a 2023 placeholder; the binary keeps the name
+version = "0.1.0"
+edition = "2024"
+description = "Rookery on your own machine: plan, approve, and let Claude Code implement it task by task."
+license = "AGPL-3.0-only"
+repository = "https://github.com/sa-es-ir/rookery"
+homepage = "https://rookery.run"
+# embed/ is prompts/, agents/ and skills/, copied in by the release so the packaged crate builds alone (build.rs)
+include = ["src/**", "build.rs", "Cargo.toml", "Cargo.lock", "embed/**"]
+
+[[bin]]
+name = "rookery"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }   # slots in file order, as json.loads keeps them
+uuid = { version = "1", features = ["v5"] }
+
+# Ctrl-C kills a claude call's whole tree (cancel.rs): a job object on Windows, a process group elsewhere
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console",
+                                               "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

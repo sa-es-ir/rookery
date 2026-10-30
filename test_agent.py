@@ -19,20 +19,21 @@ assert not agent.APPROVE.match("approver should look first")
 assert agent.APPROVE.match(agent.unquoted("> ## Plan\n>     Reply `approve` to implement.\n\napprove"))
 assert not agent.APPROVE.match(agent.unquoted("> approve\n\nnot yet, use sqlite"))
 
+# fixtures/*.json: golden cases the local CLI (cli/) runs too, so the two pipelines cannot drift
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+fixture = lambda name: json.loads((agent.HERE / "fixtures" / name).read_text(encoding="utf-8"))
+for f in fixture("unquoted.json"):
+    assert agent.unquoted(f["text"]) == f["out"], f
+for f in fixture("format.json"):   # the prompts are str.format templates: the CLI's renderer must agree
+    assert f["template"].format(**f["args"]) == f["out"], f["why"]
+
 # STATUS marker is parsed, never inferred; the rest is the comment body
-m = agent.MARKER.search("Some questions\n\nSTATUS: questions\n1. which db?")
-assert m and m.group(1) == "questions"
-assert not agent.MARKER.search("the STATUS: plan-ready marker must be on its own line")
-for line in ("**STATUS: review-ok**", "**STATUS:** review-ok", "STATUS: review-ok  ", "`STATUS: review-ok`"):   # prod: haiku bolds it, opus copies the backticks
-    m = agent.MARKER.search(f"fine\n{line}\nmore")
-    assert m and m.group(1) == "review-ok", line
-    assert (m.string[:m.start()] + m.string[m.end():]) == "fine\n\nmore", "the whole line is stripped"
-assert not agent.MARKER.search("**STATUS: review-ok** but see below")
-assert not agent.MARKER.search("STATUS: changed — merged it")   # prod: text after the marker is not one
-fenced = "```\n**Plan**\n\n- one\n\nSTATUS: plan-ready\n```"   # prod: deepseek fenced its whole plan
-assert agent.unmark(fenced, agent.MARKER.search(fenced)) == "**Plan**\n\n- one"
-code = "```py\na = 1\n```\nSee above.\n```py\nb = 2\n```\nSTATUS: answered"
-assert agent.unmark(code, agent.MARKER.search(code)) == code[:code.index("\nSTATUS")], "two fences are not one wrapper"
+for f in fixture("marker.json"):
+    m = agent.MARKER.search(f["text"])
+    assert (m and m.group(1)) == f["status"] or not m and f["status"] is None, f
+    assert not m or agent.unmark(f["text"], m) == f["reply"], f
 
 # a PR comment addresses Rookery by @AGENT_USER, never in a quote or code; the rest is the note
 assert agent.mention("@Rookery-Agent look hard at the migration") == "look hard at the migration"
@@ -59,35 +60,20 @@ assert agent.ctx("o/other", 7).base == "develop"
 
 # task list: parsed by the orchestrator, ticked by the orchestrator
 import tempfile  # noqa: E402
-from pathlib import Path  # noqa: E402
 
 wt = Path(tempfile.mkdtemp())
 d = wt / agent.pdir(7)
 d.mkdir(parents=True)
-(d / "tasks.md").write_text("""# Tasks
-
-- [x] scaffold the module
-- [ ] wire the handler
-* [ ] add the test
-
-Not a task: - [ ] inline mention, and `- [ ] ` in prose.
-""", encoding="utf-8")
-
-tasks = agent.read_tasks(d)
-assert [t[1] for t in tasks] == [True, False, False], tasks
-assert [t[2] for t in tasks] == ["scaffold the module", "wire the handler", "add the test"]
-
-first_open = next(t for t in tasks if not t[1])
-agent.tick(d, first_open[0])
-after = agent.read_tasks(d)
-assert [t[1] for t in after] == [True, True, False]
-assert [t[2] for t in after] == [t[2] for t in tasks], "ticking must not disturb the text"
-assert "- [x] wire the handler" in (d / "tasks.md").read_text(encoding="utf-8")
-
-# every tick strictly reduces the open count, so the loop terminates
-for at, _, _ in [t for t in after if not t[1]]:
-    agent.tick(d, at)
-assert not [t for t in agent.read_tasks(d) if not t[1]]
+for f in fixture("tasks.json"):
+    (d / "tasks.md").write_text(f["text"], encoding="utf-8", newline="")
+    tasks = agent.read_tasks(d)
+    assert [[done, t] for _, done, t in tasks] == f["tasks"], f
+    agent.tick(d, tasks[f["tick"]][0])
+    assert (d / "tasks.md").read_text(encoding="utf-8") == f["ticked"], "ticking must not disturb the text"
+    # every tick strictly reduces the open count, so the loop terminates
+    for at, _, _ in [t for t in agent.read_tasks(d) if not t[1]]:
+        agent.tick(d, at)
+    assert not [t for t in agent.read_tasks(d) if not t[1]]
 # a PR body's task line: the first sentence, plain, cut at a word; the task under it, folded
 assert agent.summary("Add `X` to `a.csproj`. Then run the build.") == "Add X to a.csproj."
 assert agent.summary("word " * 40).endswith("word…") and len(agent.summary("word " * 40)) <= agent.SUMMARY_CAP
@@ -112,33 +98,24 @@ assert cat == ["changelog", "repo-recon", "security-review", "systematic-debuggi
                "verification-before-completion"]
 for name in cat:
     assert agent.frontmatter(agent.HERE / "skills" / name / "SKILL.md", agent.SKILL_KEYS, name)["name"] == name
-assert agent.MARKER.search("looks fine\nSTATUS: review-ok").group(1) == "review-ok"
-assert agent.MARKER.search("STATUS: changes-needed\nbug in foo.py").group(1) == "changes-needed"
 
-# PR review: the model returns JSON, the orchestrator writes the markdown and holds the caps
-import json  # noqa: E402
-
-
-def rv(verdict, review, raw=False):
-    return agent.render_review(verdict, review if raw else f"prose\n<review>{json.dumps(review)}</review>", "rk:x")
-out = rv("minor-changes", {"summary": "Mostly fine.", "answer": "yes\nit is",
-                           "findings": [{"severity": "medium", "where": "a.py:3", "title": "a | b\nc",
-                                         "detail": "why"}, {"severity": "low", "title": "nit"}]})
-assert out.startswith("## 🟡 Minor changes\n\n🔎 **2 findings** · 🟡 1 medium · ⚪ 1 low\n\nMostly fine.\n\n"
-                      "> **Your note:** yes\n> it is\n\n"), out
-assert "| 1 | 🟡 medium | `a.py:3` | a \\| b c |\n| 2 | ⚪ low |  | nit |" in out, "| escaped, one line per row"
-assert "<details><summary>Details</summary>\n\n**1. a \\| b c**\n\nwhy\n\n</details>" in out and "**2." not in out
-assert "prose" not in out and out.endswith("<sub>rk:x</sub>\n")
-out = rv("safe-to-merge", {"summary": "Sound.", "answer": "", "findings": []})
-assert out == "## 🟢 Safe to merge\n\n✅ **No findings**\n\nSound.\n\n<sub>rk:x</sub>\n", "no findings: said plainly"
-out = rv("changes-needed", {"summary": "s" * 900, "findings": [{"severity": "low", "title": "t" * 200,
-                                                               "detail": "d" * 900}] * 12})
-assert "s" * 599 + "…" in out and "t" * 149 + "…" in out and "d" * 799 + "…" in out and "| 10 |" in out
-assert "| 11 |" not in out and "2 more findings not shown." in out, "cut, never failed"
-assert "🔎 **12 findings** · ⚪ 12 low\n\n" in out, "the count is of all findings, not the ones shown"
-assert agent.UNCONFIRMED not in out, "no wt, no location check"
-fenced = '<review>\n```json\n{"summary": "ok", "findings": []}\n```\n</review>'
-assert rv("safe-to-merge", fenced, raw=True).startswith("## 🟢"), "a code fence inside the tags is tolerated"
+# PR review: the model returns JSON, the orchestrator writes the markdown and holds the caps.
+# With a worktree, a finding's `where` that is not in it is marked ❔, never dropped.
+rf = fixture("review.json")
+lw = Path(tempfile.mkdtemp())
+for p, t in rf["files"].items():
+    (lw / p).parent.mkdir(parents=True, exist_ok=True)
+    (lw / p).write_text(t, encoding="utf-8", newline="")
+for where, ok in rf["located"]:
+    assert agent.located(lw, where) is ok, (where, ok)
+for f in rf["render"]:
+    try:
+        out = agent.render_review(f["verdict"], f["text"], rf["by"], level=f["level"], wt=lw if f["wt"] else None,
+                                  verdicts={"pr": agent.PR_VERDICTS, "review": agent.REVIEW_VERDICTS,
+                                            "check": agent.CHECK_VERDICTS}[f["verdicts"]])
+        assert out == f.get("expect"), (f["why"], out)
+    except RuntimeError as e:
+        assert f.get("error") and f["error"] in str(e), (f["why"], e)
 # set_phase: a GitHub 500 on the label edit is retried (DotNet.RateLimit#52), a lasting one still raises
 sp_saved, edits, waits = (agent.gh, agent.labels_of, agent.time.sleep), [], []
 def flaky(repo, *args, **kw):
@@ -159,45 +136,6 @@ try:
 except RuntimeError as e:
     assert "Something went wrong" in str(e) and len(edits) == 3, edits
 agent.gh, agent.labels_of, agent.time.sleep = sp_saved
-unclosed = '<review>{"summary": "ok", "findings": [{"severity": "low", "title": "t"}]\n</review>'
-assert "| 1 | ⚪ low |" in rv("minor-changes", unclosed, raw=True), "a dropped last } is tolerated (Mantis#80)"
-for verdict, review, why in [("review-ok", {"summary": "s", "findings": []}, "it replies safe-to-merge"),
-                             ("safe-to-merge", "no tags here", "no <review> JSON"),
-                             ("safe-to-merge", "<review>{nope</review>", "does not parse"),
-                             ("safe-to-merge", {"findings": []}, "without a summary"),
-                             ("minor-changes", {"summary": "s", "findings": [{"severity": "huge", "title": "t"}]},
-                              "no title or severity"),
-                             ("safe-to-merge", {"summary": "s", "findings": [{"severity": "high", "title": "t"}]},
-                              "safe-to-merge but has a high finding")]:
-    try:
-        rv(verdict, review, raw=isinstance(review, str))
-        raise AssertionError(why)
-    except RuntimeError as e:
-        assert why in str(e), e
-# with a worktree, a `where` that is not in it is marked, never dropped
-lw = Path(tempfile.mkdtemp())
-(lw / "sub").mkdir()
-(lw / "a.py").write_text("1\n2\n3\n")
-(lw / "sub" / "b.py").write_text("x")
-for where, ok in [("a.py:3", True), ("a.py", True), ("sub/b.py:1", True), ("a.py:2-3, sub/b.py:L1", True),
-                  ("", True), ("the retry loop in foo()", True), ("`a.py:1`", True), ("sub/", True),
-                  ("a.py:4", False), ("a.py:0", False), ("nope.py:1", False), ("a.py:1, nope.py", False),
-                  ("../a.py", False), ("sub/:1", False)]:
-    assert agent.located(lw, where) is ok, (where, ok)
-out = agent.render_review("minor-changes", "<review>" + json.dumps(
-    {"summary": "s", "findings": [{"severity": "medium", "where": "a.py:2", "title": "real"},
-                                  {"severity": "low", "where": "ghost.py:9", "title": "guessed"}]}) + "</review>",
-    "rk:x", wt=lw)
-assert "| `a.py:2` | real |" in out and "| `ghost.py:9` ❔ | guessed |" in out, out
-assert agent.UNCONFIRMED in out, "flagged, never dropped"
-
-# the implement-flow reviewer: same JSON, its own two verdicts, the same consistency rule
-try:
-    agent.render_review("review-ok", '<review>{"summary": "s", "findings": [{"severity": "high", "title": "t"}]}'
-                        '</review>', "rk:x", verdicts=agent.REVIEW_VERDICTS)
-    raise AssertionError("review-ok with a high finding")
-except RuntimeError as e:
-    assert "says review-ok but has a high finding" in str(e), e
 
 # planning writes agent-plans/<n>/ and nothing else — the rest is reverted
 import subprocess  # noqa: E402
@@ -791,20 +729,16 @@ def pin_error(files):
     finally:
         agent.finish("o/r", "failed")
 wf_error = lambda wf: pin_error({".rookery/workflow.json": wf if isinstance(wf, str) else json.dumps(wf)})
+for f in fixture("workflow.json"):   # workflow() alone; the rest of these need pin()'s plugin
+    try:
+        got = agent.workflow(f["given"], "x")
+        del got["with"]   # cross-repo: the server's only
+        assert got == f.get("expect"), (f["why"], got)
+    except RuntimeError as e:
+        assert f.get("error") and f["error"] in str(e), (f["why"], e)
 assert "not valid JSON" in wf_error("{"), "an invalid file fails, never falls back to the default"
-assert "top level" in wf_error({"before": []})
-assert "at most 5 steps" in wf_error({"after": [{"agent": f"a{i}", "mode": "check"} for i in range(6)]})
-assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer"}]})
-assert "needs an `agent` and a `mode`" in wf_error({"after": [{"agent": "reviewer", "mode": ["check"]}]})
-assert "needs an `agent` and a `mode`" in wf_error({"after": [{"mode": "write"}]})
-assert "`after[0]` is an object with only" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "x": 1}]})
-assert "names an agent twice" in wf_error({"after": [{"agent": "reviewer", "mode": "check"},
-                                                    {"agent": "reviewer", "mode": "write"}]})
 assert "`after[0]` names the agent `ghost`" in wf_error({"after": [{"agent": "ghost", "mode": "check"}]})
 assert "`after[0]` names the skill" in wf_error({"after": [{"agent": "reviewer", "mode": "check", "skills": ["nope"]}]})
-assert "a list of names" in wf_error({"task": {"skills": "verify"}})
-assert "must match" in wf_error({"task": {"skills": ["../../etc"]}})
-assert "must match" in wf_error({"plan": {"agent": ""}})
 assert "no skill by that name" in wf_error({"task": {"skills": ["test-drivn-development"]}})
 assert "no agent by that name" in wf_error({"review": {"agent": "ghost"}}), "--agent would ignore it silently"
 assert "`pr-review` names the agent `ghost`" in wf_error({"pr-review": {"agent": "ghost"}})
@@ -819,20 +753,14 @@ assert "must match" in pin_error({".claude/skills/verify/SKILL.md": "---\nname: 
 assert not list((agent.WORKSPACE / "plugins").rglob("job-*")), "a failed job's plugin dir is gone too"
 # frontmatter: an allowlist of top-level keys, however the YAML is laid out
 fm = agent.WORKSPACE / "x.md"
-def fm_error(text, keys=agent.SKILL_KEYS):
-    fm.write_text(text, encoding="utf-8")
+for f in fixture("frontmatter.json"):
+    fm.write_text(f["text"], encoding="utf-8", newline="")
     try:
-        agent.parse_agent(fm, "x") if keys == agent.AGENT_KEYS else agent.frontmatter(fm, keys, "x")
+        meta = agent.parse_agent(fm, "x") if f["kind"] == "agent" else agent.frontmatter(fm, agent.SKILL_KEYS, "x")
+        assert meta == f.get("meta"), (f["why"], meta)
     except RuntimeError as e:
-        return str(e)
-assert "`hooks`" in fm_error("---\n  name: x\n  hooks:\n    Stop: []\n---\n"), "an indented top level is still top"
-assert "`mcpServers`" in fm_error("---\nname: x\nmcpServers: {}\n---\n", agent.AGENT_KEYS)
-assert "`permissionMode`" in fm_error("---\nname: x\npermissionMode: bypassPermissions\n---\n", agent.AGENT_KEYS)
-assert "`model`" in fm_error("---\nname: x\nmodel: gpt-5\n---\n", agent.AGENT_KEYS)
-assert fm_error("---\nname: x\nargument-hint: [name]\ndisable-model-invocation: true\n---\n") is None
-assert "`context`" in fm_error("---\nname: x\ncontext: fork\n---\n")
-assert "filename" in fm_error("---\nname: y\n---\n", agent.AGENT_KEYS)
-assert fm_error("---\nname: x\ndescription: >\n  hooks: not a key\nskills:\n- a\n---\n", agent.AGENT_KEYS) is None
+        assert f.get("error") and f"`{f['error']}`" in str(e) or f.get("error") == "filename" and "filename" in str(e), \
+            (f["why"], e)
 
 # .rookery/agents on base: added to the plugin, or replacing a built-in role by name
 merge({".claude/skills/Bad_Name/SKILL.md": None, ".rookery/skills/verify/SKILL.md": "---\nname: verify\n---\n"})

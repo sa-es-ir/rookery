@@ -15,7 +15,13 @@ python agent.py owner/repo 12 @rookery-agent check the migration   # dry run: re
 ```
 
 There is no build, no lint, no dependency install — stdlib only, plus the `gh`, `claude`
-and `openssl` CLIs on PATH. The dry-run forms go through the same `handle()` as the webhook; only the
+and `openssl` CLIs on PATH. The exception is the local CLI in `cli/` (Rust, `docs/cli.md`):
+`cargo test --manifest-path cli/Cargo.toml` runs the same `fixtures/` as `test_agent.py`, so
+run both after changing `prompts/` or `fixtures/`. A release is a tag `rookery-cli-v<version>`
+(bump `cli/Cargo.toml` first): `.github/workflows/release.yml` builds the binaries and installers
+with `cargo-dist` (`dist-workspace.toml`; after a config change run `dist generate`, never edit
+`release.yml` by hand), then `publish-crates.yml` publishes `rookery-cli` to crates.io
+(`CARGO_REGISTRY_TOKEN` secret). The dry-run forms go through the same `handle()` as the webhook; only the
 transport differs, so use them instead of standing up smee to test a change.
 
 `.env` is gitignored and required at import time (`agent.py` reads
@@ -36,6 +42,14 @@ own queue in `queues`; the repo's daemon `worker()` is started lazily on its fir
 run in parallel, but within a repo it is still one job at a time — deliberate, since two jobs
 on one issue would race on its worktree and labels. A worker whose last job was `offboard`
 exits under `qlock`, so a job submitted at that moment gets a fresh worker, never a dead one.
+
+**The local CLI** (`cli/`, the `rookery` binary) is a second pipeline: the same flow on a local
+repo, with no GitHub, no App and no account. It compiles in `prompts/` and `agents/` + `skills/`
+(`build.rs`, `ROOKERY_SRC`): from the repo root here, from `cli/embed/` in the packaged crate,
+which the publish job copies in. So a flow change is made on both sides, and `fixtures/` holds them
+together. Items are numbered per repo in `<git-common-dir>/rookery/` (state, `runs.jsonl`, notes);
+worktrees under `~/.rookery/worktrees/`; it never pushes. What it ports and drops is in
+`docs/cli.md`.
 
 **This repo is the orchestrator, never the target.** `REPOS` maps `owner/name` → base branch
 and is never written to disk: `sync()` rebuilds it at startup from the App's installations
@@ -273,7 +287,7 @@ lists providers, overrides, owners and users, `POST /api/admin/provider` sets th
 one owner's override. For anyone else, signed in or not, every `/api/admin*` is a 404.
 
 **Providers.** `provider_for(repo)` → `(name, key id, key)` picks the backend behind every
-`claude` call from `PROVIDERS`: the owner's own selected key (`key:<owner>` in `settings` → a
+`claude` call from `PROVIDERS` (`providers` in `prompts/defaults.json`, shared with the CLI's `rookery config`): the owner's own selected key (`key:<owner>` in `settings` → a
 `keys` row), else `fallback()`: the owner's `provider:<owner>` row, else — only for an owner in
 `OWN` — the stored `provider` default, else `PROVIDER` (`.env`, default `claude`, the CLI's own
 `/login`); else it raises `NoKey`. Per owner, never per actor. `claude()` reads it **once** and
@@ -421,9 +435,15 @@ token. `auth(repo)` turns it into an `env=` for one `gh`/`git` call — `GH_TOKE
 
 ## Style
 
-Stdlib only; adding a dependency changes what this project is. Prompts are module-level
-`.format()` templates (`PLAN`, `REPLY`, `TASK`) — they are the interface to Claude, so treat
-their wording as code. `sh()` raises on non-zero; pass `check=False` for the cases (like
+Stdlib only; adding a dependency changes what this project is. Prompts are `.format()`
+templates (`PLAN`, `REPLY`, `TASK`) — they are the interface to Claude, so treat their wording
+as code. Every text a `claude` call is built from lives in `prompts/<name>.md` (LF, byte for
+byte: no trailing newline is added), and the defaults and verdict tables replies are held to in
+`prompts/defaults.json`; `agent.py` reads them at import into the same module-level names, and
+the local CLI (`cli/`) compiles them in. GitHub-side texts (comments, PR bodies) stay in
+`agent.py`. `fixtures/*.json` are golden cases (`MARKER`, tasks, `unquoted()`, `workflow()`,
+frontmatter, `render_review()`) that `test_agent.py` and the CLI's tests both run: change a
+behaviour there, and both sides must follow. `sh()` raises on non-zero; pass `check=False` for the cases (like
 `gh label create` on an existing label) where failure is expected.
 
 Phases 1–5 (GitHub App, onboarding

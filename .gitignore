@@ -8,3 +8,5 @@ __pycache__/
 ai-plans/
 # talk slides and notes: not part of the product
 presentation/
+cli/target/
+cli/embed/
