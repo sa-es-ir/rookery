@@ -285,20 +285,29 @@ agent.offboard("o/r")
 assert not clone.exists() and not agent.wt_root("o/r").exists(), "pushed work: the disk is freed"
 assert not agent.memory_file("o/r").exists(), "a repo that left takes its notes with it"
 
-# startup: every repo of every installation, across pages, with its default branch
-seen = []
-agent.onboard = lambda repo, base=None: seen.append((repo, base))
+# startup: every repo of every installation, across pages, with its default branch. Only the
+# listing: a cloned repo is live with no call of its own, a new one is onboarded on its queue
+seen, prior_submit, saved_repos = [], agent.submit, dict(agent.REPOS)
+agent.submit = seen.append
 agent.api = lambda method, path, bearer: (
     {"token": "ghs_i"} if method == "POST" else
     [{"id": 1}] if path.startswith("/app/installations") else
     {"repositories": [{"full_name": f"o/r{i}", "default_branch": "dev"}
-                      for i in range(100 if path.endswith("page=1") else 3)]})
+                      for i in (range(100) if path.endswith("page=1") else range(100, 103))]})
+agent.clone_dir("o/r1").mkdir(parents=True)
+agent.REPOS.clear()
 agent.sync()
-assert len(seen) == 103 and seen[0] == ("o/r0", "dev"), seen[:2]
+assert len(agent.REPOS) == 103 and agent.REPOS["o/r1"] == "dev" and agent.REPOS["o/r0"] == ""
+assert len(seen) == 102 and seen[0] == {"kind": "onboard", "repo": "o/r0", "base": "dev"}, seen[:2]
+assert "o/r1" not in [j["repo"] for j in seen], "already cloned: no onboarding, no label calls"
 agent.ONLY, seen[:] = {"o/r5"}, []   # REPOS_ONLY: a local instance serves only these
+agent.REPOS.clear()
 agent.sync()
-assert seen == [("o/r5", "dev")]
-agent.ONLY = set()
+assert list(agent.REPOS) == ["o/r5"] and [j["repo"] for j in seen] == ["o/r5"]
+agent.ONLY, agent.submit = set(), prior_submit
+agent.REPOS.clear()
+agent.REPOS.update(saved_repos)
+agent.rmtree(agent.clone_dir("o/r1"))
 
 # approval and replies: write/maintain/admin on *that* repo, looked up per comment
 import urllib.error  # noqa: E402

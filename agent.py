@@ -33,6 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import NamedTuple
@@ -2107,12 +2108,23 @@ def github(repo, since):
 # --- repos: onboarding and retention ----------------------------------------
 
 def sync():
-    """Rebuild REPOS from every installation of the App — GitHub is the source of truth."""
-    for inst in api_all("/app/installations", jwt()):
+    """Rebuild REPOS from every installation of the App — GitHub is the source of truth. Only the
+    listing runs here, a few calls per installation: a repo already cloned is live at once, a new
+    one is onboarded on its own queue, as an install event does, with its events queued behind it."""
+    def listed(inst):
         tok = api("POST", f"/app/installations/{inst['id']}/access_tokens", jwt())["token"]
-        for r in api_all("/installation/repositories", tok, "repositories"):
-            if wanted(r["full_name"]):
-                onboard(r["full_name"], r["default_branch"])
+        return api_all("/installation/repositories", tok, "repositories")
+    # installations are listed in parallel (a personal account is one each); REPOS is written here only
+    with ThreadPoolExecutor(16) as pool:
+        every = [r for rs in pool.map(listed, api_all("/app/installations", jwt())) for r in rs]
+    for r in every:
+        if not wanted(name := r["full_name"]):
+            continue
+        if clone_dir(name).exists():
+            REPOS[name] = r["default_branch"]
+        else:
+            REPOS[name] = ""   # "" until onboard() has run: steer() says "still cloning"
+            submit({"kind": "onboard", "repo": name, "base": r["default_branch"]})
 
 
 def wanted(repo):
@@ -2128,9 +2140,6 @@ def onboard(repo, base=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         sh("git", "clone", "-q", f"https://github.com/{repo}.git", str(path), env=auth(repo))
     for l in PHASES + [TRIGGER, REVIEW_LABEL]:
-        # ponytail: one-time claude:* -> rookery:* rename, keeps the label on in-flight issues;
-        # delete once every repo has restarted on this code
-        gh(repo, "label", "edit", l.replace("rookery:", "claude:"), "--name", l, check=False)
         gh(repo, "label", "create", l, "--color", "5319e7", check=False)
     REPOS[repo] = base
     log(f"{repo} live, base {base}")
@@ -2203,7 +2212,7 @@ def refused(c, job, what):
 
 def handle(job):
     if job["kind"] == "onboard":
-        return onboard(job["repo"])
+        return onboard(job["repo"], job.get("base"))
     if job["kind"] == "offboard":
         return offboard(job["repo"])
     if job["kind"] == "drop-worktree":
@@ -2395,6 +2404,8 @@ def main():
         # reviews 12 if it is a PR, as that comment on a PR would (minus the 👀: there is no comment
         # id), and on an issue is a follow-up
         repo, n = sys.argv[1], int(sys.argv[2])
+        if repo in queues:   # a new clone: sync() queued its onboarding
+            queues[repo].join()
         if (note := mention(" ".join(sys.argv[3:]))) is not None \
                 and gh(repo, "pr", "view", str(n), "--json", "number", check=False):
             handle({"kind": "pr-review", "repo": repo, "n": n, "note": note})

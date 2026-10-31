@@ -53,7 +53,8 @@ worktrees under `~/.rookery/worktrees/`; it never pushes. What it ports and drop
 
 **This repo is the orchestrator, never the target.** `REPOS` maps `owner/name` → base branch
 and is never written to disk: `sync()` rebuilds it at startup from the App's installations
-(`default_branch` is the base), and `installation` / `installation_repositories` events
+(`default_branch` is the base) — only the listing: a repo already cloned is live with no call of
+its own, a new one gets an `onboard` job (clone + labels) like an install event — and `installation` / `installation_repositories` events
 keep it current — `enqueue()` adds or drops the repo at once and queues an `onboard` /
 `offboard` job on that repo's queue, so a trigger that arrives while the clone is still
 being made is queued behind it. Clones live at `$WORKSPACE/repos/<owner>_<repo>`; `Ctx` (repo, issue number,
