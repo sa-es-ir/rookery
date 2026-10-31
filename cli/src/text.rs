@@ -21,6 +21,7 @@ const PROMPTS: &[(&str, &str)] = &[
     ("remember", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/remember.md"))),
     ("rewrite", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/rewrite.md"))),
     ("no-marker", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/no-marker.md"))),
+    ("chat", include_str!(concat!(env!("ROOKERY_SRC"), "/prompts/chat.md"))),
 ];
 
 pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
@@ -134,6 +135,16 @@ pub fn summary(text: &str) -> String {
     }
     let cut: String = s.chars().take(max - 1).collect();
     cut.rsplit_once(' ').map_or(&cut[..], |(a, _)| a).to_string() + "…"
+}
+
+/// `s` padded or cut (`…`) to exactly `w` characters: a column that never wraps.
+/// ponytail: counts chars, as wrap() in claude.rs does; unicode-width if wide characters bite
+pub fn fit(s: &str, w: usize) -> String {
+    match s.chars().count() {
+        n if n <= w => format!("{s}{}", " ".repeat(w - n)),
+        _ if w == 0 => String::new(),
+        _ => s.chars().take(w - 1).chain(['…']).collect(),
+    }
 }
 
 /// Python's str.splitlines(): every line break it knows, no trailing empty line.

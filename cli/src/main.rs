@@ -6,6 +6,7 @@ mod claude;
 mod config;
 mod input;
 mod items;
+mod live;
 mod logo;
 mod memory;
 mod plan;
@@ -179,6 +180,35 @@ fn version(s: &str) -> Option<[u64; 3]> {
     Some([it.next()??, it.next()??, it.next()??])
 }
 
+/// `git --version`, or what to install.
+fn git_check() -> Result<String, String> {
+    git_text(Path::new("."), &["--version"]).map_err(|_| "git is not on PATH. Install it first: https://git-scm.com/downloads".into())
+}
+
+/// The claude on PATH and its version, or what to install or update.
+fn claude_check() -> Result<String, String> {
+    let b = claude::bin()?;
+    let dotted = |v: [u64; 3]| v.map(|x| x.to_string()).join(".");
+    let v = std::process::Command::new(&b).arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    match v.as_deref().ok().and_then(version) {
+        Some(v) if v >= MIN_CLAUDE => Ok(format!("{} {}", b.display(), dotted(v))),
+        Some(v) => Err(format!("{} is {}; rookery needs {} or later (`claude update`)", b.display(), dotted(v), dotted(MIN_CLAUDE))),
+        None => Err(format!("{} --version did not answer: {v:?}", b.display())),
+    }
+}
+
+/// A missing or old git or claude, as a hint before a command starts; the command still runs.
+/// `claude` is false for the commands that never call it (ls, show, config …).
+fn preflight(claude: bool) {
+    let mut bad = vec![git_check().err()];
+    if claude {
+        bad.push(claude_check().err());
+    }
+    for e in bad.into_iter().flatten() {
+        eprintln!("rookery: {e}");
+    }
+}
+
 /// Colour on a terminal, unless NO_COLOR is set.
 pub fn colour() -> bool {
     use std::io::IsTerminal;
@@ -198,21 +228,13 @@ fn doctor(base: Option<String>) -> Result<(), String> {
         println!("{} {} {detail}", paint(code, &format!("{mark:<6}")), paint("1", &format!("{what:<9}")));
     };
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
-    match git_text(&here, &["--version"]) {
+    match git_check() {
         Ok(v) => say(Some(true), "git", v),
         Err(e) => say(Some(false), "git", e),
     }
-    let bin = claude::bin();
+    let bin = claude_check();
     match &bin {
-        Ok(b) => {
-            let v = std::process::Command::new(b).arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-            match v.as_deref().ok().and_then(version) {
-                Some(v) if v >= MIN_CLAUDE => say(Some(true), "claude", format!("{} {}", b.display(), v.map(|x| x.to_string()).join("."))),
-                Some(v) => say(Some(false), "claude", format!("{} is {}; rookery needs {} or later (`claude update`)",
-                                                             b.display(), v.map(|x| x.to_string()).join("."), MIN_CLAUDE.map(|x| x.to_string()).join("."))),
-                None => say(Some(false), "claude", format!("{} --version did not answer: {v:?}", b.display())),
-            }
-        }
+        Ok(v) => say(Some(true), "claude", v.clone()),
         Err(e) => say(Some(false), "claude", e.clone()),
     }
     match config::active() {
@@ -338,21 +360,32 @@ fn banner() -> bool {
     true
 }
 
-/// The top of the prompt: what rookery does, where it is, and the commands that exist now.
+/// The top of the prompt: the repo's board when it has items; else what rookery does, where it
+/// is, and the commands that exist now.
 fn guide() {
     if !banner() {
         println!("rookery {}: {}\n", env!("CARGO_PKG_VERSION"), Cli::command().get_about().unwrap());
+    }
+    let here = std::env::current_dir().unwrap_or_default();
+    let at = repo(&here).and_then(|r| base_of(&r.root, None).map(|(b, _)| (r, b)));
+    let repo_line = || match &at {
+        Ok((r, b)) => println!("{}     {} {}", paint("1", "Repo"), paint("36", &r.root.display().to_string()), paint("2", &format!("(base {b})"))),
+        Err(e) => println!("{}     {}", paint("1", "Repo"), paint("33", &format!("none: {e}. Start rookery inside a git repo."))),
+    };
+    let board = at.as_ref().map(|(r, _)| items::board(r)).unwrap_or_default();
+    if !board.is_empty() {
+        repo_line();
+        println!();
+        items::print_board(&board);
+        println!("{}\n", paint("2", "Type / for commands · /help for all of them"));
+        return;
     }
     println!("{}", paint("1", "How it works"));
     for l in GUIDE.lines() {
         println!("  {l}");
     }
     println!();
-    let here = std::env::current_dir().unwrap_or_default();
-    match repo(&here).and_then(|r| base_of(&r.root, None).map(|(b, _)| (r, b))) {
-        Ok((r, b)) => println!("{}     {} {}", paint("1", "Repo"), paint("36", &r.root.display().to_string()), paint("2", &format!("(base {b})"))),
-        Err(e) => println!("{}     {}", paint("1", "Repo"), paint("33", &format!("none: {e}. Start rookery inside a git repo."))),
-    }
+    repo_line();
     println!("\n{}  {}", paint("1", "Commands"), paint("2", "(type /<command> here, or run `rookery <command>` from a shell)"));
     // the flow's commands in full; the rest by name, so the guide stays short as commands grow
     let (main, rest): (Vec<_>, Vec<_>) = commands().into_iter().partition(|(n, _)| FLOW.contains(&n.as_str()));
@@ -362,6 +395,74 @@ fn guide() {
     let rest: Vec<_> = rest.iter().map(|(n, _)| &n[1..]).filter(|n| *n != "help").collect();
     println!("  {} Every command and its options; also {}", paint("38;2;168;204;104", &format!("{:<9}", "/help")), rest.join(", "));
     println!();
+}
+
+/// A typed line that is no command: haiku answers it and names the command to use. The memory
+/// call's shape (one turn, no tools, an empty cwd), no run logged. One session per prompt until
+/// /clear, resumed after its first reply, so a follow-up has context.
+fn chat(line: &str, cmds: &[(String, String)], session: &mut Chat) -> Result<(), String> {
+    let list = cmds.iter().map(|(n, a)| format!("{n}  {a}")).collect::<Vec<_>>().join("\n");
+    let p = text::fmt(&text::prompt("chat"), &[("commands", list), ("line", line.to_string())]);
+    let slot = json!({"agent": null, "skills": [], "model": "haiku", "args": ["--max-turns", "1", "--tools", ""]});
+    let mut job = claude::Job { scratch: std::env::temp_dir().join(format!("rookery-chat-{}", std::process::id())), ..Default::default() };
+    let cwd = job.scratch.join("cwd");
+    std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
+    // the same cwd path every line: claude finds a session to resume by its cwd
+    let out = cancel::during(|| claude::claude(&mut job, &p, &session.key, session.msgs > 0, &slot, false, &cwd));
+    let _ = std::fs::remove_dir_all(&job.scratch);
+    let (_, reply) = out?;
+    session.msgs += 1;
+    session.ctx = claude::session().1;
+    // haiku sometimes ends a sentence with the marker; claude() asked again for it alone, so drop it here
+    println!("{}\n", reply.trim_end().strip_suffix("STATUS: ok").unwrap_or(&reply).trim_end());
+    Ok(())
+}
+
+/// The prompt's one chat session: its key, and what the status line says of it.
+#[derive(Default)]
+struct Chat {
+    key: String,
+    msgs: u32,
+    ctx: Option<(u64, u64)>, // tokens in its context after the last reply, and the model's window
+}
+
+/// 4200 -> 4.2k, 200000 -> 200k, 1000000 -> 1M
+fn kilo(n: u64) -> String {
+    match n {
+        ..1_000 => n.to_string(),
+        ..10_000 => format!("{:.1}k", n as f64 / 1e3),
+        ..1_000_000 => format!("{}k", n / 1_000),
+        _ => format!("{}M", (n as f64 / 1e6 * 10.0).round() / 10.0),
+    }
+}
+
+/// The line above the box, as (text, colour) parts, most needed first, since a narrow terminal
+/// leaves off the last: the provider, the repo and base, the chat's messages and context, and
+/// what this session has spent. Read at each prompt, so a /config or a checkout shows at once.
+fn status_parts(chat: &Chat) -> Vec<(String, &'static str)> {
+    let mut parts = vec![];
+    if let Ok((n, k)) = config::active() {
+        parts.push((format!("● {}", config::describe(&n, k.as_deref())), "38;2;168;204;104")); // the logo's light green
+    }
+    if let Ok(r) = std::env::current_dir().map_err(|e| e.to_string()).and_then(|d| repo(&d)) {
+        let name = r.root.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let base = base_of(&r.root, None).map(|(b, _)| format!(" @ {b}")).unwrap_or_default();
+        parts.push((format!("{name}{base}"), "36"));
+    }
+    if chat.msgs > 0 {
+        parts.push((format!("chat {} msg{}", chat.msgs, if chat.msgs == 1 { "" } else { "s" }), "2"));
+    }
+    if let Some((used, window)) = chat.ctx {
+        let pct = used as f64 / window.max(1) as f64;
+        let fill = ((pct * 8.0).ceil() as usize).clamp(1, 8);
+        let code = if pct < 0.5 { "32" } else if pct < 0.8 { "33" } else { "31" };
+        parts.push((format!("ctx {}{} {}/{}", "▰".repeat(fill), "▱".repeat(8 - fill), kilo(used), kilo(window)), code));
+    }
+    let (usd, _) = claude::session();
+    if usd > 0.0 {
+        parts.push((format!("${usd:.3} this session"), "2"));
+    }
+    parts
 }
 
 /// The commands the guide lists in full: the flow, in order. The rest are named after /help.
@@ -400,13 +501,16 @@ fn words(line: &str) -> Result<Vec<String>, String> {
 fn prompt() {
     use std::io::IsTerminal;
     guide();
+    preflight(true);
     let boxed = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmds = commands();
     let placeholder = format!("Type / for commands, e.g. {} what to change", cmds[0].0);
     let mut history = Vec::<String>::new();
+    let new_chat = || Chat { key: format!("chat-{}-{}", std::process::id(), claude::now()), ..Default::default() };
+    let mut session = new_chat();
     loop {
         let line = if boxed {
-            match input::line(&history, &placeholder, &cmds) {
+            match input::line(&history, &placeholder, &cmds, &status_parts(&session)) {
                 Ok(Some(l)) => l,
                 Ok(None) => return,
                 Err(e) => { eprintln!("rookery: {e}"); return }
@@ -426,17 +530,24 @@ fn prompt() {
         };
         if args.first().is_some_and(|a| a == "rookery") { args.remove(0); }
         // `/new` as the menu shows it; `new` works too, as from a shell
+        let slashed = args.first().is_some_and(|a| a.starts_with('/'));
         if let Some(a) = args.first_mut().filter(|a| a.starts_with('/')) { a.remove(0); }
         match args.first().map(String::as_str) {
             None => continue,
             Some("exit" | "quit") => return,
             Some("clear") => {
                 history.clear();
+                session = new_chat();
                 if boxed {
                     use crossterm::{cursor, terminal::{Clear, ClearType}};
                     let _ = crossterm::execute!(std::io::stdout(), Clear(ClearType::All), Clear(ClearType::Purge), cursor::MoveTo(0, 0));
                 }
                 guide();
+                continue;
+            }
+            Some(w) if !slashed && !cmds.iter().any(|(n, _)| &n[1..] == w) => {
+                // words, not a command ("hi", "fix the login bug"): told which command to use
+                if let Err(e) = chat(&line, &cmds, &mut session) { eprintln!("rookery: {e}") }
                 continue;
             }
             _ => {}
@@ -455,6 +566,10 @@ fn main() -> ExitCode {
         prompt();
         return ExitCode::SUCCESS;
     };
+    // doctor checks them itself, in its own lines
+    if !matches!(cmd, Cmd::Doctor { .. }) {
+        preflight(matches!(cmd, Cmd::New { .. } | Cmd::Reply { .. } | Cmd::Approve { .. } | Cmd::Ask { .. } | Cmd::Review { .. }));
+    }
     match run(cmd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -483,6 +598,11 @@ mod tests {
         let Some(super::Cmd::Reply { n, text, .. }) = parse(r#"reply 3 use sqlite, don't "a  b""#).unwrap().cmd else { panic!() };
         assert_eq!((n, text.join(" ")), (3, "use sqlite, don't a  b".into()));
         assert!(parse("new").is_err());
+    }
+
+    #[test]
+    fn token_counts_read_short() {
+        assert_eq!([999, 4_200, 12_345, 200_000, 1_000_000, 1_500_000].map(super::kilo), ["999", "4.2k", "12k", "200k", "1M", "1.5M"]);
     }
 
     #[test]

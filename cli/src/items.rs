@@ -1,8 +1,8 @@
 //! `rookery ls`, `drop` and `log`: the repo's items, retention and the run log.
 use crate::plan::{dirty, item, load, phase_paint, save};
 use crate::steer::{git, git_text};
-use crate::text::read_tasks;
-use crate::{Repo, paint, repo};
+use crate::text::{fit, read_tasks};
+use crate::{Repo, approve, paint, repo};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
@@ -11,27 +11,79 @@ fn here() -> Result<Repo, String> {
     repo(&std::env::current_dir().map_err(|e| e.to_string())?)
 }
 
-/// `rookery ls`: every item that is not dropped, with its phase and tasks.
-pub fn ls() -> Result<(), String> {
-    let r = here()?;
-    let mut items: Vec<Value> = fs::read_dir(r.state.join("items")).into_iter().flatten().flatten()
-        .filter_map(|e| fs::read_to_string(e.path().join("state.json")).ok())
-        .filter_map(|t| serde_json::from_str::<Value>(&t).ok())
-        .filter(|st| st["phase"] != "dropped").collect();
-    if items.is_empty() {
-        println!("No items in this repo. Start one: rookery new \"what to change\"");
-        return Ok(());
-    }
-    items.sort_by_key(|st| st["n"].as_u64());
-    for st in items {
+/// One item on the board.
+pub struct Card {
+    pub n: u64,
+    pub title: String,
+    pub phase: String,
+    pub tasks: String,
+    pub next: String,
+}
+
+/// The board's groups, in order: Running (another rookery holds the lock), Needs you, Done. An
+/// empty group is left out.
+pub fn board(r: &Repo) -> Vec<(&'static str, Vec<Card>)> {
+    let mut items: Vec<(Value, std::time::SystemTime)> = fs::read_dir(r.state.join("items")).into_iter().flatten().flatten()
+        .filter_map(|e| {
+            let p = e.path().join("state.json");
+            let st = serde_json::from_str::<Value>(&fs::read_to_string(&p).ok()?).ok()?;
+            Some((st, fs::metadata(&p).and_then(|m| m.modified()).ok()?))
+        })
+        .filter(|(st, _)| st["phase"] != "dropped").collect();
+    items.sort_by_key(|(st, _)| std::cmp::Reverse(st["n"].as_u64()));
+    let mut groups: Vec<(&'static str, Vec<Card>)> = vec![("Running", vec![]), ("Needs you", vec![]), ("Done", vec![])];
+    for (st, at) in items {
         let n = st["n"].as_u64().unwrap_or(0);
-        let tasks = fs::read_to_string(item(&r, n).join("tasks.md")).map(|t| read_tasks(&t)).unwrap_or_default();
-        let done = if tasks.is_empty() { String::new() } else { format!("{}/{} tasks", tasks.iter().filter(|t| t.1).count(), tasks.len()) };
-        let phase = st["phase"].as_str().unwrap_or("");
-        // padded before it is painted: the colour codes would count as width
-        println!("{} {}{} {:<10} {}",paint("1", &format!("{:>4}", format!("#{n}"))), phase_paint(phase), " ".repeat(18usize.saturating_sub(phase.len())),
-                 done, st["title"].as_str().unwrap_or(""));
+        let d = item(r, n);
+        // no lock file: never run; held: running now, as drop_item checks
+        let running = fs::OpenOptions::new().write(true).open(d.join("lock"))
+            .is_ok_and(|f| matches!(f.try_lock(), Err(fs::TryLockError::WouldBlock)));
+        let tasks = fs::read_to_string(d.join("tasks.md")).map(|t| read_tasks(&t)).unwrap_or_default();
+        let phase = st["phase"].as_str().unwrap_or("").to_string();
+        let mut done = if tasks.is_empty() { String::new() } else { format!("{}/{} tasks", tasks.iter().filter(|t| t.1).count(), tasks.len()) };
+        if phase == "done" {
+            let days = at.elapsed().map_or(0, |e| e.as_secs() / 86400);
+            let age = match days { 0 => "today".into(), 1 => "1 day ago".into(), d => format!("{d} days ago") };
+            done = if done.is_empty() { age } else { format!("{done} · {age}") };
+        }
+        let g = if running { 0 } else if phase == "done" { 2 } else { 1 };
+        groups[g].1.push(Card { n, title: st["title"].as_str().unwrap_or("").into(), next: approve::next(&st, running), phase, tasks: done });
     }
+    groups.retain(|(_, cards)| !cards.is_empty());
+    groups
+}
+
+/// The board, under group headers. Without colour (piped, NO_COLOR) one plain line per item and no
+/// headers, so `grep` reads it; a running item says so in its last column.
+pub fn print_board(groups: &[(&str, Vec<Card>)]) {
+    let cards = || groups.iter().flat_map(|(_, c)| c);
+    let tw = cards().map(|c| c.title.chars().count()).max().unwrap_or(0).min(40);
+    let kw = cards().map(|c| c.tasks.chars().count()).max().unwrap_or(0);
+    let on = crate::colour();
+    for (name, cards) in groups {
+        if on {
+            println!("  {}", paint("1", name));
+        }
+        for c in cards {
+            let next = if *name == "Running" && !on { "running" } else { &c.next };
+            // padded before it is painted: the colour codes would count as width
+            println!("{}{}  {}  {}{}  {}  {}", if on { "    " } else { "" }, paint("1", &format!("{:<4}", format!("#{}", c.n))),
+                     fit(&c.title, tw), phase_paint(&c.phase), " ".repeat(18usize.saturating_sub(c.phase.len())),
+                     fit(&c.tasks, kw), paint("2", next));
+        }
+        if on {
+            println!();
+        }
+    }
+}
+
+/// `rookery ls`: every item that is not dropped, as the board.
+pub fn ls() -> Result<(), String> {
+    let b = board(&here()?);
+    if b.is_empty() {
+        println!("No items in this repo. Start one: rookery new \"what to change\"");
+    }
+    print_board(&b);
     Ok(())
 }
 
@@ -176,6 +228,30 @@ mod tests {
         g(&["merge", "-q", "--ff-only", "rookery/1-x"]);
         assert!(!only_on(&d, "rookery/1-x").unwrap(), "merged: safe to drop");
         fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn board_groups_by_what_each_needs() {
+        let d = std::env::temp_dir().join(format!("rookery-board-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let r = Repo { root: d.clone(), state: d.clone(), key: "k".into() };
+        let add = |n: u64, phase: &str| {
+            fs::create_dir_all(item(&r, n)).unwrap();
+            fs::write(item(&r, n).join("state.json"), json!({"n": n, "phase": phase, "approved": true, "title": format!("t{n}")}).to_string()).unwrap();
+        };
+        for (n, p) in [(1, "done"), (2, "awaiting-approval"), (3, "implementing"), (4, "dropped"), (5, "implementing"), (6, "error")] {
+            add(n, p);
+        }
+        fs::write(item(&r, 5).join("tasks.md"), "- [x] a\n- [ ] b\n").unwrap();
+        let held = fs::OpenOptions::new().create(true).truncate(false).write(true).open(item(&r, 5).join("lock")).unwrap();
+        held.lock().unwrap();
+        let got: Vec<(&str, Vec<u64>)> = board(&r).iter().map(|(g, c)| (*g, c.iter().map(|c| c.n).collect())).collect();
+        assert_eq!(got, [("Running", vec![5]), ("Needs you", vec![6, 3, 2]), ("Done", vec![1])], "a stopped run needs you; dropped is gone");
+        let b = board(&r);
+        assert_eq!((b[0].1[0].tasks.as_str(), b[0].1[0].next.as_str()), ("1/2 tasks", ""));
+        assert_eq!(b[2].1[0].tasks, "today");
+        drop(held);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

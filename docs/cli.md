@@ -38,7 +38,7 @@ With a Rust toolchain:
 cargo install rookery-cli --locked
 ```
 
-Each method installs one binary, `rookery`, in the Cargo `bin` folder. Then go to your repository and run `rookery doctor`. It checks `git`, `claude`, the repository and the base branch. It makes one small Claude call (about $0.01).
+Each method installs one binary, `rookery`, in the Cargo `bin` folder. Then go to your repository and run `rookery doctor`. It checks `git`, `claude`, the repository and the base branch. It makes one small Claude call (about $0.01). Each other command also checks `git` and `claude` when it starts, and shows what to install or update when one is missing or too old.
 
 ## Run an item
 
@@ -55,6 +55,43 @@ Give the details of the item with `-m "text"`, or put them in a markdown file an
 
 Run `rookery` with no command to open a prompt. Type `/` to see the commands. Type `exit` or press Ctrl-D to close the prompt.
 
+When you type a line that is not a command (for example `hi`, or `fix the login bug`), haiku replies in one to three sentences and tells you which command to use. It has no tools and changes nothing. Each reply costs about one cent. The chat remembers the lines before it until you type `/clear`.
+
+A status line above the prompt box shows the provider, the repository and its base branch, the number of chat messages, how full the chat's context is, and what this session spent. When the terminal is narrow, the last items are not shown.
+
+When the repository has items, the prompt opens on a board. The board puts the items in three groups:
+
+- **Running**: another `rookery` runs the item now.
+- **Needs you**: the item waits for your answer, your approval or a look at its review. A run that stopped or failed is here too.
+- **Done**: all tasks are committed and the review wants no changes.
+
+Each item shows its phase, its tasks and the next command, for example `approve 5`. `rookery ls` shows the same board. When you pipe it, `ls` writes one line for each item and no colour.
+
+## What you see during a run
+
+`approve` shows a checklist at the bottom of the screen. The checklist has one row for each task, each `after` step and the review. It updates while the run continues:
+
+```
+  ✓   1  Add the Json flag to the Ls command  a1b2c3d   0:48   $0.21
+  ⠹   2  Add a test for the JSON shape                  1:42
+        ∴ Checking how the other tests build a repo fixture
+        → Bash  cargo test json
+  ·   3  Document --json in docs/cli.md
+  ·   ◇  review
+
+  1/3 · 2:30 · $0.21 · Ctrl-C stops, committed tasks stay
+```
+
+- `✓`: the task is committed. The row shows the commit, the time and the cost.
+- `⚠`: the task is committed, but a check that it asks for cannot run on this computer. Or a step or the review wants changes.
+- The spinner: the task that runs now. The two rows under it show the latest summary of the model's reasoning and the latest tool call. A tool call shows a file path or the first line of a command, never the content of a file.
+- `·`: the task has not started. `–`: a `write` step that an earlier run committed.
+- `✗`: the task failed, or you stopped it.
+
+The cost of a task shows when its Claude call ends. When the run ends, the checklist stays on the screen as the record of the run. `ask` shows the same checklist for the follow-up, and then for the steps and the review when the follow-up commits a change.
+
+If you pipe the output, or set `NO_COLOR`, there is no checklist. Rookery writes one line for each event: the start of a task, each tool call, each reasoning summary and the end of the task.
+
 ## Commands
 
 | Command | What it does |
@@ -64,7 +101,7 @@ Run `rookery` with no command to open a prompt. Type `/` to see the commands. Ty
 | `rookery approve <n> [--max-usd X]` | Runs the tasks, the `after` steps and the review. |
 | `rookery ask <n> "note"` | Asks a question about the change, or asks for a change. Rookery commits a change and reviews it again. |
 | `rookery review [<range>] [-m note]` | Reviews the commits on a branch. The default is the current branch. |
-| `rookery ls` | Lists the items of the repository. |
+| `rookery ls` | Shows the board: the items of the repository, grouped by what each one needs, with the next command. |
 | `rookery show <n>` | Shows one item: phase, branch, commits, tasks, review and the next command. |
 | `rookery log [<n>]` | Shows the last runs, or all the runs of one item. |
 | `rookery drop <n> [--force]` | Removes the worktree and the branch of an item. |
