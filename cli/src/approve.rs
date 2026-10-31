@@ -2,6 +2,7 @@
 //! follow_up() and the review from publish(), on a local item. A fresh session per task; the orchestrator ticks tasks.md and
 //! commits with the user's own git identity. Nothing is pushed: the branch is the user's.
 use crate::claude::{self, Job};
+use crate::live::{self, Mark, Row};
 use crate::plan::{again, dirty, item, keep_plans_only, load, phase_paint, print_md, save, set_phase, worktree};
 use crate::review::render_review;
 use crate::steer::{git, git_text};
@@ -38,6 +39,20 @@ pub fn may_approve(st: &Value, running: bool, again: &str) -> Result<(), String>
         "done" => Err(format!("#{n} is done: every task is committed and the review wants no changes. \
                                See it with `rookery show {n}`, then merge its branch yourself.")),
         p => Err(format!("#{n} is {p}, so there is nothing to approve.")),
+    }
+}
+
+/// The command that moves an item on, for the board; empty while another rookery runs it.
+pub fn next(st: &Value, running: bool) -> String {
+    let n = st["n"].as_u64().unwrap_or(0);
+    match st["phase"].as_str().unwrap_or("") {
+        _ if running => String::new(),
+        "awaiting-input" => format!("reply {n} \"…\""),
+        "awaiting-approval" => format!("approve {n}"),
+        "error" if st["approved"] == true => format!("approve {n}"),
+        "implementing" | "reviewing" => format!("approve {n}"),
+        "done" => format!("merge the branch, then drop {n}"),
+        _ => format!("show {n}"),
     }
 }
 
@@ -144,6 +159,16 @@ fn framing(n: u64, d: &Path, base: &str) -> Vec<(&'static str, String)> {
          ("since", base.into()), ("handoff", "a branch to review and merge".into()), ("report", "the run's report".into())]
 }
 
+/// The checklist's rows for the `after` steps and the review, in the order they run.
+fn step_rows(wf: &Value) -> Vec<Row> {
+    wf["after"].as_array().unwrap().iter()
+        .map(|s| {
+            let name = s["agent"].as_str().unwrap();
+            Row::new(&format!("step-{name}"), "◇", &format!("{name} · {}", s["mode"].as_str().unwrap()))
+        })
+        .chain([Row::new("review", "◇", "review")]).collect()
+}
+
 /// What a change goes through before it is handed over, as agent.py's publish() minus the push:
 /// the `after` steps, then the review. Approve runs it after the task loop, ask after a follow-up
 /// that changed the branch. -> (phase, who wants changes, the steering paths the branch changes)
@@ -157,17 +182,19 @@ fn publish(r: &Repo, job: &mut Job, st: &mut Value, wt: &Path, wf: &Value, at: &
     // agent.py's after_steps(): checks may not edit and re-run every time; a write step is
     // committed, and skipped once its commit is on the branch. Neither adds tasks.
     *at = "steps".into();
+    live::add(step_rows(wf));
     let mut wanting = vec![];
     let after = wf["after"].as_array().unwrap();
     let done = if after.is_empty() { HashSet::new() } else { on_branch(wt, &base)? };
     for s in after {
         let (name, mode) = (s["agent"].as_str().unwrap(), s["mode"].as_str().unwrap());
         let subject = format!("#{n} step {name}");
+        let key = format!("step-{name}");
         if skipped(n, s, &done) {
-            println!("\n{} {name} (write): committed in an earlier run, skipped", paint("2", "Step"));
+            live::end(&key, Mark::Skipped, "skipped");
             continue;
         }
-        println!("\n{} {name} ({mode})", paint("1", "Step"));
+        live::begin(&key);
         *at = format!("step {name}");
         job.step("step", json!({"agent": name, "mode": mode}));
         let p = fmt(&prompt(mode), &args);
@@ -194,9 +221,13 @@ fn publish(r: &Repo, job: &mut Job, st: &mut Value, wt: &Path, wf: &Value, at: &
             msg += &format!("\n_Rookery reverted this check's edits to {}: a check is read-only._\n", reverted.join(", "));
         }
         if mode == "write" {
-            commit(job, wt, &subject, json!({"step": name}))?;
+            let sha = commit(job, wt, &subject, json!({"step": name}))?;
+            live::end(&key, Mark::Done, &sha);
         } else if status == "changes-needed" || !reverted.is_empty() {
             wanting.push(name.to_string());
+            live::end(&key, Mark::Warn, "changes wanted");
+        } else {
+            live::end(&key, Mark::Done, "");
         }
         let mut c = name.chars();
         let title = c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect());
@@ -210,7 +241,7 @@ fn publish(r: &Repo, job: &mut Job, st: &mut Value, wt: &Path, wf: &Value, at: &
     // the review: advisory, once, read-only; changes-needed flags the item, never fails it
     *at = "the review".into();
     set_phase(r, job, st, "reviewing")?;
-    println!("\n{} {}", paint("1", "Review"), paint("2", &wf["review"]["agent"].as_str().map_or("sonnet".into(), |a| format!("rk:{a}"))));
+    live::begin("review");
     let p = fmt(&prompt("review"), &args);
     let said = frozen(&tasks_md, || claude::claude(job, &p, "review", false, &wf["review"], true, wt));
     let reverted = keep_plans_only(wt)?;
@@ -226,6 +257,9 @@ fn publish(r: &Repo, job: &mut Job, st: &mut Value, wt: &Path, wf: &Value, at: &
     ran.push("review.md".into());
     if verdict != "review-ok" {
         wanting.push("the reviewer".into());
+        live::end("review", Mark::Warn, "changes wanted");
+    } else {
+        live::end("review", Mark::Done, "");
     }
     let steers = git_text(wt, &[&["diff", "--name-only", &format!("{base}...HEAD"), "--"][..], &STEERING].concat())?;
     // the server's pull request is open from here: a follow-up may ask about it, and one that
@@ -313,6 +347,17 @@ pub fn approve(n: u64, max_usd: Option<f64>, mcp: bool) -> Result<(), String> {
         fs::create_dir_all(d.join("out")).map_err(|e| e.to_string())?;
         set_phase(&r, &job, &mut st, "implementing")?;
         let wt = worktree(&r, &st)?;
+        // the checklist: a task ticked in an earlier run is done from the start, with its commit
+        let log = git_text(&wt, &["log", "--format=%h %s", &format!("{base}..HEAD")])?;
+        let sha_of = |i: usize| log.lines().filter_map(|l| l.split_once(' '))
+            .find(|(_, s)| s.starts_with(&format!("#{n} task {}:", i + 1))).map_or("", |(h, _)| h);
+        let rows = read_tasks(&fs::read_to_string(&tasks_md).map_err(|_| "tasks.md is missing".to_string())?).iter().enumerate()
+            .map(|(i, (_, done, text))| {
+                let row = Row::new(&format!("task-{i}"), &(i + 1).to_string(), &summary(text));
+                if *done { row.done(sha_of(i)) } else { row }
+            })
+            .chain(step_rows(&wf)).collect();
+        let _live = live::start(rows, &wt);
 
         let max = cap("max_tasks") as usize;
         let mut converged = false;
@@ -326,7 +371,7 @@ pub fn approve(n: u64, max_usd: Option<f64>, mcp: bool) -> Result<(), String> {
                 break;
             };
             at = format!("task {} ({})", i + 1, summary(text));
-            println!("\n{} {}", paint("1", &format!("Task {}/{}", i + 1, tasks.len())), summary(text));
+            live::begin(&format!("task-{i}"));
             job.step("task", json!({"i": i + 1, "of": tasks.len(), "text": text}));
             let mut args = framing(n, &d, &base);
             args.push(("task", text.clone()));
@@ -340,8 +385,7 @@ pub fn approve(n: u64, max_usd: Option<f64>, mcp: bool) -> Result<(), String> {
             fs::write(&tasks_md, tick(&now, *off)).map_err(|e| e.to_string())?;
             job.step("tick", json!({"i": i + 1, "of": tasks.len()}));
             let sha = commit(&job, &wt, &format!("#{n} task {}: {text}", i + 1), json!({"i": i + 1}))?;
-            let mark = if status == "task-done" { paint("32", "✓") } else { paint("33", "⚠") };
-            println!("{mark} {}  {}", paint("2", &format!("committed {sha}")), msg.lines().next().unwrap_or(""));
+            live::end(&format!("task-{i}"), if status == "task-done" { Mark::Done } else { Mark::Warn }, &sha);
             if status == "task-unverified" {
                 // a check this machine cannot run is the user's to run, not a failed run
                 let p = d.join("out").join("unverified.md");
@@ -398,6 +442,8 @@ pub fn ask(n: u64, note: &str, max_usd: Option<f64>, mcp: bool) -> Result<(), St
             ("posts", "shows that text to the developer".into()),
         ]);
         println!("{}", paint("2", &format!("Following up with {} …", wf["task"]["agent"].as_str().map_or("sonnet".into(), |a| format!("rk:{a}")))));
+        let _live = live::start(vec![Row::new("follow-up", "◇", "follow-up")], &wt);
+        live::begin("follow-up");
         // a follow-up adds no tasks, so every tick still reduces the open count
         let said = frozen(&d.join("tasks.md"), || claude::claude(&mut job, &p, "follow-up", false, &wf["task"], true, &wt));
         let checked = said.and_then(|(status, msg)| match status.as_str() {
@@ -417,8 +463,10 @@ pub fn ask(n: u64, note: &str, max_usd: Option<f64>, mcp: bool) -> Result<(), St
         }
         if status == "changed" {
             let first = note.lines().next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
-            commit(&job, &wt, &format!("#{n} follow-up: {}", first.chars().take(60).collect::<String>()), json!({"follow-up": true}))?;
+            let sha = commit(&job, &wt, &format!("#{n} follow-up: {}", first.chars().take(60).collect::<String>()), json!({"follow-up": true}))?;
+            live::end("follow-up", Mark::Done, &sha);
         } else {
+            live::end("follow-up", Mark::Done, "answered");
             let reverted = keep_plans_only(&wt)?;
             if !reverted.is_empty() {
                 job.step("reverted", json!({"paths": reverted}));
@@ -429,8 +477,10 @@ pub fn ask(n: u64, note: &str, max_usd: Option<f64>, mcp: bool) -> Result<(), St
         let f = d.join("out").join("follow-ups.md");
         let was = fs::read_to_string(&f).map(|t| t + "\n\n").unwrap_or_default();
         fs::write(&f, was + &section).map_err(|e| e.to_string())?;
-        println!();
-        print_md(&section);
+        live::above(|| {
+            println!();
+            print_md(&section);
+        });
         // not only this run's: a commit an earlier failed follow-up left goes through now
         if st["reviewed"].as_str() == Some(git_text(&wt, &["rev-parse", "HEAD"])?.as_str()) {
             return Ok(None);
@@ -529,6 +579,18 @@ mod tests {
             assert!(may_approve(&st(p, true), false, "").is_err(), "{p}");
         }
         assert!(may_approve(&st("awaiting-input", false), false, "").unwrap_err().contains("rookery reply 5"));
+    }
+
+    #[test]
+    fn next_moves_each_phase_on() {
+        let st = |phase: &str, approved: bool| json!({"n": 5, "phase": phase, "approved": approved});
+        for (p, approved, want) in [("awaiting-input", false, "reply 5 \"…\""), ("awaiting-approval", false, "approve 5"),
+                                    ("changes-wanted", true, "show 5"), ("error", true, "approve 5"), ("error", false, "show 5"),
+                                    ("planning", false, "show 5"), ("implementing", true, "approve 5"), ("reviewing", true, "approve 5"),
+                                    ("done", true, "merge the branch, then drop 5")] {
+            assert_eq!(next(&st(p, approved), false), want, "{p}");
+        }
+        assert_eq!(next(&st("implementing", true), true), "", "running: nothing to do");
     }
 
     #[test]

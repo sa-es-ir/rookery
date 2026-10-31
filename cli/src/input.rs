@@ -12,9 +12,10 @@ const AGAIN: &str = "press ctrl+c again to exit";
 /// says so in the hint, so a stray one never leaves). On Enter the box is erased
 /// and the line stays as `> line`, so what the command prints follows it. `commands` are
 /// (`/name`, what it does), listed once a `/` starts the line, while its first word is typed.
-pub fn line(history: &[String], placeholder: &str, commands: &[(String, String)]) -> io::Result<Option<String>> {
+/// `status` is the line above the box, as (text, SGR colour) parts; see `status_line()`.
+pub fn line(history: &[String], placeholder: &str, commands: &[(String, String)], status: &[(String, &str)]) -> io::Result<Option<String>> {
     terminal::enable_raw_mode()?;
-    let r = edit(history, placeholder, commands, HINT, false);
+    let r = edit(history, placeholder, commands, HINT, false, status);
     let _ = terminal::disable_raw_mode();
     r
 }
@@ -23,22 +24,27 @@ pub fn line(history: &[String], placeholder: &str, commands: &[(String, String)]
 /// Enter (the caller keeps what it has), None on Esc, Ctrl-C or Ctrl-D.
 pub fn secret(placeholder: &str, hint: &str) -> io::Result<Option<String>> {
     terminal::enable_raw_mode()?;
-    let r = edit(&[], placeholder, &[], hint, true);
+    let r = edit(&[], placeholder, &[], hint, true, &[]);
     let _ = terminal::disable_raw_mode();
     r
 }
 
-fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hint: &str, mask: bool) -> io::Result<Option<String>> {
+fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hint: &str, mask: bool,
+        status: &[(String, &str)]) -> io::Result<Option<String>> {
     let mut out = io::stdout();
     let paint = crate::colour();
+    // the cursor waits on the box's middle line: its top is one up, the status line one more
+    let top = 1 + !status.is_empty() as u16;
     let (mut buf, mut at, mut back) = (Vec::<char>::new(), 0, 0);
     let (mut drawn, mut armed) = (false, false);
     loop {
         let w = terminal::size().map_or(80, |(w, _)| w as usize);
         let shown = if mask { vec!['•'; buf.len()] } else { buf.clone() };
-        let (text, col, below) = frame(&shown, at, placeholder, commands, if armed { AGAIN } else { hint }, w, paint);
+        let (box_, col, below) = frame(&shown, at, placeholder, commands, if armed { AGAIN } else { hint }, w, paint);
+        let text = if status.is_empty() { box_ } else { format!("{}
+{box_}", status_line(status, w, paint)) };
         if drawn {
-            queue!(out, cursor::MoveUp(1))?;
+            queue!(out, cursor::MoveUp(top))?;
         }
         queue!(out, cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
         write!(out, "{text}")?;
@@ -58,7 +64,7 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hi
             KeyCode::Char('c') if ctrl && !buf.is_empty() && !mask => (buf.clear(), at = 0).1,
             KeyCode::Char('c') if ctrl && !mask && !was => armed = true,
             KeyCode::Char('c' | 'd') if ctrl && (buf.is_empty() || mask) => {
-                queue!(out, cursor::MoveUp(1), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
+                queue!(out, cursor::MoveUp(top), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
                 out.flush()?;
                 return Ok(None);
             }
@@ -75,7 +81,7 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hi
             KeyCode::Home => at = 0,
             KeyCode::End => at = buf.len(),
             KeyCode::Esc if mask => {
-                queue!(out, cursor::MoveUp(1), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
+                queue!(out, cursor::MoveUp(top), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
                 out.flush()?;
                 return Ok(None);
             }
@@ -98,7 +104,7 @@ fn edit(history: &[String], placeholder: &str, commands: &[(String, String)], hi
                 let s: String = buf.iter().collect();
                 let echo: String = if mask { shown.iter().take(24).collect() } else { s.clone() };
                 let (d, r) = if paint { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
-                queue!(out, cursor::MoveUp(1), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
+                queue!(out, cursor::MoveUp(top), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
                 write!(out, "{d}>{r} {echo}\r\n")?;
                 out.flush()?;
                 return Ok(Some(s));
@@ -155,6 +161,22 @@ fn choose(title: &str, hint: &str, rows: &[String], mut at: usize, keys: &str) -
     queue!(out, cursor::MoveUp(lines - 1), cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::FromCursorDown))?;
     out.flush()?;
     Ok(chosen)
+}
+
+/// The status line: `parts` in their colours, joined by a dim ` · `, as many as fit `w - 1`
+/// columns (the box's width); the rest are left off whole, never cut mid-word.
+fn status_line(parts: &[(String, &str)], w: usize, paint: bool) -> String {
+    let (mut out, mut len) = (String::from(" "), 1);
+    for (i, (t, code)) in parts.iter().enumerate() {
+        let sep = if i == 0 { "" } else { " · " };
+        let n = sep.chars().count() + t.chars().count();
+        if len + n > w.max(20) - 1 {
+            break;
+        }
+        len += n;
+        out += &if paint { format!("[2m{sep}[0m[{code}m{t}[0m") } else { format!("{sep}{t}") };
+    }
+    out
 }
 
 /// The commands named by what is typed so far: all of them after a lone `/`, none before a `/`
@@ -217,5 +239,8 @@ mod tests {
         assert_eq!(menu("/he"), ["/help"]);
         assert!(menu("/doctor ").is_empty() && menu("he").is_empty() && menu("/x").is_empty());
         assert!(super::frame(&[], 0, "Try", &cmds, super::HINT, 40, false).0.contains("│ > Try "));
+        let parts = [("claude".to_string(), "2"), ("rookery @ main".to_string(), "36"), ("$0.012 this session".to_string(), "2")];
+        assert_eq!(super::status_line(&parts, 80, false), " claude · rookery @ main · $0.012 this session");
+        assert_eq!(super::status_line(&parts, 30, false), " claude · rookery @ main", "a part that does not fit is left off whole");
     }
 }

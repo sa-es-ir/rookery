@@ -68,6 +68,29 @@ impl Job {
     }
 }
 
+/// this process's spend over every call, and the last call's context (tokens in it, its window):
+/// what the prompt's status line shows
+static SESSION: std::sync::Mutex<(f64, Option<(u64, u64)>)> = std::sync::Mutex::new((0.0, None));
+
+pub fn session() -> (f64, Option<(u64, u64)>) {
+    *SESSION.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A call's result into SESSION. Its context is its last request's: the whole input, cached or
+/// not, plus the reply; the window is the model's, else 200k.
+fn tally(usd: f64, result: Option<&Value>) {
+    let mut s = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    s.0 += usd;
+    let Some(v) = result else { return };
+    let u = v["usage"]["iterations"].as_array().and_then(|i| i.last()).unwrap_or(&v["usage"]);
+    let used: u64 = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"]
+        .iter().filter_map(|k| u[k].as_u64()).sum();
+    let window = v["modelUsage"].as_object().and_then(|m| m.values().filter_map(|x| x["contextWindow"].as_u64()).max());
+    if used > 0 {
+        s.1 = Some((used, window.unwrap_or(200_000)));
+    }
+}
+
 pub fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
@@ -191,6 +214,8 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
         Err(_) => (0.0, String::new()),
     };
     job.spent += usd;
+    tally(usd, out.as_ref().ok());
+    crate::live::spent(job.spent);
     let m = marker(&text);
     let status = m.as_ref().map_or(if out.is_ok() { "no-marker" } else { "failed" }, |m| m.0.as_str());
     let model = match slot["agent"].as_str() {
@@ -209,6 +234,8 @@ pub fn claude(job: &mut Job, prompt_: &str, key: &str, resume: bool, slot: &Valu
         let again = run(&cmd, &prompt("no-marker"), cwd, &env);
         let usd = again.as_ref().ok().and_then(|v| crate::config::cost(v, &provider).ok()).unwrap_or(0.0);
         job.spent += usd;
+        tally(usd, again.as_ref().ok());
+        crate::live::spent(job.spent);
         let line = again.as_ref().ok().and_then(|v| marker(v["result"].as_str().unwrap_or("")));
         let status = line.as_ref().map_or(if again.is_ok() { "no-marker" } else { "failed" }, |l| l.0.as_str());
         // no sid: the transcript is the first call's, read once
@@ -260,6 +287,9 @@ impl Thinking {
                 println!("{}", crate::paint("2", &format!("  ∴ {}", t.trim().replace('\n', "\n    "))));
                 continue;
             }
+            // the spinner's row goes first, and stays off while the thought is drawn; it comes back below
+            let _g = DRAW.lock().unwrap_or_else(|e| e.into_inner());
+            print!("\r\x1b[K");
             // every row fits the width, so the rows printed are the rows to erase
             let w = crossterm::terminal::size().map_or(80, |(w, _)| w as usize).saturating_sub(5).max(20);
             let mut rows = wrap(&t, w);
@@ -288,6 +318,57 @@ impl Thinking {
             self.erase();
             println!("{}", crate::paint("2", &format!("  ∴ thought {}× · {secs:.0} s", self.count)));
         }
+    }
+}
+
+/// what a call is doing while it runs: rooks at work, a new word every few seconds
+const WORDS: [&str; 10] = ["Thinking", "Baking", "Brewing", "Pondering", "Nesting", "Hatching", "Foraging", "Preening", "Cawing", "Flocking"];
+/// held while the spinner's row or a thought is drawn, so neither prints into the other
+static DRAW: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// One row under the output while a call runs, `⠋ Brewing… 12 s`, redrawn in place and erased
+/// when the call ends. Only on a colour terminal, and never in a run's region, which spins its own.
+struct Spinner {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start() -> Option<Spinner> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if !crate::colour() || crate::live::on() {
+            return None;
+        }
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let halt = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let (started, seed) = (Instant::now(), now() as usize);
+            let mut frame = 0;
+            while !halt.load(SeqCst) {
+                let secs = started.elapsed().as_secs();
+                let word = WORDS[(seed + secs as usize / 4) % WORDS.len()];
+                {
+                    let _g = DRAW.lock().unwrap_or_else(|e| e.into_inner());
+                    print!("\r  {} {}\x1b[K", crate::paint(crate::live::GREEN, &crate::live::SPIN[frame % 10].to_string()),
+                           crate::paint("2", &format!("{word}… {secs} s")));
+                    let _ = std::io::stdout().flush();
+                }
+                frame += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+        Some(Spinner { stop, thread: Some(thread) })
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        print!("\r\x1b[K");
+        let _ = std::io::stdout().flush();
     }
 }
 
@@ -339,15 +420,20 @@ fn run(cmd: &[String], input: &str, cwd: &Path, env: &[(String, String)]) -> Res
     let mut stderr = child.stderr.take().unwrap();
     let errs = std::thread::spawn(move || { let mut s = String::new(); let _ = stderr.read_to_string(&mut s); s });
     let (mut result, mut raw, mut thinking, started) = (None, String::new(), Thinking::default(), Instant::now());
+    let spinner = Spinner::start();
     for line in BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok) {
         match serde_json::from_str::<Value>(&line) {
             Ok(e) if e["type"] == "result" => result = Some(e),
-            Ok(e) if e["type"] == "assistant" => thinking.show(&e),
+            // a run's checklist shows the latest thought and tool call; else the thoughts alone
+            Ok(e) if e["type"] == "assistant" => if crate::live::on() { crate::live::event(&e) } else { thinking.show(&e) },
             Ok(_) => {}
             Err(_) => raw += &format!("{line}\n"),
         }
     }
-    thinking.done(started.elapsed().as_secs_f64());
+    drop(spinner); // its row erased before the thoughts collapse
+    if !crate::live::on() {
+        thinking.done(started.elapsed().as_secs_f64());
+    }
     let status = child.wait().map_err(|e| e.to_string())?;
     let _ = writer.join();
     let stderr = errs.join().unwrap_or_default();
