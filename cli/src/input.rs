@@ -163,6 +163,47 @@ fn choose(title: &str, hint: &str, rows: &[String], mut at: usize, keys: &str) -
     Ok(chosen)
 }
 
+const OWN: &str = "Type my own answer";
+
+/// A planner's questions one at a time: pick an option (the default is first) or type an answer,
+/// then send, answer again or cancel. -> the reply, every question with its answer; None on cancel.
+/// Each question and its answer stay on the screen as the record.
+pub fn answers(qs: &crate::text::Questions) -> io::Result<Option<String>> {
+    use crate::paint;
+    let w = terminal::size().map_or(80, |(w, _)| w as usize).saturating_sub(6).max(20);
+    let row = |s: &str| crate::text::fit(s, w).trim_end().to_string(); // pick() breaks on a row that wraps
+    let hint = "↑↓ choose · enter picks · esc cancels";
+    loop {
+        let mut got = vec![];
+        for (i, (q, opts)) in qs.iter().enumerate() {
+            println!("\n{} {q}", paint("1", &format!("{}/{}", i + 1, qs.len())));
+            let rows: Vec<String> = opts.iter().map(|o| row(o)).chain([paint("2", OWN)]).collect();
+            let a = loop {
+                let Some((k, _)) = pick("", hint, &rows, 0, "")? else { return Ok(None) };
+                if k < opts.len() {
+                    println!("  {} {}", paint(crate::live::GREEN, "❯"), opts[k]);
+                    break opts[k].clone();
+                }
+                // line() leaves `> answer` on the screen
+                match line(&[], "your answer", &[], &[])? {
+                    Some(s) if !s.trim().is_empty() => break s.trim().to_string(),
+                    _ => {} // nothing typed: back to the options
+                }
+            };
+            got.push(a);
+        }
+        println!();
+        match pick(&paint("1", "Send these answers?"), hint, &["Send".into(), "Answer again".into(), "Cancel".into()], 0, "")? {
+            Some((0, _)) => {
+                return Ok(Some(qs.iter().zip(&got).enumerate()
+                    .map(|(i, ((q, _), a))| format!("{}. {q}\n   Answer: {a}", i + 1)).collect::<Vec<_>>().join("\n\n")));
+            }
+            Some((1, _)) => continue,
+            _ => return Ok(None),
+        }
+    }
+}
+
 /// The status line: `parts` in their colours, joined by a dim ` · `, as many as fit `w - 1`
 /// columns (the box's width); the rest are left off whole, never cut mid-word.
 fn status_line(parts: &[(String, &str)], w: usize, paint: bool) -> String {

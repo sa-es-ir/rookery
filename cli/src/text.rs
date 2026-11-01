@@ -137,6 +137,27 @@ pub fn summary(text: &str) -> String {
     cut.rsplit_once(' ').map_or(&cut[..], |(a, _)| a).to_string() + "…"
 }
 
+static QUESTIONS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\s*<questions>(.*?)</questions>\s*").unwrap());
+
+/// A planner's questions, each with its options (default first). fixtures/questions.json.
+pub type Questions = Vec<(String, Vec<String>)>;
+
+/// agent.py's unasked(): a plan reply minus its `<questions>` JSON, and that JSON as the picker's
+/// questions; None when there is none, it does not parse, or a question has no options.
+pub fn questions(msg: &str) -> (String, Option<Questions>) {
+    let text = QUESTIONS.replace_all(msg, "\n\n").trim().to_string();
+    let qs = QUESTIONS.captures(msg).and_then(|m| {
+        let j = m[1].trim();
+        let v: Value = serde_json::from_str(unfence(j).unwrap_or(j)).ok()?;
+        v.as_array()?.iter().map(|q| {
+            let opts: Vec<String> = q["options"].as_array()?.iter().map(|o| o.as_str().map(String::from)).collect::<Option<_>>()?;
+            let question = q["question"].as_str()?.trim();
+            (!question.is_empty() && !opts.is_empty()).then(|| (question.to_string(), opts))
+        }).collect::<Option<Questions>>().filter(|qs| !qs.is_empty())
+    });
+    (text, qs)
+}
+
 /// `s` padded or cut (`…`) to exactly `w` characters: a column that never wraps.
 /// ponytail: counts chars, as wrap() in claude.rs does; unicode-width if wide characters bite
 pub fn fit(s: &str, w: usize) -> String {
@@ -186,6 +207,15 @@ mod tests {
                 None => assert!(got.is_none(), "{}", f["why"]),
                 Some(s) => assert_eq!(got, Some((s.into(), f["reply"].as_str().unwrap().into())), "{}", f["why"]),
             }
+        }
+    }
+
+    #[test]
+    fn question_fixtures() {
+        for f in fixture("questions.json") {
+            let (text, qs) = questions(f["text"].as_str().unwrap());
+            assert_eq!(text, f["out"].as_str().unwrap(), "{}", f["why"]);
+            assert_eq!(qs.map(|q| serde_json::json!(q)).unwrap_or(Value::Null), f["questions"], "{}", f["why"]);
         }
     }
 

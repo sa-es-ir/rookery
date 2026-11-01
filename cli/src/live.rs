@@ -175,6 +175,15 @@ impl Live {
         let (w, h) = crossterm::terminal::size().map_or((80, 24), |(w, h)| (w as usize, h as usize));
         let rows = if last { self.frame(w, usize::MAX, true) } else { self.frame(w, h, false) };
         let mut o = std::io::stdout().lock();
+        // one frame (mode 2026): at 10 redraws a second the rows flicker without it; unsupported, it is ignored
+        let _ = queue!(o, crossterm::terminal::BeginSynchronizedUpdate);
+        // the tab / taskbar progress bar (OSC 9;4: Windows Terminal, Ghostty …): tasks done, busy with no tasks, cleared at the end
+        let (done, total) = self.total();
+        let _ = match (last, total) {
+            (true, _) => write!(o, "\x1b]9;4;0;0\x07"),
+            (false, 0) => write!(o, "\x1b]9;4;3;0\x07"),
+            (false, t) => write!(o, "\x1b]9;4;1;{}\x07", done * 100 / t),
+        };
         if self.drawn > 0 {
             let _ = queue!(o, cursor::MoveUp(self.drawn));
         }
@@ -184,7 +193,7 @@ impl Live {
             let _ = queue!(o, Clear(ClearType::UntilNewLine));
             let _ = writeln!(o);
         }
-        let _ = queue!(o, Clear(ClearType::FromCursorDown));
+        let _ = queue!(o, Clear(ClearType::FromCursorDown), crossterm::terminal::EndSynchronizedUpdate);
         let _ = o.flush();
         // ponytail: a resize narrower than the last frame leaves its wrapped rows above; erase by the old width if that shows
         self.drawn = if last { 0 } else { rows.len() as u16 };
@@ -336,6 +345,10 @@ pub fn above(f: impl FnOnce()) {
     let mut g = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     match g.as_mut() {
         Some(l) => {
+            // erase, print and redraw as one frame; draw() ends it
+            if l.tty {
+                let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::BeginSynchronizedUpdate);
+            }
             l.erase();
             f();
             l.draw(false);

@@ -26,6 +26,8 @@ from pathlib import Path  # noqa: E402
 fixture = lambda name: json.loads((agent.HERE / "fixtures" / name).read_text(encoding="utf-8"))
 for f in fixture("unquoted.json"):
     assert agent.unquoted(f["text"]) == f["out"], f
+for f in fixture("questions.json"):   # the comment never shows the picker's JSON
+    assert agent.unasked(f["text"]) == f["out"], f["why"]
 for f in fixture("format.json"):   # the prompts are str.format templates: the CLI's renderer must agree
     assert f["template"].format(**f["args"]) == f["out"], f["why"]
 

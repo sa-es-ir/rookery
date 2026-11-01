@@ -55,7 +55,7 @@ Give the details of the item with `-m "text"`, or put them in a markdown file an
 
 Run `rookery` with no command to open a prompt. Type `/` to see the commands. Type `exit` or press Ctrl-D to close the prompt.
 
-When you type a line that is not a command (for example `hi`, or `fix the login bug`), haiku replies in one to three sentences and tells you which command to use. It has no tools and changes nothing. Each reply costs about one cent. The chat remembers the lines before it until you type `/clear`.
+When you type a line that is not a command (for example `hi`, or `fix the login bug`), haiku replies in one to three sentences and tells you which command to use. It has no tools and changes nothing. A line that starts with a command name but is not a correct command (for example `ask the questions again`) also goes to haiku. Haiku sees the items of the repository. When one command on one item does what you asked, Rookery shows **Run** and **No**. The command runs only when you select **Run**. Each reply costs about one cent. The chat remembers the lines before it until you type `/clear`.
 
 A status line above the prompt box shows the provider, the repository and its base branch, the number of chat messages, how full the chat's context is, and what this session spent. When the terminal is narrow, the last items are not shown.
 
@@ -98,6 +98,7 @@ If you pipe the output, or set `NO_COLOR`, there is no checklist. Rookery writes
 |---|---|
 | `rookery new "title" [-m body] [-f file] [--base b]` | Writes a plan. The item stops at `awaiting-input` or `awaiting-approval`. |
 | `rookery reply <n> "text"` | Sends your answer to the planner. The planner writes the plan again. |
+| `rookery reply <n>` | Shows the questions of the planner one at a time. For each question, select an option with ↑↓ and Enter, or select "Type my own answer". Then select **Send**. Rookery also shows these questions when the plan stops at `awaiting-input`. It does this only in a terminal. |
 | `rookery approve <n> [--max-usd X]` | Runs the tasks, the `after` steps and the review. |
 | `rookery ask <n> "note"` | Asks a question about the change, or asks for a change. Rookery commits a change and reviews it again. |
 | `rookery review [<range>] [-m note]` | Reviews the commits on a branch. The default is the current branch. |

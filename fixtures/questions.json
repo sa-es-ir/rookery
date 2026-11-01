@@ -1,0 +1,32 @@
+[
+ {
+  "why": "the block is cut from the comment and read by the picker, default first",
+  "text": "Two points change the plan.\n\n1. Where?\n2. Pin?\n\n<questions>[{\"question\": \"Where should labels hide?\", \"options\": [\"console only\", \"console and broadcast\"]}, {\"question\": \"What is pin?\", \"options\": [\"the spotlight star\", \"a local pin\"]}]</questions>",
+  "out": "Two points change the plan.\n\n1. Where?\n2. Pin?",
+  "questions": [["Where should labels hide?", ["console only", "console and broadcast"]], ["What is pin?", ["the spotlight star", "a local pin"]]]
+ },
+ {
+  "why": "a fenced block, mid-reply: the text around it joins with one blank line",
+  "text": "Before.\n<questions>\n```json\n[{\"question\": \"Q?\", \"options\": [\"a\"]}]\n```\n</questions>\nAfter.",
+  "out": "Before.\n\nAfter.",
+  "questions": [["Q?", ["a"]]]
+ },
+ {
+  "why": "JSON that does not parse: cut all the same, no picker",
+  "text": "Ask.\n<questions>[{\"question\": \"Q?\", </questions>",
+  "out": "Ask.",
+  "questions": null
+ },
+ {
+  "why": "a question with no options is no picker",
+  "text": "Ask.\n<questions>[{\"question\": \"Q?\", \"options\": []}]</questions>",
+  "out": "Ask.",
+  "questions": null
+ },
+ {
+  "why": "no block: the reply as it is",
+  "text": "Reply `approve` to implement.",
+  "out": "Reply `approve` to implement.",
+  "questions": null
+ }
+]

@@ -21,3 +21,8 @@ If something is genuinely ambiguous, ask instead of guessing.
 Reply with exactly one line `STATUS: questions` or `STATUS: plan-ready`, and
 around it the markdown to post as an issue comment: the questions, or a summary
 of the plan ending with "Reply `approve` to implement."
+
+With `questions`, end the reply with the same questions as JSON between
+`<questions>` tags, so a developer can answer by picking an option:
+<questions>[{{"question": "the question", "options": ["your default", "another answer"]}}]</questions>
+Each option is a whole answer in a few words, your default first.

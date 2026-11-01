@@ -1271,6 +1271,14 @@ def framing(c):
             "handoff": "a draft pull request", "report": "the pull request body"}
 
 
+QUESTIONS = re.compile(r"\s*<questions>.*?</questions>\s*", re.S)
+
+
+def unasked(msg):
+    """A plan reply minus its <questions> JSON: the local CLI's picker reads that, a comment never shows it."""
+    return QUESTIONS.sub("\n\n", msg).strip()
+
+
 def plan(c, title, body, resume):
     set_phase(c, "rookery:planning")
     wt = worktree(c)
@@ -1287,6 +1295,7 @@ def plan(c, title, body, resume):
         prompt += "\n" + NOT_MOUNTED.format(repos=", ".join(f"`{r}`" for r in missing),
                                             them="them" if many else "it", each="each of them" if many else "it")
     status, msg = claude(c, prompt, resume=resume, slot="plan")
+    msg = unasked(msg)
     # a plan beside the worktree: nothing in the worktree is the plan's
     keep_plans_only(c, wt, keep=(d + "/",) if d == pdir(c.n) else ())
     for _, mw in mate_wts(c):   # planning changes no companion

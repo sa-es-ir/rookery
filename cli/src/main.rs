@@ -56,8 +56,8 @@ enum Cmd {
     Reply {
         /// The item's number
         n: u64,
-        /// Your answer (the rest of the line; no quotes needed)
-        #[arg(required = true, num_args = 1..)]
+        /// Your answer (the rest of the line; no quotes needed). Left out: pick from the planner's options
+        #[arg(num_args = 0..)]
         text: Vec<String>,
         /// Let the agent use your own MCP servers (never the repo's .mcp.json)
         #[arg(long)]
@@ -400,9 +400,16 @@ fn guide() {
 /// A typed line that is no command: haiku answers it and names the command to use. The memory
 /// call's shape (one turn, no tools, an empty cwd), no run logged. One session per prompt until
 /// /clear, resumed after its first reply, so a follow-up has context.
-fn chat(line: &str, cmds: &[(String, String)], session: &mut Chat) -> Result<(), String> {
+/// -> the one command it proposes (`RUN: /reply 5`), which the prompt offers to run.
+fn chat(line: &str, cmds: &[(String, String)], session: &mut Chat) -> Result<Option<String>, String> {
     let list = cmds.iter().map(|(n, a)| format!("{n}  {a}")).collect::<Vec<_>>().join("\n");
-    let p = text::fmt(&text::prompt("chat"), &[("commands", list), ("line", line.to_string())]);
+    // the board, so "ask the questions again" names an item; titles and phases only, never a plan
+    let items = std::env::current_dir().map_err(|e| e.to_string()).and_then(|d| repo(&d))
+        .map(|r| items::board(&r).into_iter().flat_map(|(_, c)| c)
+            .map(|c| format!("#{}  {}  {}  next: {}", c.n, c.title, c.phase, if c.next.is_empty() { "running now" } else { &c.next }))
+            .collect::<Vec<_>>().join("\n"))
+        .ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "none".into());
+    let p = text::fmt(&text::prompt("chat"), &[("commands", list), ("items", items), ("line", line.to_string())]);
     let slot = json!({"agent": null, "skills": [], "model": "haiku", "args": ["--max-turns", "1", "--tools", ""]});
     let mut job = claude::Job { scratch: std::env::temp_dir().join(format!("rookery-chat-{}", std::process::id())), ..Default::default() };
     let cwd = job.scratch.join("cwd");
@@ -414,8 +421,36 @@ fn chat(line: &str, cmds: &[(String, String)], session: &mut Chat) -> Result<(),
     session.msgs += 1;
     session.ctx = claude::session().1;
     // haiku sometimes ends a sentence with the marker; claude() asked again for it alone, so drop it here
-    println!("{}\n", reply.trim_end().strip_suffix("STATUS: ok").unwrap_or(&reply).trim_end());
-    Ok(())
+    let reply = reply.trim_end().strip_suffix("STATUS: ok").unwrap_or(&reply).trim_end();
+    let run = regex::Regex::new(r"(?m)^[ \t]*`?RUN:[ \t]*`?(/[^`\n]+?)`?[ \t]*$").unwrap();
+    let cmd = run.captures(reply).map(|m| m[1].trim().to_string());
+    println!("{}\n", run.replace_all(reply, "").trim_end());
+    Ok(cmd)
+}
+
+/// A line of words at the prompt: the chat answers, and the command it proposes runs once the
+/// user picks Run. Piped, nothing runs: the command is printed.
+fn talk(line: &str, cmds: &[(String, String)], session: &mut Chat, boxed: bool) {
+    let cmd = match chat(line, cmds, session) {
+        Ok(Some(c)) if boxed => c,
+        Ok(Some(c)) => return println!("{} {c}\n", paint("1", "run:")),
+        Ok(None) => return,
+        Err(e) => return eprintln!("rookery: {e}"),
+    };
+    let rows = [format!("Run {cmd}"), "No".to_string()];
+    if !matches!(input::pick("", "enter picks · esc cancels", &rows, 0, ""), Ok(Some((0, _)))) {
+        return;
+    }
+    println!("> {cmd}");
+    let mut args = words(&cmd).unwrap_or_default();
+    if let Some(a) = args.first_mut() {
+        *a = a.trim_start_matches('/').to_string();
+    }
+    match Cli::try_parse_from(std::iter::once("rookery".to_string()).chain(args)) {
+        Ok(Cli { cmd: Some(c) }) => if let Err(e) = run(c) { eprintln!("rookery: {e}") },
+        Ok(Cli { cmd: None }) => {}
+        Err(e) => { let _ = e.print(); }
+    }
 }
 
 /// The prompt's one chat session: its key, and what the status line says of it.
@@ -547,7 +582,7 @@ fn prompt() {
             }
             Some(w) if !slashed && !cmds.iter().any(|(n, _)| &n[1..] == w) => {
                 // words, not a command ("hi", "fix the login bug"): told which command to use
-                if let Err(e) = chat(&line, &cmds, &mut session) { eprintln!("rookery: {e}") }
+                talk(&line, &cmds, &mut session, boxed);
                 continue;
             }
             _ => {}
@@ -555,6 +590,8 @@ fn prompt() {
         match Cli::try_parse_from(std::iter::once("rookery".to_string()).chain(args)) {
             Ok(Cli { cmd: Some(cmd) }) => if let Err(e) = run(cmd) { eprintln!("rookery: {e}") },
             Ok(Cli { cmd: None }) => {}
+            // words that start with a command's name ("ask the questions again"): the chat reads them
+            Err(e) if !slashed && e.use_stderr() => talk(&line, &cmds, &mut session, boxed),
             Err(e) => { let _ = e.print(); }
         }
     }

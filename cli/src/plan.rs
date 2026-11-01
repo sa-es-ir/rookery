@@ -4,7 +4,7 @@
 use crate::cancel;
 use crate::claude::{self, Job};
 use crate::steer::{self, git};
-use crate::text::{cap, fmt, prompt, read_tasks};
+use crate::text::{Questions, cap, fmt, prompt, questions, read_tasks};
 use crate::{Repo, base_of, paint, repo};
 use serde_json::{Value, json};
 use std::fs;
@@ -220,9 +220,38 @@ pub fn reply(n: u64, text: &str, mcp: bool) -> Result<(), String> {
     let st = load(&r, n)?;
     may_reply(&st, &again(&st, &item(&r, n)))?;
     if text.trim().is_empty() {
-        return Err(format!("say something: rookery reply {n} \"your answer\""));
+        // no text: the planner's questions in the picker, when it asked some and this is a terminal
+        let qs = (st["phase"] == "awaiting-input").then(|| asked(&r, n)).flatten();
+        return match qs.map(|qs| pick_answers(&qs)) {
+            Some(Some(a)) => plan(&r, n, &a, true, mcp),
+            Some(None) => Ok(()),
+            None if st["phase"] == "awaiting-input" => Err(format!(
+                "#{n} has no questions to pick from (the planner did not give them as options, or this is not a terminal). \
+                 Answer in words: rookery reply {n} \"your answers\"")),
+            None => Err(format!("say something: rookery reply {n} \"your answer\"")),
+        };
     }
     plan(&r, n, text, true, mcp)
+}
+
+/// The questions the last plan call asked, for the picker; None piped, or when it asked none in JSON.
+fn asked(r: &Repo, n: u64) -> Option<Questions> {
+    use std::io::IsTerminal;
+    if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+        return None;
+    }
+    serde_json::from_str(&fs::read_to_string(item(r, n).join("out").join("questions.json")).ok()?).ok()
+}
+
+/// The picker -> the reply, or None when the developer cancels.
+fn pick_answers(qs: &Questions) -> Option<String> {
+    match crate::input::answers(qs) {
+        Ok(Some(a)) => Some(a),
+        _ => {
+            println!("{}", paint("2", "Not sent."));
+            None
+        }
+    }
 }
 
 /// agent.py's plan(): steering from base, one plan-slot call, everything but the plan files
@@ -263,7 +292,8 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
             eprintln!("{} the planner touched {} in the worktree; reverted.", paint("33", "note:"), reverted.join(", "));
         }
         let (status, msg) = said?;
-        let msg = msg.replace(REPLY_APPROVE, "").trim_end().to_string();
+        let (msg, qs) = questions(&msg.replace(REPLY_APPROVE, ""));
+        let asked = item(r, n).join("out").join("questions.json");
         let tasks = || fs::read_to_string(item(r, n).join("tasks.md"))
             .map(|t| read_tasks(&t)).map_err(|_| "tasks.md is missing: the plan produced no task list".to_string());
         let out = item(r, n).join("out").join("plan.md");
@@ -281,6 +311,13 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
                                     out.display())),
         };
         fs::write(&out, &msg).map_err(|e| e.to_string())?;
+        // the picker's questions belong to this reply only: an older set never answers a newer plan
+        match qs.filter(|_| phase == "awaiting-input") {
+            Some(qs) => fs::write(&asked, json!(qs).to_string()).map_err(|e| e.to_string())?,
+            None => {
+                let _ = fs::remove_file(&asked);
+            }
+        }
         set_phase(r, &job, &mut st, phase)?;
         Ok((phase, msg, if phase == "awaiting-approval" { tasks()? } else { vec![] }))
     })();
@@ -303,6 +340,14 @@ fn plan(r: &Repo, n: u64, body: &str, resume: bool, mcp: bool) -> Result<(), Str
     println!("\n{} {}  {}\n", paint("1", &format!("#{n}")), phase_paint(phase), paint("2", &cost));
     print_md(&msg);
     if phase == "awaiting-input" {
+        if let Some(qs) = asked(r, n) {
+            if let Some(a) = pick_answers(&qs) {
+                return plan(r, n, &a, true, mcp);
+            }
+            println!("\n{} rookery reply {n}   {}", paint("1", "next:"),
+                     paint("2", &format!("(the questions again, or rookery reply {n} \"your answers\")")));
+            return Ok(());
+        }
         println!("\n{} rookery reply {n} \"your answers\"", paint("1", "next:"));
         return Ok(());
     }

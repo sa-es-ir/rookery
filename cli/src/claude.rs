@@ -297,11 +297,14 @@ impl Thinking {
                 rows.truncate(THINK_ROWS - 1);
                 rows.push("…".into());
             }
+            // erase and reprint as one frame (mode 2026), or the rows flicker; unsupported, it is ignored
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::BeginSynchronizedUpdate);
             self.erase();
             for (i, r) in rows.iter().enumerate() {
                 println!("{}", crate::paint("2", &format!("{} {r}", if i == 0 { "  ∴" } else { "   " })));
             }
             self.rows = rows.len() as u16;
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EndSynchronizedUpdate);
         }
     }
 
