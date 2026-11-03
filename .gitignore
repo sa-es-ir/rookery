@@ -10,3 +10,6 @@ ai-plans/
 presentation/
 cli/target/
 cli/embed/
+
+# the simulator (sim/) builds and renders here
+teardown-out/
