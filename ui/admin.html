@@ -37,6 +37,8 @@ select{background:var(--shell);color:var(--ash);border:1px solid var(--smoke);bo
 .status{font-size:13px;color:var(--fog);min-height:20px}
 .status.err{color:#ffb3a5}
 .none{color:var(--fog);font-weight:300}
+.trace{font:400 12px var(--mono);white-space:pre-wrap;color:var(--fog);max-width:80ch;margin-top:8px}
+summary{cursor:pointer}
 .gone{padding:120px 0;text-align:center;color:var(--fog);font-size:18px;font-weight:300}
 </style>
 <div class="wrap">
@@ -61,6 +63,12 @@ select{background:var(--shell);color:var(--ash);border:1px solid var(--smoke);bo
       <p class="sub">The accounts and orgs the App is installed on. An owner's own selected key beats the override; an owner outside <code class="mono">OWN</code> with neither gets no runs.</p>
       <div class="table"><table><thead><tr><th>Owner</th><th>Repos</th><th>Own key</th><th>Provider</th></tr></thead>
         <tbody id="owners"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>Failures</h2>
+      <p class="sub">The last 50 jobs that failed on a bug in Rookery, not on a cap, a cancel or the model. The run view of a tenant's repo is theirs, so the traceback is here.</p>
+      <div class="table"><table><thead><tr><th>Job</th><th>When</th><th>Repo</th><th>Act</th><th>Type</th><th>Where</th></tr></thead>
+        <tbody id="failures"></tbody></table></div>
     </section>
     <section class="card">
       <h2>Users</h2>
@@ -121,6 +129,10 @@ function render(){
     h('td', null, h('span', {class: 'mono'}, o.owner)), h('td', {class: 'num'}, String(o.repos)),
     h('td', null, o.key ? h('span', {class: 'lbl ok'}, o.key) : h('span', {class: 'none'}, '—')), h('td', null, pick(o.owner, o.own))))
     : [h('tr', null, h('td', {colspan: 4, class: 'none'}, 'No owners yet.'))]));
+  $('#failures').replaceChildren(...(d.failures.length ? d.failures.map(f => h('tr', null,
+    h('td', {class: 'num'}, '#' + f.job), h('td', null, when(f.at)), h('td', null, h('span', {class: 'mono'}, f.repo)),
+    h('td', null, f.act), h('td', null, h('span', {class: 'mono'}, f.type || '?')), h('td', null, h('details', null, h('summary', {class: 'mono'}, f.frame), h('pre', {class: 'trace'}, (f.message || '') + '\n\n' + (f.trace || ''))))))
+    : [h('tr', null, h('td', {colspan: 6, class: 'none'}, 'No bugs recorded.'))]));
   const owners = new Set(d.owners.map(o => o.owner));
   $('#users').replaceChildren(...(d.users.length ? d.users.map(u => h('tr', null,
     h('td', null, h('span', {class: 'mono'}, u.login)), h('td', null, when(u.first)), h('td', null, when(u.last)),

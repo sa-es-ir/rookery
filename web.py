@@ -282,9 +282,15 @@ def admin_view():
         # owners running on their own selected key: that beats any override set here
         keyed = dict(con.execute("SELECT k.owner, k.provider FROM settings s JOIN keys k "
                                  "ON k.id = s.value AND s.key = 'key:' || k.owner"))
+        # orchestrator bugs: handle() gives only those error steps a `frame`
+        bugs = con.execute("SELECT s.job, s.at, j.repo, j.act, s.detail FROM steps s JOIN jobs j ON j.id = s.job "
+                           "WHERE s.what = 'error' AND s.detail LIKE '%\"frame\":%' ORDER BY s.rowid DESC LIMIT 50").fetchall()
     overrides = {k.split(":", 1)[1]: v for k, v in rows.items() if ":" in k}
     count = collections.Counter(r.split("/")[0] for r in agent.REPOS)
-    return {"default": rows.get("provider", agent.PROVIDER),
+    return {"failures": [{"job": j, "at": at, "repo": r, "act": a, "type": d.get("type"), "frame": d["frame"],
+                          "message": d.get("message"), "trace": d.get("trace")}
+                         for j, at, r, a, d in ((j, at, r, a, json.loads(d)) for j, at, r, a, d in bugs)],
+            "default": rows.get("provider", agent.PROVIDER),
             "providers": [{"name": n, "ready": agent.ready(n), **({"key": p["key"]} if p else {})}
                           for n, p in agent.PROVIDERS.items()],
             "overrides": overrides,
@@ -494,6 +500,10 @@ def route(method, url, headers, body=b""):
             return js(200, {"runs": runs(s, urllib.parse.parse_qs(u.query).get("repo", [None])[0])})
         if method == "GET" and (m := re.fullmatch(r"/api/runs/(\d+)", path)):
             r = run(s, int(m.group(1)))
+            # a traceback holds worktree paths and the tenant's git/gh stderr: for its writers only
+            if r and any("trace" in x for x in r["steps"]) and not agent.can_write(r["repo"], s["login"]):
+                for x in r["steps"]:
+                    x.pop("trace", None)
             return js(200, r) if r else js(404, {"error": "no such run"})
         if method == "POST" and (m := re.fullmatch(r"/api/runs/(\d+)/cancel", path)):
             r = run(s, int(m.group(1)))

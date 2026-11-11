@@ -30,6 +30,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 import uuid
@@ -2219,6 +2220,81 @@ def refused(c, job, what):
     return False
 
 
+# --- orchestrator bugs ---------------------------------------------------------
+# A deliberate failure raises RuntimeError or ValueError (caps, cancels, a bad workflow, a missing
+# STATUS…); anything else is a bug in this code. report() files it on BUG_REPO, once per bug.
+
+BUG_REPO = os.environ.get("BUG_REPO", "")   # owner/name; the App must be installed there. Unset = off
+BUG_CAP = 3            # new issues per UTC day; past it, only the log
+BUG_AGAIN = 3600       # seconds between two "Again" comments on one bug's issue
+OURS = ("agent.py", "web.py")
+buglock = threading.Lock()   # two repos' workers failing on one bug at once open one issue
+
+
+def is_bug(e):
+    """ponytail: a bug raised as a RuntimeError (sh() on an argv we built wrong) is missed; the run
+    log's trace still shows it. JSONDecodeError is a ValueError that nobody raises on purpose."""
+    return isinstance(e, json.JSONDecodeError) or not isinstance(e, (RuntimeError, ValueError))
+
+
+def frames(e):
+    """(file, line, function) of this code's frames, innermost last: never source lines or locals."""
+    return [(Path(f.filename).name, f.lineno, f.name) for f in traceback.extract_tb(e.__traceback__)
+            if Path(f.filename).name in OURS]
+
+
+def origin(e):
+    """`file:function` of the innermost frame of ours. No line: lines move between deploys."""
+    f = frames(e)
+    return f"{f[-1][0]}:{f[-1][2]}" if f else "?"
+
+
+def report(e, kind, job):
+    """Open one issue on BUG_REPO per bug, labelled TRIGGER so its plan is waiting; a repeat while it
+    is open is a comment on it. The repo is public: only what is ours goes there, never the message,
+    the tenant's repo or a path. Never raises: filing a bug must not change the tenant's job."""
+    try:
+        if not BUG_REPO:
+            return
+        where = origin(e)
+        fp = hashlib.sha1(f"{type(e).__name__}:{where}".encode()).hexdigest()[:10]
+        build = hashlib.sha256(b"".join((HERE / f).read_bytes() for f in OURS)).hexdigest()[:12]
+        with buglock:
+            with closing(db()) as con:
+                act = (con.execute("SELECT act FROM jobs WHERE id = ?", (job,)).fetchone() or ["?"])[0]
+                row = con.execute("SELECT value FROM settings WHERE key = ?", (f"bug:{fp}",)).fetchone()
+                made = int((con.execute("SELECT value FROM settings WHERE key = ?", (f"bugs:{today()}",)).fetchone()
+                            or [0])[0])
+            seen = json.loads(row[0]) if row else None
+            # a closed issue is a fixed bug: its return is a regression, so a fresh issue
+            # (a deleted one too: gh fails, and check=False gives "")
+            if seen and gh(BUG_REPO, "issue", "view", str(seen["n"]), "--json", "state", "-q", ".state",
+                           check=False) == "OPEN":
+                if time.time() - seen["at"] < BUG_AGAIN:
+                    return log(f"bug {fp} again (#{seen['n']}), commented within the hour")
+                gh(BUG_REPO, "issue", "comment", str(seen["n"]), "--body-file", "-",
+                   input=f"Again: job #{job}, build `{build}`.")
+                n, key, value = seen["n"], None, None
+            elif made >= BUG_CAP:
+                return log(f"bug {fp} ({type(e).__name__} in {where}) not filed: {BUG_CAP} today already")
+            else:
+                trace = "\n".join(f"{f}:{line} in {fn}" for f, line, fn in frames(e))
+                body = (f"**{type(e).__name__}** in `{where}` · fingerprint `{fp}`\n\n"
+                        f"Job #{job} · `{kind}` · act `{act}` · build `{build}`\n\n"
+                        f"```\n{trace}\n```\n\n<!-- rookery:bug {fp} -->")
+                url = gh(BUG_REPO, "issue", "create", "--title", f"Bug: {type(e).__name__} in {where.split(':')[1]}",
+                         "--body-file", "-", "--label", TRIGGER, input=body)
+                n, key, value = int(url.rstrip("/").rsplit("/", 1)[1]), f"bugs:{today()}", str(made + 1)
+            with closing(db()) as con, con:
+                con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)",
+                            (f"bug:{fp}", json.dumps({"n": n, "at": time.time()})))
+                if key:
+                    con.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
+            log(f"bug {fp} → {BUG_REPO}#{n}")
+    except Exception as x:
+        log(f"filing bug failed: {x}")
+
+
 def handle(job):
     if job["kind"] == "onboard":
         return onboard(job["repo"], job.get("base"))
@@ -2275,7 +2351,11 @@ def handle(job):
         # a failure teaches too (its traps); a cancel was a person's call, not the repo's
         learn = None if cancelled else (active.get(c.repo) or {}).get("job")
         msg = f"Cancelled from the Rookery UI by @{cancelled}." if cancelled else str(e)
-        step(c.repo, "error", message=msg[-2000:])
+        bug = not cancelled and is_bug(e)
+        job_id = (active.get(c.repo) or {}).get("job")
+        # `frame` marks an orchestrator bug: /admin.html lists those. The trace stays in the run log
+        step(c.repo, "error", message=msg[-2000:], type=type(e).__name__, trace=traceback.format_exc()[-4000:],
+             **({"frame": origin(e)} if bug else {}))
         say = (NO_KEY_PR if pr else NO_KEY).format(why=e.why, owner=e.owner, url=PUBLIC_URL) \
             if isinstance(e, NoKey) and not cancelled else f"Agent error:\n\n```\n{msg}\n```"
         try:
@@ -2288,6 +2368,8 @@ def handle(job):
                 set_phase(c, "rookery:error")
         finally:
             finish(c.repo, "cancelled" if cancelled else "failed")
+            if bug:
+                report(e, job["kind"], job_id)
     finally:
         if pr:
             pr_cleanup(c, job)
@@ -2313,7 +2395,7 @@ def worker(repo, q):
         try:
             handle(job)
         except Exception as e:  # e.g. the error comment itself failed: never let the worker die
-            log(f"{job['repo']} {job['kind']} FAILED: {e}")
+            log(f"{job['repo']} {job['kind']} FAILED: {e}\n{traceback.format_exc()}")
         q.task_done()
         with qlock:
             # the repo left and nothing followed: stop. A re-add starts a fresh worker.
