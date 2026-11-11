@@ -51,7 +51,7 @@ together. Items are numbered per repo in `<git-common-dir>/rookery/` (state, `ru
 worktrees under `~/.rookery/worktrees/`; it never pushes. What it ports and drops is in
 `docs/cli.md`.
 
-**This repo is the orchestrator, never the target.** `REPOS` maps `owner/name` → base branch
+**This repo is the orchestrator, never the target** — one exception: `BUG_REPO` (`.env`, unset = off) may be this repo, so `report()` files orchestrator bugs on it with `rookery:trigger` and it plans its own fix in `$WORKSPACE/repos/…`, never in the running checkout (a human still approves and merges). `REPOS` maps `owner/name` → base branch
 and is never written to disk: `sync()` rebuilds it at startup from the App's installations
 (`default_branch` is the base) — only the listing: a repo already cloned is live with no call of
 its own, a new one gets an `onboard` job (clone + labels) like an install event — and `installation` / `installation_repositories` events
@@ -248,7 +248,7 @@ issue is the same as `rookery:trigger`.
 
 **Run log.** `handle()` opens a `jobs` row per plan/reply/implement/pr-review/memory (`begin()`), and the
 pipeline appends `steps` (phase, task i of N, each claude call with key/status/cost/sid, tick,
-commit, push, PR, error) via `step()`, which is a no-op outside a job. `finish()` sets
+commit, push, PR, error) via `step()`, which is a no-op outside a job. An `error` step carries `type` and `trace` (the portal shows `trace` to `can_write()` only), plus `frame` when `is_bug()`: not `RuntimeError`/`ValueError` (bar `JSONDecodeError`), not cancelled. Those are `/admin.html`'s Failures, and `report()` files each once on `BUG_REPO` (fingerprint = type + innermost `agent.py`/`web.py` `file:function`, no line; a `bug:<fp>` settings row maps it to its issue, a closed one means a fresh issue; `BUG_CAP` new a day, an "Again" comment at most hourly; only type, our frames, kind, act, build, job id — never the message; never raises). `finish()` sets
 ok/failed/cancelled; a restart marks leftovers `interrupted`, and an interrupted implement or
 follow-up gets `INTERRUPTED` and `rookery:error`, since its stale phase label would take no `approve`. `active[repo]` is the job a
 worker is running — one per repo.

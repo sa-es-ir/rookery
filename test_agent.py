@@ -1499,7 +1499,7 @@ def fake_handle(job):
     if job.get("n") == 1:
         release.wait(5)            # a long implementation on o/slow
     ran.append((job["repo"], job.get("n"), job["kind"]))
-agent.handle = fake_handle
+real_handle, agent.handle = agent.handle, fake_handle
 agent.submit({"kind": "continue", "repo": "o/slow", "n": 1})
 agent.submit({"kind": "start", "repo": "o/slow", "n": 2})   # same repo: waits its turn
 agent.submit({"kind": "start", "repo": "o/fast", "n": 3})   # other repo: does not
@@ -2154,5 +2154,60 @@ with agent.closing(agent.db()) as con:
 (agent.gh, agent.claude, agent.comment, agent.set_phase, agent.labels_of, agent.pin, agent.api, agent.token,
  agent.submit, agent.implement, agent.plan) = fu_saved
 agent.sh = real_sh
+
+# orchestrator bugs: anything but RuntimeError/ValueError, filed once on BUG_REPO with only our frames
+assert agent.is_bug(KeyError("sha")) and agent.is_bug(TypeError()) and agent.is_bug(json.JSONDecodeError("x", "", 0))
+assert not agent.is_bug(RuntimeError()) and not agent.is_bug(agent.NoKey("o")) and not agent.is_bug(ValueError())
+def raised(pad, cls=KeyError, file="/srv/x/agent.py"):
+    ns = {}
+    exec(compile("\n" * pad + f"def pin():\n    raise {cls.__name__}('o/secret-repo /home/x/worktree')", file, "exec"), ns)
+    try:
+        ns["pin"]()
+    except Exception as e:
+        return e
+assert agent.origin(raised(0)) == agent.origin(raised(9)) == "agent.py:pin", "no line in the fingerprint"
+assert agent.frames(raised(0, file="/usr/lib/json.py")) == [] and agent.origin(raised(0, file="x/lib.py")) == "?"
+agent.WORKSPACE, bug_saved = Path(tempfile.mkdtemp()), (agent.gh, agent.BUG_REPO, agent.time.time)
+bugs, now, state = [], [1000.0], ["OPEN"]
+def bug_gh(repo, *a, input=None, check=True):
+    bugs.append((repo, a, input))
+    return "https://github.com/me/rookery/issues/41" if a[1] == "create" else state[0] if a[1] == "view" else ""
+agent.gh, agent.time.time = bug_gh, lambda: now[0]
+agent.report(raised(0), "start", 7)
+assert not bugs, "BUG_REPO unset: off"
+agent.BUG_REPO = "me/rookery"
+agent.report(raised(0), "start", 7)
+(repo, a, body), = bugs
+assert repo == "me/rookery" and a[:4] == ("issue", "create", "--title", "Bug: KeyError in pin") and agent.TRIGGER in a
+assert "agent.py:2 in pin" in body and "Job #7 · `start`" in body and "<!-- rookery:bug " in body
+assert "secret" not in body and "/home/x" not in body and "/srv" not in body, "never the message or a path"
+bugs.clear(), agent.report(raised(5), "start", 8)
+assert [x[1][1] for x in bugs] == ["view"], "a repeat within the hour: no comment, no issue"
+now[0] += 3601; bugs.clear(), agent.report(raised(5), "start", 9)
+assert [x[1][:3] for x in bugs] == [("issue", "view", "41"), ("issue", "comment", "41")] and "job #9" in bugs[1][2]
+state[0] = "CLOSED"; bugs.clear(), agent.report(raised(5), "start", 10)
+assert bugs[-1][1][1] == "create", "a closed issue's bug back: a regression, a fresh issue"
+agent.gh = lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+agent.report(raised(0, IndexError), "start", 13)   # never raises, and nothing counted
+agent.gh = bug_gh
+agent.report(raised(0, TypeError), "implement", 11)
+bugs.clear(), agent.report(raised(0, AttributeError), "implement", 12)
+assert not bugs, f"BUG_CAP ({agent.BUG_CAP}) new issues a day, then only the log"
+# handle(): a bug is reported after the tenant's comment; a cancel or a RuntimeError never is
+hb_saved = (agent.pin, agent.comment, agent.set_phase, agent.report, agent.MEMORY)
+said, filed = [], []
+agent.comment, agent.set_phase = lambda c, b: said.append(b), lambda c, ph: None
+agent.REPOS.setdefault("o/r", "main")
+agent.report, agent.MEMORY = lambda e, kind, job: filed.append((type(e).__name__, kind, job)), False
+for exc in (KeyError("sha"), RuntimeError("cap")):
+    agent.pin = lambda c, exc=exc: (_ for _ in ()).throw(exc)
+    real_handle({"kind": "start", "repo": "o/r", "n": 3, "title": "t", "body": ""})
+assert [f[:2] for f in filed] == [("KeyError", "start")] and len(said) == 2, (filed, said)
+with agent.closing(agent.db()) as con:
+    errs = [json.loads(d) for d, in con.execute("SELECT detail FROM steps WHERE what = 'error' ORDER BY rowid")]
+assert errs[0]["type"] == "KeyError" and "Traceback" in errs[0]["trace"] and errs[0]["frame"] == "agent.py:handle"
+assert errs[1]["type"] == "RuntimeError" and "frame" not in errs[1], "a deliberate failure is not a bug"
+(agent.pin, agent.comment, agent.set_phase, agent.report, agent.MEMORY) = hb_saved
+agent.gh, agent.BUG_REPO, agent.time.time = bug_saved
 
 print("ok")
