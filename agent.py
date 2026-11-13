@@ -788,7 +788,7 @@ def pin(c):
     else:
         said = f"{len(notes)}, {hashlib.sha256(notes.encode()).hexdigest()[:12]}" if notes else ""
     a["memory"] = notes
-    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=prov, **({"key": kid} if kid else {}),
+    step(c.repo, "base", branch=c.base, sha=a["sha"], provider=prov, **({"key_id": kid} if kid else {}),
          skills=sorted(a["sources"]), sources=a["sources"],
          agents=sorted(n for n, src in a["agent_sources"].items() if src != "built-in"),
          **({"org": f"{a['org']['repo']}@{a['org']['sha']}"} if a["org"] else {}),
@@ -1101,7 +1101,7 @@ def claude(c, prompt, key="plan", resume=False, slot="task", per_job=False, wt=N
             # sid: digest() finds the session's transcript by it; the re-ask is in the same one
             step(c.repo, "claude", key=key, status=m.group(1) if m else "no-marker" if out else "failed",
                  usd=usd, agent=s["agent"], skills=s["skills"], model=model, provider=prov,
-                 **({"key": kid} if kid else {}), **({} if key.endswith("/status") else {"sid": sid}))
+                 **({"key_id": kid} if kid else {}), **({} if key.endswith("/status") else {"sid": sid}))
         log(f"#{c.n} claude {key} -> {m.group(1) if m else 'NO STATUS MARKER'}")
         return text, m
 

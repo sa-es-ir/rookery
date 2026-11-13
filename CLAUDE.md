@@ -302,7 +302,7 @@ models, passed as `env=` (none at all for `claude`, so its env is unchanged), th
 by the `env_keep` line (DEPLOY.md §5b). An unknown `PROVIDER` or a missing key fails startup.
 The CLI prices every model as Claude, so `cost_of()` prices `modelUsage` from the provider's
 `price` table, and a model not in it fails the call. The `base` and `claude` steps log
-`provider`, and `key=<id>` on an owner's own key (never the key). `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
+`provider`, and `key_id=<id>` on an owner's own key (never the key). `anthropic` is Claude by API key (`CLAUDE_API_KEY`, never `ANTHROPIC_API_KEY`,
 which is popped so it cannot beat the `/login`): no `models`, no `price`, so `total_cost_usd`.
 The subscription runs only the owners in `OWN` (`.env`, unset = `ADMINS`): `fallback()` never
 gives `claude` to any other owner, `/api/admin/provider` refuses that override (422), and startup

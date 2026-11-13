@@ -592,6 +592,15 @@ first = sid(per_job=True)
 agent.active["o/sid"] = {"job": 2, "cancel": None}
 assert sid(per_job=True) not in (first, sid()), "a new job is a new session"
 del agent.active["o/sid"]
+# an owner's own key: its id is logged as key_id, beside the call's own key (both as `key` raised TypeError)
+real_pf, agent.provider_for = agent.provider_for, lambda repo: ("anthropic", 7, "sk-own")
+agent.active["o/sid"] = {"job": 3, "cancel": None}
+agent.claude(sc, "p", key="review")
+with agent.closing(agent.db()) as con:
+    d = json.loads(con.execute("SELECT detail FROM steps WHERE job = 3 AND what = 'claude'").fetchall()[-1][0])
+assert d["key"] == "review" and d["key_id"] == 7 and "sk-own" not in str(d), d
+agent.provider_for = real_pf
+del agent.active["o/sid"]
 # a reply with no STATUS line is asked for the line once, in its session; the first reply stands
 replies = iter(["<review>{}</review>", "STATUS: review-ok", "<review>{}</review>", "sorry, no"])
 agent.sh = lambda *a, **k: argv.append(a) or prompts.append(k["input"]) or json.dumps(
